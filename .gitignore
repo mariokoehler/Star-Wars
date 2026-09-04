@@ -1,0 +1,51 @@
+## Maven:
+target/
+/core/target/
+/lwjgl3/target/
+dependency-reduced-pom.xml
+
+## Java:
+*.class
+*.war
+*.ear
+hs_err_pid*
+.attach_pid*
+
+## IntelliJ, Android Studio:
+.idea/
+*.ipr
+*.iws
+*.iml
+
+## Eclipse:
+.classpath
+.project
+.metadata/
+.settings/
+.loadpath
+.externalToolBuilders/
+*.launch
+*.tmp
+*.bak
+*.swp
+*~.nib
+
+## NetBeans:
+/nbproject/private/
+/nbbuild/
+/nbdist/
+nbactions.xml
+nb-configuration.xml
+
+## OS-Specific:
+.DS_Store
+Thumbs.db
+
+## Miscellaneous:
+*~
+*.*#
+*#*#
+/assets/assets.txt
+
+## Old Gradle setup, kept around only until the Maven migration is confirmed working:
+/_gradle-legacy-backup/

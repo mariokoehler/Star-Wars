@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>de.mkoehler.starwars</groupId>
+    <artifactId>starwars-parent</artifactId>
+    <version>1.0.0</version>
+  </parent>
+
+  <artifactId>starwars-lwjgl3</artifactId>
+  <packaging>jar</packaging>
+  <name>StarWars-lwjgl3</name>
+
+  <properties>
+    <mainClass>de.mkoehler.starwars.lwjgl3.Lwjgl3Launcher</mainClass>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>de.mkoehler.starwars</groupId>
+      <artifactId>starwars-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-backend-lwjgl3</artifactId>
+      <version>${gdxVersion}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-platform</artifactId>
+      <version>${gdxVersion}</version>
+      <classifier>natives-desktop</classifier>
+    </dependency>
+    <dependency>
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-box2d-platform</artifactId>
+      <version>${gdxVersion}</version>
+      <classifier>natives-desktop</classifier>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>${appName}-${project.version}</finalName>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- The assets/ folder at the repo root is bundled onto the classpath, same as the old Gradle build did. -->
+      <resource>
+        <directory>${project.basedir}/../assets</directory>
+      </resource>
+    </resources>
+    <plugins>
+      <plugin>
+        <!-- Run with: mvn -pl lwjgl3 -am compile exec:exec -->
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <executable>java</executable>
+          <workingDirectory>${project.basedir}/../assets</workingDirectory>
+          <arguments>
+            <argument>--enable-native-access=ALL-UNNAMED</argument>
+            <argument>-classpath</argument>
+            <classpath/>
+            <argument>${mainClass}</argument>
+          </arguments>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>${mainClass}</mainClass>
+                  <manifestEntries>
+                    <Enable-Native-Access>ALL-UNNAMED</Enable-Native-Access>
+                    <Multi-Release>true</Multi-Release>
+                  </manifestEntries>
+                </transformer>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
