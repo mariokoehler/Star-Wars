@@ -579,6 +579,84 @@ for each new raw asset folder.
 2.4). `AtlasPacker.main()` now has two `pack(...)` calls; both run every
 time it's invoked, so the one command above regenerates everything.
 
+**Five more ships imported (2026-09-05): Falcon, Snowspeeder, Star
+Destroyer, TIE Fighter, TIE Interceptor.** See design.md 4.3 for the
+full writeup. Neutral-bank (`_0020`) frames only, copied from
+`R:\StarWars\sprites\<ship>/` into `assets-raw/ships/<ship>/` — same
+convention as the X-wing. Falcon/TIE Interceptor exist at both 128px and
+256px; picked 256px (display size comes from `radiusMeters`, not source
+resolution, so this was a free quality choice — flagged as a default,
+not asked about). Portraits not imported — user is handling Ship
+Selection screen assets separately. **Bug found while packing:**
+`TexturePacker.Settings.combineSubdirectories` defaults to `false`, so
+6 ship subfolders produced 6 separate atlas pages (`ships.png`..`ships6.png`)
+instead of sharing space — fixed by setting it `true` in `AtlasPacker`;
+all 6 ships now pack into one `1024×512` page. **Not done on purpose:**
+no `ShipType` enum entries/`.stats.json`/`.meta.json` for these five yet
+— the user is authoring hitboxes/attachment points next via the
+`dev-tools` editor, which gained a `TURRET` suggested attachment name
+for the Falcon's/Star Destroyer's turret mounts (turret weapon system
+itself still not built). Making these ships actually spawnable/playable
+is a later milestone. Verified: full `mvn clean verify` (28 tests,
+unaffected by an art-only change), a real server+client boot on the
+regenerated `ships.atlas` (X-wing rendering unaffected), and the
+dev-tools editor launching cleanly.
+
+**Ship Selection screen (first pass) — implemented 2026-09-05.** See
+design.md 5.1 for the full writeup. **The app is now a `Game`, not a
+single `ApplicationAdapter`** — new `StarWarsGame` is the real entry
+point (`Lwjgl3Launcher` constructs it now, not `Client`), `Client` was
+converted `ApplicationAdapter` → `Screen` (`create()`→`show()`, `render()`
+gained its `delta` param, added no-op `pause()/resume()/hide()`). New
+`ShipSelectionScreen`: cycles all six `ShipType`s (mouse click on
+arrow buttons, or left/right arrow keys), Start button or ENTER hands
+off to `new Client()`. Raw `SpriteBatch` + manual hit-testing, not
+Scene2D/VisUI — deliberate, see the screen's class Javadoc; VisUI
+(design.md 4.4) stays reserved for a screen that actually needs form
+widgets. New `core.render.DialogLayout` (public, pixel-perfect
+placement math, unit-tested — `DialogLayoutTest`, 6 cases) and
+`core.render.ScrollingBackground` (autonomous tiled-background drift,
+for screens with no camera to tie a parallax scroll to).
+
+Assets: portraits imported for all six ships (`R:\StarWars\sprites\<ship>/portrait.png`
+→ `assets-raw/ships/<ship>/`, picked up by `ships.atlas` automatically).
+`Menu_Background.png` moved to `assets-raw/backgrounds/menu-starfield/`
+(tileable, same "don't atlas-pack it" rule as `blue_nebula.png`). New
+`menu.atlas` for the rest of `assets-raw/menu/` (dialog, arrows, start
+button, description images).
+
+**Two real bugs found while building this:**
+- `ScrollingBackground`'s `TextureRegion` field used the no-arg
+  constructor (leaves the underlying `Texture` `null`) and only ever
+  called the UV-only `setRegion(u,v,u2,v2)` overload, which doesn't (and
+  can't) attach a texture — crashed with an NPE on the very first frame.
+  Fixed by constructing `new TextureRegion(texture)` in the constructor
+  *body* (not a field initializer — `texture` isn't assigned yet when
+  field initializers run). **General rule:** the no-arg `TextureRegion()`
+  constructor needs an explicit `setRegion(Texture)`/full-overload call
+  before first use; the UV-only overload alone isn't enough.
+- Same `combineSubdirectories` gotcha as the ship-import bug above, this
+  time for `assets-raw/menu/` — same fix (already flipped on globally).
+  Also bumped `AtlasPacker`'s max page size 1024→2048: six 512×512
+  portraits on top of existing hull frames no longer fit one page.
+
+**Known limitation, deliberate:** Start always launches `new Client()`
+regardless of which ship is selected/shown — only the X-wing has a real
+`.stats.json` and fits `Client`'s current square-bounding-box rendering
+(the Star Destroyer's sprite is 256×432, non-square). Selection itself
+is fully real; wiring it into what's actually flown is a follow-up
+milestone. Verified: full `mvn clean verify` (30 tests); a real client
+boot + screenshot confirming correct layout (logo/dialog/arrows/
+portrait/description all where specified); a real server+client boot
+confirming Start correctly transitions into gameplay when a server is
+reachable (confirmed the hard way — a stray Start/ENTER during testing,
+with no server running yet, hit `Client.connectToServer`'s existing
+"no Connect Dialog yet, a connection failure is simply fatal" behavior,
+which is pre-existing/documented, not a new bug). **Not separately
+verified:** arrow/Start-button hover-texture swap — implemented, but a
+static screenshot can't show mouse-over; ask the user to check it by
+moving the mouse over them.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

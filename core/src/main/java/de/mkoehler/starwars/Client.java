@@ -1,7 +1,7 @@
 package de.mkoehler.starwars;
 
-import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
@@ -45,8 +45,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * {@link com.badlogic.gdx.ApplicationListener} implementation shared by all
- * platforms.
+ * The gameplay {@link Screen} — reached from {@link ShipSelectionScreen} via
+ * {@link StarWarsGame}, which owns the actual {@code ApplicationListener}
+ * now that the app has more than one screen (design.md 5.1).
  * <p>
  * Third networked milestone: weapons/combat. The client sends its held fire
  * input alongside movement input; the server is the sole simulator of
@@ -65,11 +66,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * <p>
  * {@link NetworkClient}'s callbacks run on KryoNet's own thread, not the
  * render thread, so incoming messages are queued in {@link #pendingUpdates}
- * and only applied at the start of {@link #render()} — never mutate
+ * and only applied at the start of {@link #render(float)} — never mutate
  * {@link #ships}, {@link #projectiles}, {@link #myBody} or the local Box2D
  * {@link #localWorld} directly from a network callback.
  */
-public class Client extends ApplicationAdapter {
+public class Client implements Screen {
 
     private static final String SERVER_HOST = "localhost";
     private static final String DISPLAY_NAME = "Pilot";
@@ -119,7 +120,7 @@ public class Client extends ApplicationAdapter {
     private float myShieldMax;
 
     @Override
-    public void create() {
+    public void show() {
         Box2D.init();
 
         batch = new SpriteBatch();
@@ -273,10 +274,8 @@ public class Client extends ApplicationAdapter {
     }
 
     @Override
-    public void render() {
+    public void render(float deltaTime) {
         ScreenUtils.clear(0.05f, 0.05f, 0.08f, 1f);
-
-        float deltaTime = Gdx.graphics.getDeltaTime();
 
         Runnable update;
         while ((update = pendingUpdates.poll()) != null) {
@@ -445,6 +444,31 @@ public class Client extends ApplicationAdapter {
         projectilesAtlas.dispose();
         background.dispose();
         statusHud.dispose();
+    }
+
+    /**
+     * No-op — this screen has no state that needs pausing (unlike a mobile
+     * app losing focus, the desktop target doesn't currently act on this).
+     */
+    @Override
+    public void pause() {
+    }
+
+    /**
+     * No-op, see {@link #pause()}.
+     */
+    @Override
+    public void resume() {
+    }
+
+    /**
+     * No-op — nothing needs to release resources just because this screen
+     * stops being the active one; {@link #dispose()} (called explicitly by
+     * whoever switches away, see {@link ShipSelectionScreen}) handles actual
+     * cleanup once the screen is really done, not merely hidden.
+     */
+    @Override
+    public void hide() {
     }
 
     /**

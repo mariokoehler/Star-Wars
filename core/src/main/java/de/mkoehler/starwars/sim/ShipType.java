@@ -7,17 +7,28 @@ package de.mkoehler.starwars.sim;
  * {@link ShipTypeConfig}) and, optionally, a {@code .meta.json} (hitbox
  * polygon and attachment points, see
  * {@link de.mkoehler.starwars.sim.metadata.ShipSpriteMetadata}) — loaded by
- * {@link ShipStats}.
+ * {@link ShipStats}. Also the identifier the Ship Selection screen
+ * (design.md 5.1) cycles through, using each type's {@code resourceName} to
+ * find its packed sprite/portrait region (e.g. {@code "falcon/portrait"} in
+ * {@code ships.atlas}) and its {@code textures/menu.atlas} description image.
  * <p>
- * A single value for now, standing in for the still-open "ship roster" TODO
- * (design.md 6) — introduced ahead of a second ship type existing so that
- * ship-type-keyed data (stats, sprite metadata, HUD art) has one shared
- * identifier to hang off of, rather than every consumer inventing its own
- * per-ship lookup.
+ * **Only {@link #XWING} has a {@code .stats.json} authored yet** — the other
+ * five have sprite art imported (2026-09-05) but no balance numbers, and
+ * {@link ShipStats#forType} will throw if called for them before one exists.
+ * The Ship Selection screen only needs each type's portrait/description
+ * art, not its {@code ShipStats}, so this doesn't block it — but it does
+ * mean starting a match currently still always flies the X-wing regardless
+ * of which ship is shown selected, until per-ship stats (and non-square
+ * sprite rendering support, needed for the Star Destroyer) exist.
  */
 public enum ShipType {
 
-    XWING("xwing");
+    XWING("xwing"),
+    FALCON("falcon"),
+    SNOWSPEEDER("snowspeeder"),
+    STARDESTROYER("stardestroyer"),
+    TIEFIGHTER("tiefighter"),
+    TIEINTERCEPTOR("tieinterceptor");
 
     private final String resourceName;
 

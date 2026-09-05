@@ -1110,6 +1110,42 @@ dev workflow.
   category convention; `AtlasPacker.main()` just has a second `pack(...)`
   call now. Region names have no frame index (no numeric filename
   suffix), so they're looked up with plain `atlas.findRegion("red_dot")`.
+- **Five more ships' neutral-bank frames imported (2026-09-05):** Falcon,
+  Snowspeeder, Star Destroyer, TIE Fighter, TIE Interceptor — same
+  `_0020.png` neutral-bank frame convention as the X-wing, copied
+  verbatim from `R:\StarWars\sprites\<ship>/` into
+  `assets-raw/ships/<ship>/`. **Resolution choice for the two ships that
+  had both:** Falcon and TIE Interceptor exist at both 128px and 256px;
+  picked **256px** for extra headroom (display size is driven by each
+  ship's `radiusMeters` stat, not the source resolution, so this is a
+  free quality choice, not a gameplay one) — flagging since design.md's
+  original inventory note (above) didn't specify which to use. Star
+  Destroyer's frame is non-square (256×432 — it's a capital ship), which
+  the dev-tools editor already handles fine (no square-canvas
+  assumption anywhere in it). **Portraits not imported** — the user is
+  preparing Ship Selection screen assets separately (6) and didn't ask
+  for these yet.
+- **Bug found and fixed while packing the above (2026-09-05):**
+  `TexturePacker.Settings.combineSubdirectories` defaults to `false`,
+  so with 6 ship subfolders under `assets-raw/ships/` the packer treated
+  each as an entirely separate pack, producing `ships.png` through
+  `ships6.png` — one dedicated page per ship type even though most are
+  far smaller than the 1024×1024 page limit, wasting texture memory and
+  adding an extra texture bind per ship type at render time. Fixed by
+  setting `combineSubdirectories = true` in `AtlasPacker`; all 6 ships
+  now share one `1024×512` page. Region naming is unaffected either way
+  (still subfolder-prefixed, e.g. `falcon/falcon256`).
+- **Not yet done:** no `ShipType` enum entries (2.6), `.stats.json`, or
+  `.meta.json` for these five yet — deliberately out of scope for this
+  step. The user is authoring each one's hitbox polygon and attachment
+  points next via the `dev-tools` sprite metadata editor (2.5), which
+  gained a **`TURRET`** suggested attachment name for this
+  (`SpriteCanvas.SUGGESTED_ATTACHMENT_NAMES`) — for the Falcon's/Star
+  Destroyer's turret mount point(s); the turret weapon system itself
+  isn't built yet (design.md 4.3's turret-overlay plan), just the
+  attachment point convention. Wiring these ships up as actually
+  spawnable/playable (`ShipType` entries, stats, ship selection) is
+  explicitly the next milestone after that.
 
 ### 4.4 UI framework
 
@@ -1199,6 +1235,116 @@ not a v1 concern).
   chasing the sub in *The Phantom Menace*). Pressing **ENTER** returns to
   Ship Selection. This screen is reached **only** by dying in combat, not
   by a voluntary ESC leave.
+
+**Ship Selection screen — implemented 2026-09-05 (first pass, no Connect
+Dialog yet).** Since accounts/Connect Dialog (3.6/5.1 above) don't exist
+yet, the app currently *starts* on Ship Selection rather than reaching it
+via a successful connect — `StarWarsGame.create()` goes straight there.
+Revisit once the Connect Dialog is built.
+
+- **Architecture shift: the app is now a `Game`, not a single
+  `ApplicationAdapter`.** `Client` (gameplay) was, until now, the entire
+  `ApplicationListener` — the only screen that existed. With a second
+  screen needed, `StarWarsGame extends Game` is the new true entry point
+  (`Lwjgl3Launcher` now constructs it, not `Client` directly); `Client`
+  was converted to implement `Screen` instead (`create()`→`show()`,
+  `render()` gained its `delta` parameter, plus no-op
+  `pause()`/`resume()`/`hide()` — `dispose()` unchanged). `Game` doesn't
+  auto-dispose the screen being switched away from, so whichever screen
+  initiates a transition (`ShipSelectionScreen`'s Start handling) disposes
+  itself explicitly right after calling `setScreen(...)`.
+- **Cycles every {@code ShipType}** (`ShipType.values()` — see 2.6's
+  enum) via Previous/Next, by mouse click on the arrow buttons or the
+  **left/right arrow keys**; **Start** button or **ENTER** starts a match.
+  User-provided art (`assets-raw/menu/`): a tileable starfield background,
+  a pre-rendered dialog box (background art already contains the
+  "Select Your Ship!"/"Previous/Next:" text), two arrow buttons with
+  mouse-over variants, a start button with a mouse-over variant, and one
+  description image per ship type.
+- **No Scene2D/VisUI for this screen — decided.** Despite 4.4's decision
+  to use VisUI for menu-style screens in general, this one is entirely
+  pre-rendered dialog art plus a handful of rectangular hit-test regions
+  (two arrows, one button) — exactly what this codebase's existing raw-
+  `SpriteBatch` style (`ShipStatusHud`, `ParallaxBackground`) already
+  handles well, with no skinning/widget work to save by reaching for
+  VisUI. VisUI remains reserved for a screen that actually needs form
+  widgets — the Connect Dialog and Keybind Setup, once built.
+- **Pixel-perfect placement, given as exact coordinates in the dialog
+  image's own pixel space** (top-down, top-left origin — matching
+  `TextureRegion`'s convention, not `PixelPoint`'s sprite-local Y-up
+  one): arrows at Y=124, X positions derived from "equidistant between
+  X=594 and X=755" (three equal 21px gaps around the two 49px-wide
+  arrows → X=615 and X=685); the ship portrait scaled down to fit a
+  384×384 area at (370, 172); each description image's top-left fixed at
+  (37, 171). The top-down-to-screen-space conversion, and the
+  scale-to-fit-and-center math for the portrait, are pulled into a small
+  pure `DialogLayout` utility specifically so this pixel math is
+  unit-tested (`DialogLayoutTest`, 6 cases) rather than eyeballed —
+  same split as `SpriteCoordinates`/`HudGaugeClip`, but `public` since
+  its one consumer (`ShipSelectionScreen`) isn't co-located in `render`.
+- **Logo** (`assets-raw/Logo.png`, user-provided, 5847×1784) drawn
+  horizontally centered, sized to a fraction of and vertically centered
+  within the gap between the screen's top edge and the dialog's top edge
+  — a placeholder-tuned fraction (70%), not pixel-specified.
+- **Background drift** — `ScrollingBackground` (new, `core.render`):
+  like `ParallaxBackground.Layer`, it slides a repeat-wrapped tileable
+  texture's sampled UV coordinates for the scroll illusion, but
+  autonomously over elapsed time in a fixed direction rather than tied to
+  a world camera's position (there's no camera/player on this screen) —
+  and unlike `ParallaxBackground.Layer`, the drawn quad always exactly
+  fills the screen and never itself moves, only the sampled UV offset
+  advances. Direction/speed are untuned placeholders.
+- **Portraits imported** (2026-09-05): `portrait.png` for all six ship
+  types, from `R:\StarWars\sprites\<ship>/`, into
+  `assets-raw/ships/<ship>/` alongside each type's hull frame — picked up
+  automatically by `ships.atlas` (region name `<resourceName>/portrait`).
+  `Menu_Background.png` (tileable, needs `Repeat` wrap) was moved from
+  `assets-raw/menu/` into `assets-raw/backgrounds/menu-starfield/`,
+  matching `blue_nebula.png`'s precedent — tileable art doesn't get
+  atlas-packed (bleeds at tile edges under `Repeat`), it's copied
+  straight to `assets/textures/` and loaded as its own `Texture`. New
+  `menu.atlas` packs everything else in `assets-raw/menu/` (dialog,
+  arrows, buttons, descriptions).
+- **Bug found and fixed while building this (2026-09-05):**
+  `ScrollingBackground`'s `TextureRegion` field was constructed with the
+  no-arg constructor (`new TextureRegion()`), which leaves its underlying
+  `Texture` reference `null` — the UV-only `setRegion(u,v,u2,v2)`
+  overload used every frame only adjusts sampling coordinates, it doesn't
+  (and can't) attach a texture. Crashed with a `NullPointerException` on
+  the very first frame. Fixed by constructing `new TextureRegion(texture)`
+  in the constructor body (not a field initializer — the `texture` field
+  isn't assigned yet when field initializers run, only once the
+  constructor body executes). **General rule for later:** the no-arg
+  `TextureRegion()` constructor is only useful if `setRegion(Texture)` (or
+  the full-texture-plus-UV overload) is called before first use — the
+  UV-only overload alone is not enough.
+- **Bug found while packing the new art (2026-09-05):** same
+  `combineSubdirectories` gotcha as 4.3's ship import, this time for
+  `assets-raw/menu/` — fixed by the same setting (already flipped on for
+  all packs). Also bumped `AtlasPacker`'s max page size from 1024 to 2048
+  — six ship portraits (512×512 each) on top of the existing hull frames
+  no longer fit one 1024×1024 page.
+- **Known limitation, deliberate:** starting a match currently always
+  hands off to a plain `new Client()` regardless of which ship is
+  selected — see `ShipSelectionScreen`'s class Javadoc and `ShipType`'s
+  Javadoc (2.6) for why (only the X-wing has a `.stats.json`; the Star
+  Destroyer's non-square sprite doesn't fit `Client`'s current
+  square-bounding-box rendering assumption either). The selection itself
+  is fully real; only "actually fly the selected ship" is pending a
+  follow-up milestone.
+- **Verified:** full `mvn clean verify` (30 tests) across all 4 modules;
+  a real client boot with a screenshot confirming correct layout (logo,
+  dialog, arrows, portrait, description all positioned as specified); a
+  real server + client boot confirming the Start transition into
+  `Client`'s gameplay screen doesn't crash when a server is actually
+  reachable (it does throw — pre-existing, documented, unrelated to this
+  screen — if no server is running, since there's still no Connect
+  Dialog/error screen to catch that, see `Client.connectToServer`'s
+  existing Javadoc note).
+- **Not yet done:** hover-state visuals (arrow/button mouse-over texture
+  swap) are implemented but not separately screenshotted (a static
+  screenshot can't show hover); the user should try moving the mouse over
+  the arrows/Start button themselves.
 
 ### 5.2 Keybind Setup screen
 
@@ -1316,7 +1462,11 @@ once a component is actually being worked on.
       already load from JSON (`ShipTypeConfig`, see 2.6) — adding a
       second ship type is now "add an enum value + a `.stats.json`
       (+ `.meta.json`)," not a code change to every consumer.
-- [ ] **Ship Selection screen** — lists ships unlocked by current XP.
+- [x] **Ship Selection screen (first pass, 2026-09-05)** — see 5.1 for the
+      full writeup: cycle every ship type, Start to match. No XP-gating
+      yet (no XP system exists, design.md 6 below); shows all six known
+      ship types unconditionally. Starting a match still always flies the
+      X-wing regardless of selection (pending per-ship stats).
 - [x] **Client-side prediction & reconciliation (2026-09-05)** — see 3.5
       for the full writeup (local Box2D body, `ShipControlSystem.applyInput`
       shared with the server, blend/snap reconciliation against

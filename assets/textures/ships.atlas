@@ -1,12 +1,89 @@
 
 ships.png
-size: 256, 256
+size: 2048, 2048
 format: RGBA8888
 filter: Linear, Linear
 repeat: none
-xwing/xwing128
+falcon/falcon256
+  rotate: false
+  xy: 516, 692
+  size: 256, 256
+  orig: 256, 256
+  offset: 0, 0
+  index: 20
+falcon/portrait
+  rotate: false
+  xy: 2, 1464
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
+snowspeeder/portrait
+  rotate: false
+  xy: 2, 950
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
+snowspeeder/snowspeeder
+  rotate: false
+  xy: 1544, 1848
+  size: 128, 128
+  orig: 128, 128
+  offset: 0, 0
+  index: 20
+stardestroyer/portrait
+  rotate: false
+  xy: 516, 1464
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
+stardestroyer/stardestroyer256
   rotate: false
   xy: 2, 2
+  size: 256, 432
+  orig: 256, 432
+  offset: 0, 0
+  index: 20
+tiefighter/portrait
+  rotate: false
+  xy: 2, 436
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
+tiefighter/tie_fighter128
+  rotate: false
+  xy: 260, 306
+  size: 128, 128
+  orig: 128, 128
+  offset: 0, 0
+  index: 20
+tieinterceptor/interceptor256
+  rotate: false
+  xy: 1030, 1206
+  size: 256, 256
+  orig: 256, 256
+  offset: 0, 0
+  index: 20
+tieinterceptor/portrait
+  rotate: false
+  xy: 516, 950
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
+xwing/portrait
+  rotate: false
+  xy: 1030, 1464
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
+xwing/xwing128
+  rotate: false
+  xy: 516, 562
   size: 128, 128
   orig: 128, 128
   offset: 0, 0

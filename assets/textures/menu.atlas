@@ -1,0 +1,97 @@
+
+menu.png
+size: 2048, 1024
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+Arrow_Left
+  rotate: false
+  xy: 1801, 889
+  size: 49, 38
+  orig: 49, 38
+  offset: 0, 0
+  index: -1
+Arrow_Left_MouseOver
+  rotate: false
+  xy: 1885, 977
+  size: 49, 38
+  orig: 49, 38
+  offset: 0, 0
+  index: -1
+Arrow_Right
+  rotate: false
+  xy: 822, 494
+  size: 49, 38
+  orig: 49, 38
+  offset: 0, 0
+  index: -1
+Arrow_Right_MouseOver
+  rotate: false
+  xy: 906, 582
+  size: 49, 38
+  orig: 49, 38
+  offset: 0, 0
+  index: -1
+Falcon_Description
+  rotate: false
+  xy: 822, 622
+  size: 329, 393
+  orig: 329, 393
+  offset: 0, 0
+  index: -1
+Select_Ship_Dialog
+  rotate: false
+  xy: 2, 397
+  size: 818, 618
+  orig: 818, 618
+  offset: 0, 0
+  index: -1
+SnowSpeeder_Description
+  rotate: false
+  xy: 334, 3
+  size: 325, 392
+  orig: 325, 392
+  offset: 0, 0
+  index: -1
+StarDestroyer_Description
+  rotate: false
+  xy: 2, 2
+  size: 330, 393
+  orig: 330, 393
+  offset: 0, 0
+  index: -1
+Start_Button
+  rotate: false
+  xy: 1801, 929
+  size: 82, 86
+  orig: 82, 86
+  offset: 0, 0
+  index: -1
+Start_Button_MouseOver
+  rotate: false
+  xy: 822, 534
+  size: 82, 86
+  orig: 82, 86
+  offset: 0, 0
+  index: -1
+TieFighter_Description
+  rotate: false
+  xy: 661, 2
+  size: 321, 393
+  orig: 321, 393
+  offset: 0, 0
+  index: -1
+TieInterceptor_Description
+  rotate: false
+  xy: 1153, 622
+  size: 322, 393
+  orig: 322, 393
+  offset: 0, 0
+  index: -1
+XWing_Description
+  rotate: false
+  xy: 1477, 621
+  size: 322, 394
+  orig: 322, 394
+  offset: 0, 0
+  index: -1
