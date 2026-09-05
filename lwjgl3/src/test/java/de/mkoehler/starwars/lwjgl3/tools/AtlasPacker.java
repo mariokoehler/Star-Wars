@@ -33,6 +33,7 @@ public final class AtlasPacker {
      */
     public static void main(String[] args) {
         pack("ships", "ships");
+        pack("projectiles", "projectiles");
     }
 
     /**

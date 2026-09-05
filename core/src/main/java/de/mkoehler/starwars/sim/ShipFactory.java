@@ -7,10 +7,12 @@ import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.CircleShape;
 import com.badlogic.gdx.physics.box2d.FixtureDef;
 import com.badlogic.gdx.physics.box2d.World;
+import de.mkoehler.starwars.sim.components.HealthComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.WeaponComponent;
 
 /**
  * Builds ship Box2D bodies, and (server-side) full Ashley entities wrapping
@@ -29,7 +31,9 @@ public final class ShipFactory {
 
     /**
      * Creates a player's ship entity (server-side) and adds it to the given
-     * engine.
+     * engine. The body's {@code userData} is set to the entity, so a Box2D
+     * {@code ContactListener} can look up which entity a colliding body
+     * belongs to (used for projectile hit detection).
      *
      * @param engine   the Ashley engine to add the entity to
      * @param world    the Box2D world to create the body in
@@ -47,12 +51,17 @@ public final class ShipFactory {
         entity.add(new PhysicsBodyComponent(body));
         entity.add(new PlayerControlledComponent(stats.getThrustForce(), stats.getTurnTorque()));
         entity.add(new NetworkInputComponent());
+        entity.add(new HealthComponent(stats.getMaxHealth()));
+        entity.add(new WeaponComponent(WeaponStats.BLASTER));
         engine.addEntity(entity);
+        body.setUserData(entity);
         return entity;
     }
 
     /**
-     * Creates a ship's Box2D body, with no Ashley entity around it.
+     * Creates a ship's Box2D body, with no Ashley entity around it. The
+     * fixture is set up to collide with both other ships and projectiles
+     * (see {@link CollisionCategories}).
      *
      * @param world the Box2D world to create the body in
      * @param x     spawn position, in meters
@@ -76,6 +85,8 @@ public final class ShipFactory {
         fixtureDef.density = 1f;
         fixtureDef.friction = 0f;
         fixtureDef.restitution = 0.2f;
+        fixtureDef.filter.categoryBits = CollisionCategories.SHIP;
+        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE);
         body.createFixture(fixtureDef);
 
         shape.dispose();

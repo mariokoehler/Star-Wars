@@ -20,8 +20,10 @@ import com.badlogic.gdx.utils.viewport.Viewport;
 import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
-import de.mkoehler.starwars.net.messages.PlayerJoinedMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
+import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
@@ -29,44 +31,48 @@ import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.WeaponStats;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * {@link com.badlogic.gdx.ApplicationListener} implementation shared by all
  * platforms.
  * <p>
- * Second networked milestone: client-side prediction. The client runs its
- * own local Box2D body for its own ship, applying held input to it
- * immediately every frame (via the exact same {@link ShipControlSystem#applyInput}
- * math the server uses) so movement feels instant, rather than waiting for a
- * server round trip. Each server {@link WorldSnapshotMessage} then
- * reconciles that local prediction against the authoritative state — a
- * small blend toward the server's position/velocity for small errors, a
- * hard snap for large ones (see {@link #reconcileWithServer}). Other
- * players' ships are still simple snapshot interpolation, unchanged from the
- * previous milestone — predicting someone else's ship isn't possible without
- * knowing their future input.
+ * Third networked milestone: weapons/combat. The client sends its held fire
+ * input alongside movement input; the server is the sole simulator of
+ * projectiles and hit detection (design.md 3.5/2.3-adjacent — see
+ * {@code GameNetworkServer}). Projectiles are never predicted, even the
+ * local player's own — they're drawn purely from
+ * {@link WorldSnapshotMessage#getProjectiles()}, extrapolated (dead-reckoned)
+ * from the last snapshot using known velocity rather than eased toward it —
+ * easing lags behind anything moving at real speed (a 50m/s projectile eased
+ * at this class's original rate would trail its true position by ~5m at
+ * steady state, more than double a ship's radius — exactly why shots used to
+ * visually vanish well before reaching a target). Other players' ships use
+ * the same extrapolation, using the velocity already carried in
+ * {@link ShipState}. Local ship movement prediction/reconciliation is
+ * unchanged from the previous milestone.
  * <p>
  * {@link NetworkClient}'s callbacks run on KryoNet's own thread, not the
  * render thread, so incoming messages are queued in {@link #pendingUpdates}
  * and only applied at the start of {@link #render()} — never mutate
- * {@link #ships}, {@link #myBody} or the local Box2D {@link #localWorld}
- * directly from a network callback.
+ * {@link #ships}, {@link #projectiles}, {@link #myBody} or the local Box2D
+ * {@link #localWorld} directly from a network callback.
  */
 public class Client extends ApplicationAdapter {
 
     private static final String SERVER_HOST = "localhost";
     private static final String DISPLAY_NAME = "Pilot";
 
-    /** How quickly another player's ship's drawn position eases toward its latest network target each frame. */
-    private static final float SHIP_INTERPOLATION_SPEED = 10f;
     /** How quickly the camera eases toward the local ship each frame; not the full model from design.md 4.1. */
     private static final float CAMERA_FOLLOW_SPEED = 3f;
 
@@ -80,6 +86,9 @@ public class Client extends ApplicationAdapter {
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
     private TextureRegion xwingRegion;
+    private TextureAtlas projectilesAtlas;
+    private TextureRegion ownProjectileRegion;
+    private TextureRegion enemyProjectileRegion;
     private ParallaxBackground background;
     private OrthographicCamera camera;
     private Viewport viewport;
@@ -87,6 +96,7 @@ public class Client extends ApplicationAdapter {
     private NetworkClient networkClient;
     private final Queue<Runnable> pendingUpdates = new ConcurrentLinkedQueue<>();
     private final Map<Integer, RemoteShip> ships = new HashMap<>();
+    private final Map<Integer, RemoteProjectile> projectiles = new HashMap<>();
     private int myPlayerId = -1;
 
     private World localWorld;
@@ -103,6 +113,9 @@ public class Client extends ApplicationAdapter {
         batch = new SpriteBatch();
         shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
         xwingRegion = shipsAtlas.findRegion("xwing/xwing128", 20);
+        projectilesAtlas = new TextureAtlas(Gdx.files.internal("textures/projectiles.atlas"));
+        ownProjectileRegion = projectilesAtlas.findRegion("red_dot");
+        enemyProjectileRegion = projectilesAtlas.findRegion("blue_dot");
 
         background = new ParallaxBackground(
             new ParallaxBackground.Layer(new Texture(
@@ -122,13 +135,15 @@ public class Client extends ApplicationAdapter {
             @Override
             protected void onReceived(Object object) {
                 // Runs on KryoNet's network thread - only ever enqueue here, never touch
-                // `ships`/`myBody`/`localWorld` directly (see class Javadoc).
-                if (object instanceof PlayerJoinedMessage joined) {
-                    pendingUpdates.add(() -> onPlayerJoined(joined));
+                // `ships`/`projectiles`/`myBody`/`localWorld` directly (see class Javadoc).
+                if (object instanceof ShipSpawnedMessage spawned) {
+                    pendingUpdates.add(() -> onShipSpawned(spawned));
                 } else if (object instanceof WorldSnapshotMessage snapshot) {
                     pendingUpdates.add(() -> onWorldSnapshot(snapshot));
                 } else if (object instanceof PlayerLeftMessage left) {
                     pendingUpdates.add(() -> ships.remove(left.getPlayerId()));
+                } else if (object instanceof ShipDestroyedMessage destroyed) {
+                    pendingUpdates.add(() -> onShipDestroyed(destroyed));
                 }
             }
         };
@@ -143,15 +158,31 @@ public class Client extends ApplicationAdapter {
         networkClient.sendHandshake(DISPLAY_NAME);
     }
 
-    private void onPlayerJoined(PlayerJoinedMessage joined) {
-        myPlayerId = joined.getPlayerId();
+    private void onShipSpawned(ShipSpawnedMessage spawned) {
+        myPlayerId = spawned.getPlayerId();
 
-        localWorld = new World(new Vector2(0, 0), true);
-        localPhysicsSystem = new PhysicsSystem(localWorld);
-        myBody = ShipFactory.createBody(localWorld, joined.getSpawnX(), joined.getSpawnY(), ShipStats.XWING);
+        if (localWorld == null) {
+            localWorld = new World(new Vector2(0, 0), true);
+            localPhysicsSystem = new PhysicsSystem(localWorld);
+        } else if (myBody != null) {
+            // Respawning after death (see onShipDestroyed) - the old body was already destroyed.
+            localWorld.destroyBody(myBody);
+        }
+        myBody = ShipFactory.createBody(localWorld, spawned.getSpawnX(), spawned.getSpawnY(), ShipStats.XWING);
         myPreviousX = myBody.getPosition().x;
         myPreviousY = myBody.getPosition().y;
         myPreviousAngle = myBody.getAngle();
+    }
+
+    private void onShipDestroyed(ShipDestroyedMessage destroyed) {
+        if (destroyed.getPlayerId() == myPlayerId) {
+            if (myBody != null) {
+                localWorld.destroyBody(myBody);
+                myBody = null;
+            }
+        } else {
+            ships.remove(destroyed.getPlayerId());
+        }
     }
 
     private void onWorldSnapshot(WorldSnapshotMessage snapshot) {
@@ -160,13 +191,28 @@ public class Client extends ApplicationAdapter {
                 reconcileWithServer(state);
                 continue;
             }
-            RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id ->
-                new RemoteShip(state.getX() * PhysicsConstants.PIXELS_PER_METER,
-                    state.getY() * PhysicsConstants.PIXELS_PER_METER, state.getAngle()));
-            ship.targetX = state.getX() * PhysicsConstants.PIXELS_PER_METER;
-            ship.targetY = state.getY() * PhysicsConstants.PIXELS_PER_METER;
-            ship.targetAngle = state.getAngle();
+            float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
+            float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
+            RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id -> new RemoteShip(x, y, state.getAngle()));
+            ship.updateFromSnapshot(x, y, state.getAngle(),
+                state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
+                state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
+                state.getAngularVelocity());
         }
+
+        // Projectiles have no destroyed-notification of their own (design.md 3.5's
+        // ProjectileState note) - presence in this snapshot means alive, so anything not
+        // present anymore gets pruned below.
+        Set<Integer> presentIds = new HashSet<>();
+        for (ProjectileState state : snapshot.getProjectiles()) {
+            presentIds.add(state.getProjectileId());
+            float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
+            float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
+            RemoteProjectile projectile = projectiles.computeIfAbsent(state.getProjectileId(), id ->
+                new RemoteProjectile(state.getOwnerPlayerId(), x, y, state.getAngle()));
+            projectile.updateFromSnapshot(x, y, state.getAngle());
+        }
+        projectiles.keySet().removeIf(id -> !presentIds.contains(id));
     }
 
     /**
@@ -180,6 +226,9 @@ public class Client extends ApplicationAdapter {
      * @param state the local player's ship state from the latest snapshot
      */
     private void reconcileWithServer(ShipState state) {
+        if (myBody == null) {
+            return;
+        }
         float dx = state.getX() - myBody.getPosition().x;
         float dy = state.getY() - myBody.getPosition().y;
         float errorMeters = (float) Math.sqrt(dx * dx + dy * dy);
@@ -207,17 +256,19 @@ public class Client extends ApplicationAdapter {
             update.run();
         }
 
-        if (myPlayerId >= 0) {
+        if (myBody != null) {
             boolean thrustForward = Gdx.input.isKeyPressed(Input.Keys.W);
             boolean thrustReverse = Gdx.input.isKeyPressed(Input.Keys.S);
             boolean turnLeft = Gdx.input.isKeyPressed(Input.Keys.A);
             boolean turnRight = Gdx.input.isKeyPressed(Input.Keys.D);
+            boolean firing = Gdx.input.isKeyPressed(Input.Keys.SPACE);
 
-            networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight));
+            networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight, firing));
             predictLocalShip(thrustForward, thrustReverse, turnLeft, turnRight, deltaTime);
         }
 
-        interpolateRemoteShips(deltaTime);
+        extrapolateRemoteShips(deltaTime);
+        extrapolateProjectiles(deltaTime);
         updateCamera(deltaTime);
 
         batch.setProjectionMatrix(camera.combined);
@@ -225,6 +276,7 @@ public class Client extends ApplicationAdapter {
         background.render(batch, camera);
         drawRemoteShips();
         drawLocalShip();
+        drawProjectiles();
         batch.end();
     }
 
@@ -241,12 +293,20 @@ public class Client extends ApplicationAdapter {
                 thrustForward, thrustReverse, turnLeft, turnRight));
     }
 
-    private void interpolateRemoteShips(float deltaTime) {
-        float lerp = MathUtils.clamp(SHIP_INTERPOLATION_SPEED * deltaTime, 0f, 1f);
+    private void extrapolateRemoteShips(float deltaTime) {
         for (RemoteShip ship : ships.values()) {
-            ship.renderX += (ship.targetX - ship.renderX) * lerp;
-            ship.renderY += (ship.targetY - ship.renderY) * lerp;
-            ship.renderAngle = MathUtils.lerpAngle(ship.renderAngle, ship.targetAngle, lerp);
+            ship.extrapolate(deltaTime);
+        }
+    }
+
+    private void extrapolateProjectiles(float deltaTime) {
+        // Projectiles fly in a fixed direction at a fixed known speed for their whole flight
+        // (no thrust/torque, no prediction) - so unlike ships, velocity doesn't need to come
+        // from the server at all, it's fully determined by the weapon's stats and the angle
+        // already in each snapshot.
+        float speedPixels = WeaponStats.BLASTER.getProjectileSpeed() * PhysicsConstants.PIXELS_PER_METER;
+        for (RemoteProjectile projectile : projectiles.values()) {
+            projectile.extrapolate(deltaTime, speedPixels);
         }
     }
 
@@ -303,6 +363,22 @@ public class Client extends ApplicationAdapter {
             angle * MathUtils.radiansToDegrees);
     }
 
+    private void drawProjectiles() {
+        float sizePixels = WeaponStats.BLASTER.getProjectileRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
+
+        for (RemoteProjectile projectile : projectiles.values()) {
+            // Own shots draw red, everyone else's draw blue - purely a rendering choice
+            // (design.md 3.5), the server treats every projectile identically.
+            TextureRegion region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
+            batch.draw(region,
+                projectile.renderX - sizePixels / 2f, projectile.renderY - sizePixels / 2f,
+                sizePixels / 2f, sizePixels / 2f,
+                sizePixels, sizePixels,
+                1f, 1f,
+                projectile.angle * MathUtils.radiansToDegrees);
+        }
+    }
+
     @Override
     public void resize(int width, int height) {
         // false: don't recenter the camera on the world origin, keep wherever it's currently
@@ -320,22 +396,90 @@ public class Client extends ApplicationAdapter {
         }
         batch.dispose();
         shipsAtlas.dispose();
+        projectilesAtlas.dispose();
         background.dispose();
     }
 
-    /** Another player's ship, eased toward the latest network-reported target each frame. */
+    /**
+     * Another player's ship. Rendered by dead reckoning — extrapolated
+     * forward from the last snapshot's position/angle using its reported
+     * velocity/angular velocity and time elapsed since that snapshot arrived
+     * — rather than eased toward it, which would otherwise lag behind by an
+     * amount proportional to how fast the ship is actually moving (see class
+     * Javadoc).
+     */
     private static final class RemoteShip {
+        float baseX;
+        float baseY;
+        float baseAngle;
+        float velocityX;
+        float velocityY;
+        float angularVelocity;
+        float elapsedSinceUpdate;
         float renderX;
         float renderY;
         float renderAngle;
-        float targetX;
-        float targetY;
-        float targetAngle;
 
         RemoteShip(float x, float y, float angle) {
-            renderX = targetX = x;
-            renderY = targetY = y;
-            renderAngle = targetAngle = angle;
+            baseX = renderX = x;
+            baseY = renderY = y;
+            baseAngle = renderAngle = angle;
+        }
+
+        void updateFromSnapshot(float x, float y, float angle, float velocityX, float velocityY, float angularVelocity) {
+            baseX = x;
+            baseY = y;
+            baseAngle = angle;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
+            this.angularVelocity = angularVelocity;
+            elapsedSinceUpdate = 0f;
+        }
+
+        void extrapolate(float deltaTime) {
+            elapsedSinceUpdate += deltaTime;
+            renderX = baseX + velocityX * elapsedSinceUpdate;
+            renderY = baseY + velocityY * elapsedSinceUpdate;
+            renderAngle = baseAngle + angularVelocity * elapsedSinceUpdate;
+        }
+    }
+
+    /**
+     * A projectile (anyone's, including the local player's own). Rendered by
+     * dead reckoning, same reasoning as {@link RemoteShip} — extrapolated
+     * along its fixed travel direction at the weapon's known constant speed,
+     * rather than eased toward the latest snapshot.
+     */
+    private static final class RemoteProjectile {
+        private static final Vector2 DIRECTION = new Vector2();
+
+        final int ownerPlayerId;
+        float baseX;
+        float baseY;
+        float angle;
+        float elapsedSinceUpdate;
+        float renderX;
+        float renderY;
+
+        RemoteProjectile(int ownerPlayerId, float x, float y, float angle) {
+            this.ownerPlayerId = ownerPlayerId;
+            baseX = renderX = x;
+            baseY = renderY = y;
+            this.angle = angle;
+        }
+
+        void updateFromSnapshot(float x, float y, float angle) {
+            baseX = x;
+            baseY = y;
+            this.angle = angle;
+            elapsedSinceUpdate = 0f;
+        }
+
+        void extrapolate(float deltaTime, float speedPixels) {
+            elapsedSinceUpdate += deltaTime;
+            DIRECTION.set(0, 1).rotateRad(angle).scl(speedPixels * elapsedSinceUpdate);
+            renderX = baseX + DIRECTION.x;
+            renderY = baseY + DIRECTION.y;
         }
     }
 }

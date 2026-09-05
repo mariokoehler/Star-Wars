@@ -141,6 +141,93 @@ straight back to Ship Selection, **not** through the Death Screen — the
 Death Screen's "rub it in" quote is specifically for actually losing a
 fight (see 5.1).
 
+### 2.4 Weapons & combat (first pass, 2026-09-05)
+
+**Weapon:** one type for v1, a simple blaster cannon (`WeaponStats.BLASTER`)
+— fires a projectile in the direction the ship is currently facing while
+the fire input (SPACE, 5.3) is held, limited by a fixed cooldown between
+shots (0.25s, i.e. 4 shots/sec). **Explicitly not the real weapon
+capacitor mechanic from 2.2** — that's tied to the power distribution
+system, which doesn't exist yet; this is a plain fixed cooldown standing
+in for it. Revisit once power distribution is built.
+
+**Projectiles — server-simulated, never predicted:** each shot is a small,
+fast Box2D body (bullet/CCD enabled to avoid tunneling through a ship in
+one physics step) simulated authoritatively on the server exactly like
+ships are, broadcast every tick via `WorldSnapshotMessage` alongside ship
+states. Unlike ships, **projectiles are never predicted locally, not even
+the shooter's own** — they're drawn purely from received snapshots
+(eased toward the latest target, same technique as other players' ships),
+accepting a small, barely-noticeable network-round-trip delay before a
+shot visually appears. Deliberate simplification, consistent with how
+ship movement itself started as snapshot-only before prediction was added
+— revisit only if it ever feels laggy in practice.
+- **Visual distinction — decided:** the local player's own shots draw
+  red, every other player's shots draw blue (`red_dot.png`/`blue_dot.png`,
+  provided directly by the user — tiny 7×7 tileable-atlas sprites, no
+  license info attached, presumed original/custom art). Purely a
+  client-side rendering choice — the server treats every projectile
+  identically regardless of owner.
+- **No destroyed-notification** for projectiles — unlike ships (which get
+  an explicit `ShipDestroyedMessage`), a projectile going away is only
+  ever inferred by its id no longer appearing in the next snapshot
+  (whether it hit something or simply expired). Simpler than adding a
+  dedicated per-projectile lifecycle message for something this
+  short-lived and high-churn.
+
+**Hit detection — server-authoritative, via Box2D contacts:** a Box2D
+`ContactListener` on the authoritative world detects projectile-vs-ship
+contacts (projectiles are filtered to only collide with ships, not each
+other — see `CollisionCategories`). A hit is ignored if the projectile's
+owner is the ship it hit (no self-damage from your own shot — relevant
+mainly because a shot spawns essentially at the shooter's own position).
+Box2D forbids creating/destroying bodies from inside a contact callback,
+so hits are collected into a pending list during the callback and
+resolved right after that tick's physics stepping finishes, before the
+snapshot broadcast.
+
+**Health & death:** ships have a fixed max health (`ShipStats.XWING`,
+currently 100) and take a fixed 10 damage per hit — both placeholder
+numbers, not derived from any balancing pass, tune by feel later same as
+thrust/torque. At zero health: the ship is removed from the simulation,
+`ShipDestroyedMessage` is broadcast (so every client stops
+rendering/controlling it immediately), and after a fixed 3-second
+respawn delay the server spawns a fresh, full-health ship for that player
+and sends them a `ShipSpawnedMessage` (the same message used for the
+initial join — a respawn is handled identically client-side: (re)create
+the local prediction body at the given position). **No kill credit/XP
+yet** — that system doesn't exist (design.md 3.6/accounts aren't built),
+so a kill currently has no recorded consequence beyond the target
+respawning.
+
+**Known simplification worth flagging:** both the initial spawn and every
+respawn currently use the same single fixed point (0,0) — meaning two
+players can spawn/respawn exactly overlapping each other, which now
+matters more than it used to since a ship sitting there can be shot
+immediately. Not fixed now — proper spawn point handling (multiple
+points, spawn invulnerability, etc.) belongs to the still-open "map/arena
+design" question (§7), not this milestone.
+
+**Bug found and fixed (2026-09-05): self-collision at spawn was
+redirecting shots.** Reported symptom: while continuously turning and
+firing, shots tracked the ship's true facing correctly for the first
+180°, then appeared to fly in the *opposite* rotational sense past that,
+meeting up again after a full 360°. Root cause: a projectile spawned at
+its shooter's exact position (the ship's center) — perfectly overlapping
+that ship's own collision circle. The self-hit check only skipped
+*damage* for that pair, not the *physical* collision — Box2D still tried
+to resolve the overlap, and with zero separation between two exactly
+coincident circles, the push-apart direction is undefined and Box2D
+falls back to a fixed axis unrelated to the ship's actual facing,
+silently redirecting the freshly-spawned projectile's velocity. Fixed
+two ways: a `ContactFilter` on the world now stops a projectile from
+ever colliding with its own shooter at all (the actual fix — no
+overlap-resolution collision means nothing to redirect it), and
+`WeaponSystem` now also spawns projectiles just ahead of the ship's hull
+rather than at its exact center (belt-and-suspenders, and just more
+correct — a shot should originate from the nose, not the center of
+mass).
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -162,17 +249,19 @@ Current repo layout (see root `pom.xml`):
   `NetworkServer`, `NetworkClient` — see 3.4/3.5) used by **both** client
   and server, plus `de.mkoehler.starwars.sim` (Ashley/Box2D ship
   simulation — components, systems, `ShipFactory`, `ShipStats`).
-  **Updated (2026-09-05): `sim` is effectively server-only now** — since
-  the server is the sole simulator of ship physics (3.5), only
-  `GameNetworkServer` (in `server`) actually uses it; the client no
-  longer runs Box2D/Ashley for ships at all, it just renders network
-  snapshots. Kept in `core` anyway (not moved into `server`) since it has
-  no libGDX-backend-specific dependency and a future client-side
-  prediction milestone will very likely need the client to run this same
-  simulation code locally again.
-- `lwjgl3` — desktop client (rendering, input, audio, UI). No longer
-  depends on Box2D/Ashley for gameplay as of 2026-09-05 (see above) —
-  still depends on `gdx-box2d-platform` transitively via `core`, harmless
+  **Updated (2026-09-05): `sim` is mostly server-only, with one
+  exception.** `GameNetworkServer` (in `server`) is the only place using
+  the full Ashley `Engine` — ships, weapons, and projectiles are all
+  simulated there, server-side only. The client uses exactly one small
+  slice of `sim` directly, with no Ashley involved at all: `ShipFactory.createBody`
+  + `PhysicsSystem` + `ShipControlSystem.applyInput`, for its own
+  client-side-predicted ship body (3.5) — proving out the "client will
+  likely need this again" note this bullet used to carry before
+  prediction existed.
+- `lwjgl3` — desktop client (rendering, input, audio, UI). Uses Box2D
+  directly now too (see above, for prediction) — no longer avoiding it
+  entirely the way it briefly did between the plain-sync and
+  client-prediction milestones.
   to leave in place.
 - `server` — dedicated server module, built on `gdx-backend-headless`
   (`com.badlogicgames.gdx:gdx-backend-headless`). Runs the standard
@@ -351,13 +440,29 @@ proving both channels work end-to-end.
   visibly misbehaves** once tested over real (non-loopback) internet
   latency between the UK/Belgium/Norway players, rather than only LAN/
   localhost.
-- **Other players' ships — unchanged, simplified:** still pure snapshot
-  interpolation, eased toward the latest received target every frame
-  (the same "lerp toward a target" technique already used for
-  camera-follow), not a proper timestamped interpolation-with-delay
-  buffer, and never predicted — predicting another player's ship would
-  require knowing their future input. Good enough at LAN/loopback
-  latency; revisit if it looks bad at real internet latency.
+- **Other players' ships and all projectiles — dead-reckoned, not eased
+  (changed 2026-09-05).** Originally eased toward the latest received
+  snapshot every frame (the same technique used for camera-follow) — but
+  that lags behind anything moving at real speed, by an amount
+  proportional to speed: at the ease rate originally used, a 50m/s
+  projectile would trail its true position by roughly **5 meters** at
+  steady state — more than double a ship's 2m radius. Found via
+  play-testing: reported as "the enemy's hitbox looks ~4× its visual
+  area, shots vanish well before reaching it" — actually a rendering lag
+  on both the target ship and the projectile, not a hitbox size problem
+  at all (the true, server-authoritative hit was registering correctly;
+  the client just hadn't visually caught up to either object's true
+  position yet by the time it did). **Fixed by dead reckoning instead:**
+  `WorldSnapshotMessage` already carries each ship's velocity (added for
+  reconciliation); other ships now extrapolate `lastKnownPosition +
+  velocity × timeSinceLastSnapshot` every frame instead of easing toward
+  a stale target. Projectiles fly in a fixed direction at a fixed known
+  speed for their whole flight (no thrust, no prediction), so their
+  velocity doesn't need to be sent at all — it's derived client-side from
+  the angle already in `ProjectileState` plus `WeaponStats.BLASTER`'s
+  known speed. Neither is predicted in the client-side-prediction sense
+  (2.4) — this is pure extrapolation from the last known true state, not
+  locally simulating physics ahead of the server.
 - **Critical bug found and fixed (2026-09-05): input force was being
   halved by the fixed-timestep loop, not a tuning problem.** The
   server ticks at `NetworkConstants.SIMULATION_TICK_RATE_HZ` = 30Hz,
@@ -755,6 +860,13 @@ dev workflow.
   bank-angle frames (above) are added to the same atlas later, since
   they'd automatically become one indexed animation rather than needing
   manual region bookkeeping.
+- **Second atlas added (2026-09-05): `projectiles.atlas`**, packed from
+  `assets-raw/projectiles/` (`red_dot.png`/`blue_dot.png`, 7×7 each,
+  provided by the user — see 2.4). Kept as its own atlas/category rather
+  than folded into `ships.atlas`, matching the one-atlas-per-content-
+  category convention; `AtlasPacker.main()` just has a second `pack(...)`
+  call now. Region names have no frame index (no numeric filename
+  suffix), so they're looked up with plain `atlas.findRegion("red_dot")`.
 
 ### 4.4 UI framework
 
@@ -948,8 +1060,12 @@ once a component is actually being worked on.
       timestamps per player, gates ESC-triggered leave on the 20s rule,
       triggers the self-destruct/explode VFX + blocked-ESC warning
       message/sound on leave attempts.
-- [ ] **Weapons & projectiles** — at least one weapon type to start
-      (blaster/laser cannon), hit detection, damage, death.
+- [x] **Weapons & projectiles (first pass, 2026-09-05)** — see 2.4 for
+      the full writeup: one weapon (blaster), server-simulated
+      projectiles (never predicted), Box2D-contact hit detection,
+      health/death/respawn. No kill credit/XP, no capacitor mechanic
+      (2.2) yet, no ship roster/balance pass — a working first cut, not
+      a finished combat system.
 - [ ] **Ship roster (data-driven)** — stats (mass, thrust, turn rate, hit
       points, weapon loadout) per ship, starting with a small roster (2–3
       ships) before expanding.

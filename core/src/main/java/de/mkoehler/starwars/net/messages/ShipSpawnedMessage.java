@@ -1,10 +1,14 @@
 package de.mkoehler.starwars.net.messages;
 
 /**
- * Sent by the server to a client right after its handshake is accepted,
- * assigning it a player id and telling it where its ship spawned.
+ * Sent by the server to a client whenever its ship (re)spawns — right after
+ * handshake acceptance for the initial spawn, and again after a respawn
+ * delay following a {@link ShipDestroyedMessage} for that same player. Both
+ * cases are handled identically by the receiving client: assign/reassign the
+ * player id (only actually changes on initial spawn) and (re)create the ship
+ * at the given position.
  */
-public class PlayerJoinedMessage {
+public class ShipSpawnedMessage {
 
     private int playerId;
     private float spawnX;
@@ -13,26 +17,26 @@ public class PlayerJoinedMessage {
     /**
      * No-arg constructor required by Kryo for deserialization.
      */
-    public PlayerJoinedMessage() {
+    public ShipSpawnedMessage() {
     }
 
     /**
-     * Creates a player-joined message.
+     * Creates a ship-spawned message.
      *
-     * @param playerId the id assigned to the receiving client's player/ship
+     * @param playerId the id of the player this ship belongs to
      * @param spawnX   the ship's spawn position, in meters
      * @param spawnY   the ship's spawn position, in meters
      */
-    public PlayerJoinedMessage(int playerId, float spawnX, float spawnY) {
+    public ShipSpawnedMessage(int playerId, float spawnX, float spawnY) {
         this.playerId = playerId;
         this.spawnX = spawnX;
         this.spawnY = spawnY;
     }
 
     /**
-     * Returns the id assigned to the receiving client's player/ship.
+     * Returns the id of the player this ship belongs to.
      *
-     * @return the assigned player id
+     * @return the owning player's id
      */
     public int getPlayerId() {
         return playerId;

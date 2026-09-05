@@ -16,18 +16,21 @@ public final class ShipStats {
      * frame at {@link PhysicsConstants#PIXELS_PER_METER}. Thrust/torque
      * tuned by feel (2026-09-05) for an agile handling suited to the
      * larger 1920x1080 view (design.md 4.1) — not derived from any
-     * in-universe reference, just what played well.
+     * in-universe reference, just what played well. Max health is a
+     * placeholder pending real weapon-vs-armor balancing.
      */
-    public static final ShipStats XWING = new ShipStats(2f, 200f, 150f);
+    public static final ShipStats XWING = new ShipStats(2f, 200f, 150f, 100f);
 
     private final float radiusMeters;
     private final float thrustForce;
     private final float turnTorque;
+    private final float maxHealth;
 
-    private ShipStats(float radiusMeters, float thrustForce, float turnTorque) {
+    private ShipStats(float radiusMeters, float thrustForce, float turnTorque, float maxHealth) {
         this.radiusMeters = radiusMeters;
         this.thrustForce = thrustForce;
         this.turnTorque = turnTorque;
+        this.maxHealth = maxHealth;
     }
 
     /**
@@ -55,5 +58,14 @@ public final class ShipStats {
      */
     public float getTurnTorque() {
         return turnTorque;
+    }
+
+    /**
+     * Returns the ship's maximum health.
+     *
+     * @return the maximum health
+     */
+    public float getMaxHealth() {
+        return maxHealth;
     }
 }

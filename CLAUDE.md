@@ -275,6 +275,108 @@ by-feel values, not derived from a formula — don't "fix" them toward a
 calculated number if they come up again; ask the user before changing
 them further.
 
+**Weapons & combat (first pass) — implemented 2026-09-05.** See design.md
+2.4 for the full writeup. Summary of what's new:
+
+- **New sim classes** (`core.sim`): `WeaponStats` (one constant,
+  `BLASTER`), `CollisionCategories` (Box2D filter bits so projectiles
+  don't collide with each other), `ProjectileFactory`; components
+  `HealthComponent`, `WeaponComponent`, `ProjectileComponent`; systems
+  `WeaponSystem`, `ProjectileLifetimeSystem`. `ShipFactory`/`ShipStats`
+  gained health + a fixture collision filter.
+- **New messages** (`core.net.messages`): `ProjectileState` +
+  `WorldSnapshotMessage` extended to carry them, `ShipDestroyedMessage`.
+  `PlayerInputMessage` gained a `firing` boolean.
+  **`PlayerJoinedMessage` was renamed to `ShipSpawnedMessage`** — it's
+  now sent both on initial join and on respawn after death, so the old
+  name stopped being accurate; same payload/handling either way.
+- **Server (`GameNetworkServer`)** runs a real `ContactListener` for
+  projectile-vs-ship hit detection. Important Box2D API rule followed
+  here: **you cannot create/destroy bodies from inside a contact
+  callback** — hits are collected into a pending list during the
+  callback and only resolved (damage applied, projectile/ship bodies
+  destroyed) right after `physicsSystem.update(...)` returns for that
+  tick, same general "don't act mid-callback, defer and drain" shape as
+  the existing cross-thread queue pattern, but for a different reason
+  (a Box2D API constraint, not a threading one — this callback actually
+  fires on the same thread as `tick()`, since Box2D contacts happen
+  synchronously during `world.step()`).
+- **Respawn:** on death, `ShipDestroyedMessage` broadcasts immediately,
+  then a 3-second timer (`RESPAWN_DELAY_SECONDS`, per-player, tracked in
+  `respawnTimers`) respawns the ship and sends that one player a fresh
+  `ShipSpawnedMessage` directly on their own `Connection` — which
+  required adding `connectionsByPlayerId` (populated via the same
+  queued-action pattern as everything else network-callback-originated,
+  for consistency, even though sending itself is thread-safe from any
+  thread — only mutating simulation state isn't).
+- **Client** sends `firing` alongside movement input, and renders
+  projectiles the same way it renders other players' ships — snapshot-
+  interpolated, no prediction, not even for the local player's own
+  shots (deliberate simplification, see design.md 2.4). Own shots tint
+  red, others' blue, via two small provided sprites packed into a new
+  `projectiles.atlas` (see "Texture atlas pipeline" below).
+- **No HUD, no health display, no kill credit/XP, no capacitor mechanic
+  (2.2), no ship roster/balance** — this is a working first combat pass,
+  not a finished system. Also: both spawn and respawn still use the same
+  fixed (0,0) point (existing simplification from the movement
+  milestone) — now more consequential since two overlapping ships means
+  an easy point-blank hit; deliberately not fixed here, it belongs to
+  the still-open "map/arena design" question.
+- **Verified:** ran a real server + two real client processes for an
+  extended (15s) session with the new systems (weapon, projectile
+  lifetime, contact listener) active every tick — zero exceptions. Could
+  **not** verify actual hit registration/damage/respawn behavior this
+  way (no way to simulate real key presses from here) — that needs the
+  user actually playing and firing at another ship.
+
+**Real bug found via play-testing, fixed same day: spawning an entity
+inside another entity's collider is dangerous in Box2D.** Projectiles
+spawned at their shooter's exact position (perfectly overlapping that
+ship's own collision circle). The self-hit check only skipped *damage*
+for that pair, not the underlying *physical* collision — Box2D still
+tried to resolve the overlap, and with two exactly coincident circles
+the separation direction is undefined, so it fell back to some fixed
+axis unrelated to the ship's actual facing — silently redirecting the
+projectile's velocity. Symptom was specific and had thrown me off at
+first purely from code review: shots tracked the ship correctly for the
+first 180° of a continuous turn, then flew the *opposite* rotational
+way past that, meeting up again after a full 360° — looked exactly like
+an angle-wraparound bug, but wasn't; `rotateRad`/`lerpAngle` are already
+correctly periodic/wraparound-safe everywhere they're used here, and
+tracing through the math confirmed the spawn-direction calculation
+itself was correct. The actual cause only became clear from thinking
+about what Box2D physically does with two coincident circles, not from
+the angle math. **General rule for later:** don't just skip *damage* for
+a same-owner projectile/ship pair, prevent the *collision itself* via a
+`ContactFilter` — and prefer spawning a new body just outside another
+body's collider rather than exactly inside/on top of it, for any future
+spawn-one-entity-near-another scenario (pickups, mines, etc.).
+
+**Second real bug from the same play-test session, also fixed
+2026-09-05: rendering lag, misreported as "the hitbox looks 4x too
+big."** Other players' ships and every projectile were rendered by
+*easing* toward the latest snapshot (same technique as camera-follow) —
+but an exponential ease lags a moving target by an amount proportional
+to its speed. At the rate this used, a 50m/s projectile lagged behind
+its true position by roughly **5 meters at steady state** — over double
+a ship's 2m radius. So a shot would already have registered its hit
+server-side and vanished from the next snapshot while the client's
+rendering was still catching up to where it truly was, making it look
+like it disappeared "early" / like the target's hitbox extended well
+past its visible sprite. Not a hitbox problem at all. **Fixed by
+switching to dead reckoning:** extrapolate `lastKnownPosition +
+velocity × timeSinceLastSnapshot` every frame instead of easing toward
+a stale target — `ShipState` already carries velocity (added earlier
+for reconciliation), and a projectile's velocity doesn't need to be sent
+at all since it's fully determined by its (already-sent) angle and the
+weapon's known constant speed. **General rule for later:** don't use an
+"ease toward target" follower for anything that needs to track a
+*fast-moving* networked entity precisely (hit-relevant rendering
+especially) — its lag is proportional to speed and can get large very
+quickly; dead reckoning (extrapolate using reported/known velocity) is
+the correct tool once speed matters, easing is fine for slow/cosmetic
+follows (camera-follow, still eased, is deliberately not hit-relevant).
+
 Read `design.md` in full before continuing further implementation — this
 project moves in explicit milestones the user signs off on one at a time,
 not open-ended feature sprints.
@@ -335,6 +437,11 @@ cd lwjgl3 && java -cp "target/classes;target/test-classes;$(cat target/test-cp.t
 (See the surefire/exec-maven-plugin gotcha below for why this doesn't
 just run via `exec:java`.) Add a new `pack(...)` call in `AtlasPacker.main()`
 for each new raw asset folder.
+
+**Second atlas added (2026-09-05):** `projectiles.atlas`, from
+`assets-raw/projectiles/` (`red_dot.png`/`blue_dot.png` — see design.md
+2.4). `AtlasPacker.main()` now has two `pack(...)` calls; both run every
+time it's invoked, so the one command above regenerates everything.
 
 ## Build system
 

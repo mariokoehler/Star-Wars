@@ -6,8 +6,10 @@ import com.esotericsoftware.kryo.io.Output;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
-import de.mkoehler.starwars.net.messages.PlayerJoinedMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
+import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
@@ -40,9 +42,11 @@ class MessageRegistryTest {
             HandshakeRequest.class, HandshakeResponse.class,
             TcpPingMessage.class, TcpPongMessage.class,
             UdpPingMessage.class, UdpPongMessage.class,
-            PlayerJoinedMessage.class, PlayerInputMessage.class,
+            ShipSpawnedMessage.class, PlayerInputMessage.class,
             ShipState.class, ShipState[].class,
-            WorldSnapshotMessage.class, PlayerLeftMessage.class
+            WorldSnapshotMessage.class, PlayerLeftMessage.class,
+            ProjectileState.class, ProjectileState[].class,
+            ShipDestroyedMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -87,9 +91,9 @@ class MessageRegistryTest {
     }
 
     @Test
-    void playerJoinedMessageSurvivesRoundTrip() {
-        PlayerJoinedMessage original = new PlayerJoinedMessage(7, 1.5f, -2.5f);
-        PlayerJoinedMessage copy = roundTrip(original, PlayerJoinedMessage.class);
+    void shipSpawnedMessageSurvivesRoundTrip() {
+        ShipSpawnedMessage original = new ShipSpawnedMessage(7, 1.5f, -2.5f);
+        ShipSpawnedMessage copy = roundTrip(original, ShipSpawnedMessage.class);
         assertEquals(7, copy.getPlayerId());
         assertEquals(1.5f, copy.getSpawnX());
         assertEquals(-2.5f, copy.getSpawnY());
@@ -97,20 +101,25 @@ class MessageRegistryTest {
 
     @Test
     void playerInputMessageSurvivesRoundTrip() {
-        PlayerInputMessage original = new PlayerInputMessage(true, false, true, false);
+        PlayerInputMessage original = new PlayerInputMessage(true, false, true, false, true);
         PlayerInputMessage copy = roundTrip(original, PlayerInputMessage.class);
         assertTrue(copy.isThrustForward());
         assertEquals(false, copy.isThrustReverse());
         assertTrue(copy.isTurnLeft());
         assertEquals(false, copy.isTurnRight());
+        assertTrue(copy.isFiring());
     }
 
     @Test
     void worldSnapshotMessageSurvivesRoundTrip() {
-        WorldSnapshotMessage original = new WorldSnapshotMessage(new ShipState[]{
-            new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f),
-            new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f)
-        });
+        WorldSnapshotMessage original = new WorldSnapshotMessage(
+            new ShipState[]{
+                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f),
+                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f)
+            },
+            new ProjectileState[]{
+                new ProjectileState(100, 1, 11f, 20f, 0.5f)
+            });
         WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
         assertEquals(2, copy.getShips().length);
         assertEquals(1, copy.getShips()[0].getPlayerId());
@@ -118,6 +127,10 @@ class MessageRegistryTest {
         assertEquals(2f, copy.getShips()[0].getVelocityY());
         assertEquals(-1.2f, copy.getShips()[1].getAngle());
         assertEquals(-0.3f, copy.getShips()[1].getAngularVelocity());
+        assertEquals(1, copy.getProjectiles().length);
+        assertEquals(100, copy.getProjectiles()[0].getProjectileId());
+        assertEquals(1, copy.getProjectiles()[0].getOwnerPlayerId());
+        assertEquals(11f, copy.getProjectiles()[0].getX());
     }
 
     @Test
@@ -125,6 +138,13 @@ class MessageRegistryTest {
         PlayerLeftMessage original = new PlayerLeftMessage(3);
         PlayerLeftMessage copy = roundTrip(original, PlayerLeftMessage.class);
         assertEquals(3, copy.getPlayerId());
+    }
+
+    @Test
+    void shipDestroyedMessageSurvivesRoundTrip() {
+        ShipDestroyedMessage original = new ShipDestroyedMessage(9);
+        ShipDestroyedMessage copy = roundTrip(original, ShipDestroyedMessage.class);
+        assertEquals(9, copy.getPlayerId());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

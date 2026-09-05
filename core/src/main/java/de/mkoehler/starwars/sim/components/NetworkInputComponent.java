@@ -6,8 +6,9 @@ import com.badlogic.ashley.core.Component;
  * Holds the most recently received input state for a server-side ship,
  * updated whenever a {@code PlayerInputMessage} arrives from that player's
  * client. Mutable and updated in place (rather than replaced) so
- * {@link de.mkoehler.starwars.sim.systems.ShipControlSystem} always reads
- * whatever the latest known state is.
+ * {@link de.mkoehler.starwars.sim.systems.ShipControlSystem} and
+ * {@link de.mkoehler.starwars.sim.systems.WeaponSystem} always read whatever
+ * the latest known state is.
  */
 public class NetworkInputComponent implements Component {
 
@@ -15,6 +16,7 @@ public class NetworkInputComponent implements Component {
     private boolean thrustReverse;
     private boolean turnLeft;
     private boolean turnRight;
+    private boolean firing;
 
     /**
      * Replaces the currently held input state.
@@ -23,12 +25,14 @@ public class NetworkInputComponent implements Component {
      * @param thrustReverse whether the reverse-thrust input is held
      * @param turnLeft      whether the turn-left input is held
      * @param turnRight     whether the turn-right input is held
+     * @param firing        whether the fire-weapon input is held
      */
-    public void set(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight) {
+    public void set(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, boolean firing) {
         this.thrustForward = thrustForward;
         this.thrustReverse = thrustReverse;
         this.turnLeft = turnLeft;
         this.turnRight = turnRight;
+        this.firing = firing;
     }
 
     /**
@@ -65,5 +69,14 @@ public class NetworkInputComponent implements Component {
      */
     public boolean isTurnRight() {
         return turnRight;
+    }
+
+    /**
+     * Returns whether the fire-weapon input is currently held.
+     *
+     * @return {@code true} if the fire input is held
+     */
+    public boolean isFiring() {
+        return firing;
     }
 }
