@@ -5,10 +5,15 @@ import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.PlayerInputMessage;
+import de.mkoehler.starwars.net.messages.PlayerJoinedMessage;
+import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
+import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -34,7 +39,10 @@ class MessageRegistryTest {
         Class<?>[] messageClasses = {
             HandshakeRequest.class, HandshakeResponse.class,
             TcpPingMessage.class, TcpPongMessage.class,
-            UdpPingMessage.class, UdpPongMessage.class
+            UdpPingMessage.class, UdpPongMessage.class,
+            PlayerJoinedMessage.class, PlayerInputMessage.class,
+            ShipState.class, ShipState[].class,
+            WorldSnapshotMessage.class, PlayerLeftMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -76,6 +84,45 @@ class MessageRegistryTest {
 
         UdpPongMessage pong = roundTrip(new UdpPongMessage(7L), UdpPongMessage.class);
         assertEquals(7L, pong.getTimestamp());
+    }
+
+    @Test
+    void playerJoinedMessageSurvivesRoundTrip() {
+        PlayerJoinedMessage original = new PlayerJoinedMessage(7, 1.5f, -2.5f);
+        PlayerJoinedMessage copy = roundTrip(original, PlayerJoinedMessage.class);
+        assertEquals(7, copy.getPlayerId());
+        assertEquals(1.5f, copy.getSpawnX());
+        assertEquals(-2.5f, copy.getSpawnY());
+    }
+
+    @Test
+    void playerInputMessageSurvivesRoundTrip() {
+        PlayerInputMessage original = new PlayerInputMessage(true, false, true, false);
+        PlayerInputMessage copy = roundTrip(original, PlayerInputMessage.class);
+        assertTrue(copy.isThrustForward());
+        assertEquals(false, copy.isThrustReverse());
+        assertTrue(copy.isTurnLeft());
+        assertEquals(false, copy.isTurnRight());
+    }
+
+    @Test
+    void worldSnapshotMessageSurvivesRoundTrip() {
+        WorldSnapshotMessage original = new WorldSnapshotMessage(new ShipState[]{
+            new ShipState(1, 10f, 20f, 0.5f),
+            new ShipState(2, -5f, 3f, -1.2f)
+        });
+        WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
+        assertEquals(2, copy.getShips().length);
+        assertEquals(1, copy.getShips()[0].getPlayerId());
+        assertEquals(10f, copy.getShips()[0].getX());
+        assertEquals(-1.2f, copy.getShips()[1].getAngle());
+    }
+
+    @Test
+    void playerLeftMessageSurvivesRoundTrip() {
+        PlayerLeftMessage original = new PlayerLeftMessage(3);
+        PlayerLeftMessage copy = roundTrip(original, PlayerLeftMessage.class);
+        assertEquals(3, copy.getPlayerId());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

@@ -3,26 +3,25 @@ package de.mkoehler.starwars.server;
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
 import de.mkoehler.starwars.net.NetworkConstants;
-import de.mkoehler.starwars.net.NetworkServer;
 
 import java.io.IOException;
 
 /**
  * Headless libGDX application hosting the dedicated server. Starts the
- * {@link NetworkServer} in {@link #create()} and stops it in {@link #dispose()};
- * {@link #render()} drives the fixed-rate loop the authoritative simulation
- * will eventually run on (see design.md 3.5).
+ * {@link GameNetworkServer} in {@link #create()} and stops it in
+ * {@link #dispose()}; {@link #render()} drives its fixed-rate simulation tick
+ * (see design.md 3.5) at whatever rate the headless application is
+ * configured for ({@link NetworkConstants#SIMULATION_TICK_RATE_HZ}).
  */
 public class GameServer extends ApplicationAdapter {
 
     private static final String TAG = "GameServer";
 
-    private NetworkServer networkServer;
-    private long frameCount;
+    private GameNetworkServer networkServer;
 
     @Override
     public void create() {
-        networkServer = new NetworkServer();
+        networkServer = new GameNetworkServer();
         try {
             networkServer.start(NetworkConstants.TCP_PORT, NetworkConstants.UDP_PORT);
         } catch (IOException e) {
@@ -35,10 +34,7 @@ public class GameServer extends ApplicationAdapter {
 
     @Override
     public void render() {
-        frameCount++;
-        if (frameCount % NetworkConstants.SIMULATION_TICK_RATE_HZ == 0) {
-            Gdx.app.log(TAG, "Tick " + frameCount + " (" + (frameCount / NetworkConstants.SIMULATION_TICK_RATE_HZ) + "s uptime)");
-        }
+        networkServer.tick(Gdx.graphics.getDeltaTime());
     }
 
     @Override

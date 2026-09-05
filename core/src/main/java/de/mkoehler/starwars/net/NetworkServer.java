@@ -69,6 +69,26 @@ public class NetworkServer {
     }
 
     /**
+     * Sends a message to every currently connected client over the reliable
+     * (TCP) channel.
+     *
+     * @param object the message to send
+     */
+    protected void sendToAllTCP(Object object) {
+        server.sendToAllTCP(object);
+    }
+
+    /**
+     * Sends a message to every currently connected client over the
+     * unreliable (UDP) channel.
+     *
+     * @param object the message to send
+     */
+    protected void sendToAllUDP(Object object) {
+        server.sendToAllUDP(object);
+    }
+
+    /**
      * Called whenever a new client connection is established, before any
      * handshake has taken place. The default implementation does nothing;
      * subclasses may override it to add behavior.

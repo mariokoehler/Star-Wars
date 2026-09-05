@@ -158,23 +158,36 @@ last-fired/last-hit timestamps itself, not the client.
 
 Current repo layout (see root `pom.xml`):
 
-- `core` — shared code: entities, components, physics/flight math, game
-  rules, **and the network layer** (message classes, `NetworkServer`,
-  `NetworkClient` — see 3.4/3.5). Used by **both** client and server so
-  simulation and netcode logic are never duplicated or allowed to drift
-  between them.
-- `lwjgl3` — desktop client (rendering, input, audio, UI).
+- `core` — shared code: the network layer (message classes,
+  `NetworkServer`, `NetworkClient` — see 3.4/3.5) used by **both** client
+  and server, plus `de.mkoehler.starwars.sim` (Ashley/Box2D ship
+  simulation — components, systems, `ShipFactory`, `ShipStats`).
+  **Updated (2026-09-05): `sim` is effectively server-only now** — since
+  the server is the sole simulator of ship physics (3.5), only
+  `GameNetworkServer` (in `server`) actually uses it; the client no
+  longer runs Box2D/Ashley for ships at all, it just renders network
+  snapshots. Kept in `core` anyway (not moved into `server`) since it has
+  no libGDX-backend-specific dependency and a future client-side
+  prediction milestone will very likely need the client to run this same
+  simulation code locally again.
+- `lwjgl3` — desktop client (rendering, input, audio, UI). No longer
+  depends on Box2D/Ashley for gameplay as of 2026-09-05 (see above) —
+  still depends on `gdx-box2d-platform` transitively via `core`, harmless
+  to leave in place.
 - `server` — dedicated server module, built on `gdx-backend-headless`
   (`com.badlogicgames.gdx:gdx-backend-headless`). Runs the standard
   libGDX application lifecycle (`create()`/`render()`/`dispose()`,
   `Gdx.app`, `Gdx.files`, `Gdx.net`) with no window/graphics/audio, while
   depending on `core` directly. **Implemented (2026-09-05):** `GameServer`
-  starts/stops the network layer and its `render()` drives the
-  placeholder simulation-tick cadence (3.5); `ServerLauncher` is the
-  process entry point. Also needs libGDX's native library even though
-  it's headless (`gdx-platform` classifier `natives-desktop`) — some
-  core libGDX utilities (e.g. `Gdx.files`) are backed by native code
-  regardless of backend, this isn't LWJGL/windowing-specific.
+  is a thin wrapper starting/stopping `GameNetworkServer` and calling its
+  `tick()` every `render()`; `ServerLauncher` is the process entry point.
+  Needs **two** native libraries despite being headless: `gdx-platform`
+  classifier `natives-desktop` (some core libGDX utilities, e.g.
+  `Gdx.files`, are backed by native code regardless of backend) **and**,
+  since 2026-09-05, `gdx-box2d-platform` classifier `natives-desktop` too
+  (the server now runs Box2D directly via `GameNetworkServer`) — both
+  only surfaced by actually running the packaged jar, not by `mvn
+  package` succeeding or tests passing.
 
 **Decided (was tentative): no separate `network` module.** Shared wire
 message/DTO classes live directly in `core`, under `de.mkoehler.starwars.net`
@@ -199,6 +212,21 @@ The Liftoff-generated `core` module already pulls in:
 
 Both of these are treated as **decided**, not open questions — they're already
 project dependencies and fit the requirements well.
+
+**Updated (2026-09-05):** with ship physics now server-only, the
+client-facing rendering classes from the single-player prototype
+(`RenderSystem`, `SpriteComponent`) were deleted rather than kept unused
+— the client draws ships directly from network snapshot data now, not
+via Ashley. `PlayerInputSystem` was renamed to `ShipControlSystem` and
+changed to read a `NetworkInputComponent` (updated from received
+`PlayerInputMessage`s) instead of calling `Gdx.input` directly — this
+also happens to make it fully headless-safe (no libGDX-input/graphics
+dependency at all), which is exactly why it now runs server-side. A new
+`ShipStats` class holds per-ship-type tuning (radius, thrust, torque) as
+a small first step toward the "Ship roster (data-driven)" TODO (6) —
+both the server (building the Box2D body) and the client (sizing the
+drawn sprite consistently with it) reference the same constant, rather
+than duplicating the numbers.
 
 **Box2D units — important implementation note:** Box2D is tuned to work
 well for objects roughly in the 0.1–10 meter range and its stability
@@ -236,6 +264,15 @@ blend factor) that 3.5's "other clients' ships: interpolated/extrapolated
 between received snapshots" will need over the network later — good to
 have already exercised it locally.
 
+**Superseded, kept for reference (2026-09-05, same day):** once ship
+physics moved server-only (3.5's "networked ship movement" milestone),
+this exact interpolation code was removed from `PhysicsSystem`/
+`PhysicsBodyComponent` — the client no longer steps Box2D locally at
+all, so there's nothing left to interpolate between on that side. Left
+this section intact rather than deleting it, since the same technique
+will likely return (applied to a locally-*predicted* position instead of
+a locally-*stepped* one) once client-side prediction is implemented.
+
 ### 3.4 Networking
 
 **Decision: [KryoNet fork](https://github.com/crykn/kryonet) —
@@ -267,7 +304,7 @@ KryoNet's `Server`/`Client` handling connection lifecycle, a handshake
 (`HandshakeRequest`/`HandshakeResponse`), and a TCP + UDP ping/pong pair
 proving both channels work end-to-end.
 
-### 3.5 Netcode approach (first milestone implemented 2026-09-05, full approach still planned)
+### 3.5 Netcode approach (movement now networked 2026-09-05; prediction still planned)
 
 - **Reliable channel (TCP):** login/account handshake, join/leave, ship
   selection, spawn/despawn, death/kill events, chat, match state changes.
@@ -278,18 +315,24 @@ proving both channels work end-to-end.
   intentionally hidden from other players, so it never needs to leave the
   owning client/server pair beyond what's needed for the server to apply
   its gameplay effects.
-- **Client-side prediction:** each client simulates its own ship locally on
-  input immediately, then reconciles against the authoritative server
-  snapshot for that ship (standard replay-unacknowledged-inputs pattern).
-- **Other clients' ships:** interpolated/extrapolated between received
-  snapshots to smooth over network jitter.
-- Tick rate, snapshot rate, and interpolation buffer sizing: **not yet
-  decided** — needs prototyping once basic movement is networked.
-  **Placeholder in place:** the dedicated server's headless application
-  loop (`ServerLauncher`/`GameServer`) runs at a fixed
-  `NetworkConstants.SIMULATION_TICK_RATE_HZ` = 30Hz via libGDX's
-  `HeadlessApplicationConfiguration.updatesPerSecond`, purely so there's a
-  cadence to build against — not a tuned decision.
+- **Client-side prediction — still not implemented, deliberately
+  deferred:** each client will eventually simulate its own ship locally on
+  input immediately, then reconcile against the authoritative server
+  snapshot for that ship. For now (2026-09-05 milestone, see below), the
+  client does **not** predict — even the local player's own ship is drawn
+  purely from server snapshots, meaning there's a visible network round
+  trip between pressing a key and seeing the ship react. Accepted
+  simplification for this milestone; implementing prediction is the next
+  one, once the plain server-authoritative path is proven (below).
+- **Other clients' ships — implemented, simplified:** eased toward the
+  latest received snapshot every frame (the same "lerp toward a target"
+  technique already used for camera-follow), not a proper timestamped
+  interpolation-with-delay buffer. Good enough at LAN/loopback latency;
+  revisit if it looks bad at real internet latency.
+- Tick rate, snapshot rate, and interpolation buffer sizing: **still not
+  tuned.** The server broadcasts one `WorldSnapshotMessage` every
+  simulation tick (30Hz placeholder, see below) — snapshot rate and sim
+  rate aren't decoupled yet.
 - At 8 players, we can likely broadcast full world state to everyone (no
   interest management / area-of-interest filtering needed at this scale).
 - **Server logging — decided:** plain `Gdx.app.log(...)`, available on the
@@ -300,10 +343,78 @@ proving both channels work end-to-end.
 lifecycle (connect/disconnect), a handshake round trip, and a ping/pong
 round trip over *both* the TCP and UDP channels, covered by
 `NetworkServerClientIntegrationTest` (real loopback sockets, not mocked)
-in `core`. Explicitly **not** in scope for this milestone: accounts/auth
-(3.6), any real gameplay state, and the actual tick/snapshot rate — those
-are follow-up milestones layered on this same `NetworkServer`/
-`NetworkClient` pair.
+in `core`.
+
+**Second implementation milestone (2026-09-05) — networked ship
+movement, done:** the server is now the sole simulator of ship physics.
+Architecture:
+
+- **Player identity:** the server uses KryoNet's own `Connection.getID()`
+  as the player id directly, rather than inventing a separate counter —
+  one less thing to keep in sync, and KryoNet already guarantees
+  uniqueness per connection.
+- **New messages** (`core.net.messages`): `PlayerJoinedMessage`
+  (server→client, sent right after handshake acceptance: assigned player
+  id + spawn position), `PlayerInputMessage` (client→server, sent every
+  frame over UDP: which of the 4 movement keys are currently held),
+  `ShipState` + `WorldSnapshotMessage` (server→client broadcast over UDP,
+  every tick: every currently-connected ship's position/angle),
+  `PlayerLeftMessage` (server→client broadcast over TCP, on disconnect,
+  so a departed ship disappears immediately rather than going stale).
+- **`GameNetworkServer`** (`server` module) owns the authoritative Box2D
+  `World`/Ashley `Engine`: on handshake, spawns a ship (fixed spawn point
+  for now — real spawn points are a map/arena design question, §7);
+  applies each player's latest received input to their ship every tick
+  via `ShipControlSystem` (see below); steps physics; broadcasts a
+  snapshot.
+- **Client is now a pure "send input, render snapshots" loop** — it no
+  longer runs Box2D/Ashley for ships at all (see 3.2/3.3's updated notes).
+  This is *why* the local fixed-timestep interpolation work from the
+  single-player prototype became temporarily unused: there's no more
+  local physics stepping to smooth over. The same interpolation
+  technique (blend between two known states via a factor) will very
+  likely reappear once client-side prediction needs to reconcile a
+  locally-predicted position against a server correction — the concept
+  wasn't wasted, just its current call site.
+- **Cross-thread correctness — decided and important:** KryoNet invokes
+  connection/message callbacks on its own network thread, never the
+  thread the simulation tick (or, client-side, rendering) runs on.
+  Mutating Box2D/Ashley state (or the client's ship-rendering map)
+  directly from inside a network callback would be a real, unpredictable
+  concurrency bug — Box2D in particular is not thread-safe for concurrent
+  modification. **Fix (applied on both ends):** network callbacks only
+  ever enqueue a `Runnable` onto a `ConcurrentLinkedQueue`; the actual
+  mutation happens later, drained at the start of the next tick/render
+  frame on the single thread that owns that state. See
+  `GameNetworkServer`'s and `Client`'s class Javadoc for exactly where
+  this applies. This is a general pattern to keep following for anything
+  else added to either side later, not a one-off fix.
+- **Visual distinction (placeholder, confirmed good enough for now by
+  the user):** since there's no ship selection/customization yet, the
+  client tints every ship that isn't its own a light blue
+  (`Client.OTHER_SHIP_TINT`) so two ships are at least tellable apart
+  during testing. **Future direction (not yet scheduled):** once display
+  names exist (3.6/3.7), show a player's display name as a floating
+  label over/under their ship instead of relying on a color tint —
+  works regardless of how many players share the same ship type, unlike
+  a fixed tint palette. Keep the tint for now; this is a HUD-adjacent
+  feature to pick up alongside that work, not blocking anything current.
+- **Verified (2026-09-05):** ran one real dedicated server process plus
+  two real client processes simultaneously on the same machine (exactly
+  the "single machine, two clients" testing setup the user needed) —
+  both connected, ran for several seconds exchanging input/snapshot
+  traffic continuously, and disconnected cleanly, with zero exceptions on
+  either side. This is real interprocess verification over real sockets,
+  not just the in-process JUnit integration test.
+- **Multi-instance testing — no special handling needed:** two client
+  processes connecting to one server on one machine work with no extra
+  configuration — the server already accepts multiple simultaneous
+  connections, and each client uses an OS-assigned ephemeral local port,
+  so there's no port collision between client instances. Recommended way
+  to test locally: `mvn clean package` once, then run
+  `java -jar lwjgl3/target/StarWars-<version>.jar` from two separate
+  terminals — cleaner than running two concurrent `mvn exec:exec`
+  processes.
 
 ### 3.6 Accounts & persistence (server-side)
 
@@ -720,8 +831,14 @@ once a component is actually being worked on.
 - [x] **Networking layer (first milestone)** — KryoNet fork wired into
       `core`, shared message classes, connect/disconnect handling, a
       handshake round trip, and a TCP+UDP ping/pong round trip, covered by
-      an integration test. Still open: real gameplay messages, tick/
-      snapshot rate (3.5), client-side prediction/reconciliation.
+      an integration test.
+- [x] **Networked ship movement (2026-09-05)** — server-authoritative:
+      `GameNetworkServer` spawns/simulates/despawns ships and broadcasts
+      `WorldSnapshotMessage`s; clients send `PlayerInputMessage`s and
+      render every ship (including their own) from received snapshots,
+      no local physics. Verified with a real server + two real client
+      processes on one machine. Still open: tick/snapshot rate tuning
+      (3.5), client-side prediction/reconciliation (next milestone).
 - [ ] **Account system (server)** — JSON-file-backed `PlayerAccount` store,
       auto-register-or-validate-on-connect flow, salted password hashing.
 - [ ] **Client local config** — load/save connection fields (3.7) and
@@ -730,26 +847,27 @@ once a component is actually being worked on.
       prefilled from local config, error display on failed auth.
 - [ ] **Keybind Setup screen** — press-to-bind capture, localized key-label
       display (see 3.8 implementation note), persists to local config.
-- [x] **Entity/component model (first pass)** — Ashley set up in `core`
-      under `de.mkoehler.starwars.sim`: `PhysicsBodyComponent`,
-      `SpriteComponent`, `PlayerControlledComponent`, plus
-      `PhysicsSystem`/`PlayerInputSystem`/`RenderSystem` and a
-      `ShipFactory`. Only covers one player-controlled ship so far —
-      projectiles/pickups aren't modeled yet.
+- [x] **Entity/component model (first pass, server-side)** — Ashley set
+      up in `core` under `de.mkoehler.starwars.sim`, used by
+      `GameNetworkServer`: `PhysicsBodyComponent`, `PlayerControlledComponent`,
+      `PlayerIdComponent`, `NetworkInputComponent`, plus
+      `PhysicsSystem`/`ShipControlSystem` and a server-oriented
+      `ShipFactory`. Only covers one player-controlled ship type so far —
+      projectiles/pickups aren't modeled yet. The client no longer uses
+      Ashley at all (2026-09-05) — it renders directly from network
+      snapshot data instead.
 - [x] **Newtonian flight model (first pass, 2026-09-05; tuning in
-      progress)** — single-player prototype: WASD thrust/rotate (5.3
-      defaults, not yet driven by remappable keybinds), Box2D
-      force/torque on a fixed-timestep world,
-      `PhysicsConstants.PIXELS_PER_METER` now a real code constant (still
-      the proposed 32px/m default from 3.3, unconfirmed/untuned). Thrust
+      progress)** — Box2D force/torque on a fixed-timestep world, driven
+      by input received over the network (`PlayerInputMessage` →
+      `NetworkInputComponent` → `ShipControlSystem`), not local
+      `Gdx.input` directly (that was true only for the earlier,
+      superseded single-player-only version of this prototype).
+      `PhysicsConstants.PIXELS_PER_METER` is a real code constant (still
+      the proposed 32px/m default from 3.3, unconfirmed/untuned); thrust
       force, turn torque, and linear/angular damping are all placeholder
-      numbers meant to be tuned by feel, not final values — turn torque
+      `ShipStats.XWING` numbers meant to be tuned by feel — turn torque
       already bumped 15→22.5 N·m (+50%) after the first play-test felt
-      too sluggish. Rendering interpolates between fixed-timestep physics
-      states (see 3.3's "Fixed-timestep rendering requires interpolation"
-      note) — fixes a real jitter bug found in play-testing, not just a
-      theoretical concern. No networking of ship state yet — this is
-      local-only.
+      too sluggish.
 - [ ] **Power distribution system** — server-authoritative allocation
       state per ship (not networked to other clients), feeding shield
       regen rate / weapon fire rate / engine thrust & agility; the

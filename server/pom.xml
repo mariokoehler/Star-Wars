@@ -37,6 +37,14 @@
       <classifier>natives-desktop</classifier>
     </dependency>
     <dependency>
+      <!-- The server now simulates ship physics directly (GameNetworkServer), so it needs
+           Box2D's native library too, same as the client. -->
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-box2d-platform</artifactId>
+      <version>${gdxVersion}</version>
+      <classifier>natives-desktop</classifier>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>

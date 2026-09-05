@@ -130,6 +130,78 @@ our pixel-space world convention. `viewport.update(w, h, false)` — the
 origin on every resize, which would otherwise fight the camera-follow
 logic.
 
+**Networked ship movement (second networking milestone) — implemented
+2026-09-05.** The user's actual request was "network the flight model,
+and I need to be able to test with two client instances on one
+machine" — answer to that second part: works with no special handling,
+the server already accepts multiple simultaneous connections and each
+client uses an OS-assigned ephemeral port, so there's no collision.
+Recommended local test flow: `mvn clean package` once, then
+`java -jar lwjgl3/target/StarWars-1.0.0.jar` from two separate terminals
+(not two concurrent `mvn exec:exec` processes).
+
+**Architecture shift:** the server is now the sole simulator of ship
+physics (design.md 3.5). `GameNetworkServer` (new, `server` module) owns
+the authoritative Box2D `World`/Ashley `Engine`, spawns a ship per
+connection (using KryoNet's own `Connection.getID()` as the player id —
+no separate id counter needed), applies received input, steps physics,
+and broadcasts a `WorldSnapshotMessage` every tick. `Client.java` was
+rewritten to no longer use Box2D/Ashley at all — it sends
+`PlayerInputMessage`s and renders every ship (its own included) purely
+from received snapshots, easing toward each one's latest position/angle
+the same way the camera already eased toward the ship. **No client-side
+prediction yet** — deliberately deferred, so there's a visible input lag
+right now; that's the next milestone. New message types:
+`PlayerJoinedMessage`, `PlayerInputMessage`, `ShipState`,
+`WorldSnapshotMessage`, `PlayerLeftMessage` (all in `core.net.messages`,
+registered in `MessageRegistry`, each with a round-trip test in
+`MessageRegistryTest`).
+
+**Real bug caught by actually running two clients + a server, not by
+tests passing:** the server crashed on startup
+(`SharedLibraryLoadRuntimeException: gdx-box2d64.dll`) because it now
+uses Box2D directly but only had `gdx-platform` natives, not
+`gdx-box2d-platform` — same class of gotcha as the earlier
+`gdx-platform`-natives miss, different library. Fixed by adding
+`gdx-box2d-platform` classifier `natives-desktop` to `server/pom.xml`.
+Verified the fix by actually running one server + two client processes
+concurrently on this machine and watching both connect/exchange
+traffic/disconnect cleanly with zero exceptions — not just `mvn package`
+succeeding.
+
+**Renamed/removed as part of this shift:** `PlayerInputSystem` →
+`ShipControlSystem` (now reads a `NetworkInputComponent` set from
+received input, not `Gdx.input` directly — also makes it headless-safe,
+which is exactly why it moved server-side). `RenderSystem` and
+`SpriteComponent` were deleted outright (client no longer uses Ashley
+for rendering ships at all, so they had no remaining caller) rather than
+left in place unused. New: `PlayerIdComponent`, `NetworkInputComponent`,
+`ShipStats` (a first small step toward the data-driven "Ship roster"
+TODO — one constant, `ShipStats.XWING`, shared by server body-building
+and client sprite-sizing so the numbers can't drift apart).
+
+**Cross-thread correctness pattern — important, applies to both ends:**
+KryoNet's connection/message callbacks run on its own network thread,
+never the render/tick thread. Both `GameNetworkServer` and `Client` now
+follow the same rule: a network callback only ever enqueues a `Runnable`
+onto a `ConcurrentLinkedQueue`; the actual state mutation (spawning a
+ship, updating input, adding/removing a rendered ship) happens later,
+drained at the very start of the next tick/render call, on the one
+thread that actually owns that state (Box2D/Ashley server-side, the
+`ships` map client-side). Follow this same pattern for anything else
+added to either network endpoint later — don't mutate shared state
+directly from inside an `onReceived`/`onConnected`/`onDisconnected`
+override.
+
+**Play-test confirmation (2026-09-05):** the user tried the real
+two-client setup and confirmed the expected input lag is "pretty
+noticeable" — as anticipated, since there's no client-side prediction
+yet. **Explicitly confirmed as the next milestone.** Also confirmed the
+placeholder color-tint for telling ships apart is good enough for now;
+see design.md 3.5's "Visual distinction" note for the future direction
+(a floating display-name label instead, once accounts/display names
+exist) — not scheduled yet, don't start on it without being asked.
+
 Read `design.md` in full before continuing further implementation — this
 project moves in explicit milestones the user signs off on one at a time,
 not open-ended feature sprints.
@@ -255,6 +327,17 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   already has. Only caught by actually running the built jar, not by
   `mvn package` succeeding or unit tests passing — worth remembering to
   smoke-test any new runnable module that way, not just compile/test it.
+- **Each native-backed libGDX module needs its own `*-platform`
+  `natives-desktop` dependency, independently** — `gdx-platform` (core
+  natives, above) does not cover `gdx-box2d` too. When the server started
+  using Box2D directly (`GameNetworkServer`), it crashed with the same
+  class of error but for `gdx-box2d64.dll` specifically, requiring
+  `gdx-box2d-platform` classifier `natives-desktop` added separately.
+  General rule going forward: any time the `server` module starts using
+  a new native-backed libGDX piece, check whether it needs its own
+  natives dependency too — don't assume `gdx-platform` alone covers
+  everything, and verify by actually running the packaged jar, not just
+  building it.
 - **A library only published on JitPack** (like the KryoNet fork) needs
   `<repositories><repository><url>https://jitpack.io</url>...` added to
   the parent POM — it won't resolve from Maven Central alone, and the

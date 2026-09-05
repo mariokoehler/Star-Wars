@@ -3,10 +3,15 @@ package de.mkoehler.starwars.net;
 import com.esotericsoftware.kryo.Kryo;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.PlayerInputMessage;
+import de.mkoehler.starwars.net.messages.PlayerJoinedMessage;
+import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
+import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 
 /**
  * Registers every class sent over the wire with a {@link Kryo} instance, in a
@@ -37,5 +42,13 @@ public final class MessageRegistry {
         kryo.register(TcpPongMessage.class);
         kryo.register(UdpPingMessage.class);
         kryo.register(UdpPongMessage.class);
+        // Appended below, in the order added - never reorder or insert above existing
+        // entries, that would change everyone's registration ids (see class Javadoc).
+        kryo.register(PlayerJoinedMessage.class);
+        kryo.register(PlayerInputMessage.class);
+        kryo.register(ShipState.class);
+        kryo.register(ShipState[].class);
+        kryo.register(WorldSnapshotMessage.class);
+        kryo.register(PlayerLeftMessage.class);
     }
 }

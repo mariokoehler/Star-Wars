@@ -4,52 +4,55 @@ import com.badlogic.ashley.core.ComponentMapper;
 import com.badlogic.ashley.core.Entity;
 import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.systems.IteratingSystem;
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.Input;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
+import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 
 /**
- * Reads keyboard input directly and applies thrust/turn forces to every
- * entity with both a {@link PhysicsBodyComponent} and a
- * {@link PlayerControlledComponent}.
+ * Applies thrust/turn forces to every entity with a {@link PhysicsBodyComponent},
+ * a {@link PlayerControlledComponent} and a {@link NetworkInputComponent},
+ * based on that entity's currently held input state.
  * <p>
- * Uses the v1 default control scheme from design.md 5.3 (W/S thrust,
- * A/D turn); not yet driven by the remappable keybinds config, which doesn't
- * exist yet (see design.md 3.8).
+ * Runs server-side only: the server is the sole simulator of ship physics
+ * (design.md 3.5), driven by input received over the network
+ * ({@code PlayerInputMessage}) rather than local {@code Gdx.input} — this
+ * class has no libGDX-input/graphics dependency, only Box2D/Ashley, so it
+ * works unchanged in the headless server process.
  */
-public class PlayerInputSystem extends IteratingSystem {
+public class ShipControlSystem extends IteratingSystem {
 
     private static final Vector2 FORWARD = new Vector2();
 
     private final ComponentMapper<PhysicsBodyComponent> bodyMapper = ComponentMapper.getFor(PhysicsBodyComponent.class);
     private final ComponentMapper<PlayerControlledComponent> controlMapper = ComponentMapper.getFor(PlayerControlledComponent.class);
+    private final ComponentMapper<NetworkInputComponent> inputMapper = ComponentMapper.getFor(NetworkInputComponent.class);
 
     /**
-     * Creates the input system.
+     * Creates the ship control system.
      */
-    public PlayerInputSystem() {
-        super(Family.all(PhysicsBodyComponent.class, PlayerControlledComponent.class).get());
+    public ShipControlSystem() {
+        super(Family.all(PhysicsBodyComponent.class, PlayerControlledComponent.class, NetworkInputComponent.class).get());
     }
 
     @Override
     protected void processEntity(Entity entity, float deltaTime) {
         Body body = bodyMapper.get(entity).getBody();
         PlayerControlledComponent control = controlMapper.get(entity);
+        NetworkInputComponent input = inputMapper.get(entity);
 
-        if (Gdx.input.isKeyPressed(Input.Keys.A)) {
+        if (input.isTurnLeft()) {
             body.applyTorque(control.getTurnTorque(), true);
         }
-        if (Gdx.input.isKeyPressed(Input.Keys.D)) {
+        if (input.isTurnRight()) {
             body.applyTorque(-control.getTurnTorque(), true);
         }
 
-        if (Gdx.input.isKeyPressed(Input.Keys.W)) {
+        if (input.isThrustForward()) {
             applyThrust(body, control.getThrustForce());
         }
-        if (Gdx.input.isKeyPressed(Input.Keys.S)) {
+        if (input.isThrustReverse()) {
             applyThrust(body, -control.getThrustForce());
         }
     }

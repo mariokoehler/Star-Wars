@@ -102,6 +102,24 @@ public class NetworkClient {
     }
 
     /**
+     * Sends an arbitrary, registered message over the reliable (TCP) channel.
+     *
+     * @param object the message to send
+     */
+    public void sendTCP(Object object) {
+        client.sendTCP(object);
+    }
+
+    /**
+     * Sends an arbitrary, registered message over the unreliable (UDP) channel.
+     *
+     * @param object the message to send
+     */
+    public void sendUDP(Object object) {
+        client.sendUDP(object);
+    }
+
+    /**
      * Called once the connection to the server has been established. The
      * default implementation does nothing; subclasses may override it to add
      * behavior.
