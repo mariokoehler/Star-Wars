@@ -9,6 +9,6 @@
   "shieldRechargePerSecond": 5.0,
   "hudShieldClipTopPixel": 130.0,
   "hudShieldClipBottomPixel": 437.0,
-  "hudHullClipTopPixel": 175.0,
-  "hudHullClipBottomPixel": 377.0
+  "hudHullClipTopPixel": 187.0,
+  "hudHullClipBottomPixel": 382.0
 }

@@ -1,9 +1,11 @@
 package de.mkoehler.starwars.net.messages;
 
+import de.mkoehler.starwars.sim.ShipType;
+
 /**
- * One ship's position, orientation, velocity, and hull/shield status at the
- * moment a {@link WorldSnapshotMessage} was built. Not sent on its own,
- * only as an element of that message's ship list.
+ * One ship's position, orientation, velocity, hull/shield status, and ship
+ * type at the moment a {@link WorldSnapshotMessage} was built. Not sent on
+ * its own, only as an element of that message's ship list.
  * <p>
  * Velocity is included (not just position/angle) so a client reconciling its
  * own predicted ship against this authoritative state can correct both —
@@ -15,6 +17,11 @@ package de.mkoehler.starwars.net.messages;
  * ({@link de.mkoehler.starwars.render.ShipStatusHud}) reads them today —
  * broadcasting them for everyone costs little and leaves the door open for
  * a future enemy health readout without a protocol change.
+ * <p>
+ * The ship type is included so a client can render *other* players' ships
+ * with the correct sprite/size (design.md 5.1) — other clients only ever
+ * learn a ship's type from here, since {@link ShipSpawnedMessage} (which
+ * also carries it) is only ever sent to the owning player.
  */
 public class ShipState {
 
@@ -29,6 +36,7 @@ public class ShipState {
     private float hullMax;
     private float shieldCurrent;
     private float shieldMax;
+    private ShipType shipType;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -50,10 +58,12 @@ public class ShipState {
      * @param hullMax         the ship's maximum hull health
      * @param shieldCurrent   the ship's current shield strength
      * @param shieldMax       the ship's maximum shield capacity
+     * @param shipType        the ship's type
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
-                      float hullCurrent, float hullMax, float shieldCurrent, float shieldMax) {
+                      float hullCurrent, float hullMax, float shieldCurrent, float shieldMax,
+                      ShipType shipType) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -65,6 +75,7 @@ public class ShipState {
         this.hullMax = hullMax;
         this.shieldCurrent = shieldCurrent;
         this.shieldMax = shieldMax;
+        this.shipType = shipType;
     }
 
     /**
@@ -164,5 +175,14 @@ public class ShipState {
      */
     public float getShieldMax() {
         return shieldMax;
+    }
+
+    /**
+     * Returns the ship's type.
+     *
+     * @return the ship type
+     */
+    public ShipType getShipType() {
+        return shipType;
     }
 }

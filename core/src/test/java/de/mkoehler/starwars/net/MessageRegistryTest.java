@@ -16,6 +16,7 @@ import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.ShipType;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -46,7 +47,7 @@ class MessageRegistryTest {
             ShipState.class, ShipState[].class,
             WorldSnapshotMessage.class, PlayerLeftMessage.class,
             ProjectileState.class, ProjectileState[].class,
-            ShipDestroyedMessage.class
+            ShipDestroyedMessage.class, ShipType.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -59,9 +60,10 @@ class MessageRegistryTest {
 
     @Test
     void handshakeRequestSurvivesRoundTrip() {
-        HandshakeRequest original = new HandshakeRequest("Red Five");
+        HandshakeRequest original = new HandshakeRequest("Red Five", ShipType.XWING);
         HandshakeRequest copy = roundTrip(original, HandshakeRequest.class);
         assertEquals(original.getDisplayName(), copy.getDisplayName());
+        assertEquals(ShipType.XWING, copy.getShipType());
     }
 
     @Test
@@ -92,11 +94,12 @@ class MessageRegistryTest {
 
     @Test
     void shipSpawnedMessageSurvivesRoundTrip() {
-        ShipSpawnedMessage original = new ShipSpawnedMessage(7, 1.5f, -2.5f);
+        ShipSpawnedMessage original = new ShipSpawnedMessage(7, 1.5f, -2.5f, ShipType.FALCON);
         ShipSpawnedMessage copy = roundTrip(original, ShipSpawnedMessage.class);
         assertEquals(7, copy.getPlayerId());
         assertEquals(1.5f, copy.getSpawnX());
         assertEquals(-2.5f, copy.getSpawnY());
+        assertEquals(ShipType.FALCON, copy.getShipType());
     }
 
     @Test
@@ -114,8 +117,8 @@ class MessageRegistryTest {
     void worldSnapshotMessageSurvivesRoundTrip() {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
-                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f),
-                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f)
+                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING),
+                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.TIEFIGHTER)
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 0.5f)
@@ -129,8 +132,10 @@ class MessageRegistryTest {
         assertEquals(100f, copy.getShips()[0].getHullMax());
         assertEquals(60f, copy.getShips()[0].getShieldCurrent());
         assertEquals(100f, copy.getShips()[0].getShieldMax());
+        assertEquals(ShipType.XWING, copy.getShips()[0].getShipType());
         assertEquals(-1.2f, copy.getShips()[1].getAngle());
         assertEquals(-0.3f, copy.getShips()[1].getAngularVelocity());
+        assertEquals(ShipType.TIEFIGHTER, copy.getShips()[1].getShipType());
         assertEquals(1, copy.getProjectiles().length);
         assertEquals(100, copy.getProjectiles()[0].getProjectileId());
         assertEquals(1, copy.getProjectiles()[0].getOwnerPlayerId());

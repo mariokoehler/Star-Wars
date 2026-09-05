@@ -657,6 +657,86 @@ verified:** arrow/Start-button hover-texture swap — implemented, but a
 static screenshot can't show mouse-over; ask the user to check it by
 moving the mouse over them.
 
+**All six ships made spawnable/flyable — implemented 2026-09-05, same
+day, once the user finished authoring the remaining `.meta.json`
+files.** See design.md 2.7 for the full writeup. New `.stats.json` for
+Falcon/Snowspeeder/Star Destroyer/TIE Fighter/TIE Interceptor —
+thrust/torque/hull/shield/hud-clip numbers copied verbatim from the
+X-wing's (explicitly requested: "use the same performance attributes for
+all the ships for now"), but `radiusMeters` and two **new** fields,
+`spriteWidthMeters`/`spriteHeightMeters`, are per-ship, derived from each
+ship's real sprite pixel size — this is also what fixed the
+square-bounding-box rendering limitation flagged in the previous entry:
+`Client` now draws each ship at its own width/height instead of forcing
+`height = width`, so the Star Destroyer (256×432, non-square) renders
+correctly instead of squashed into a square.
+
+**Ship type now flows through the whole stack:** `HandshakeRequest`
+gained a `ShipType` (sent from the Ship Selection screen's pick),
+`ShipSpawnedMessage`/`ShipState` each gained one too (other clients only
+ever learn a ship's type from `ShipState`, never a spawn message meant
+for someone else). `ShipType` is now `kryo.register()`ed like every
+other wire type. `GameNetworkServer` tracks each player's requested type
+(`shipTypeByPlayerId`, set at handshake, read again at respawn) and
+spawns via `ShipStats.forType(...)` instead of hardcoded
+`ShipStats.XWING`. New `ShipTypeComponent` (Ashley) lets `WeaponSystem`
+look up an entity's own stats instead of assuming X-wing (the last
+hardcoded spot). `Client` now keys a per-`ShipType` hull-sprite-region
+map and tracks each remote/local ship's own type for correct
+rendering; hull region names don't follow one naming convention, so
+there's an explicit lookup table (`Client.hullRegionName`), same shape
+as `ShipSelectionScreen.descriptionRegionName`. `ShipStatusHud` falls
+back to the X-wing's hull art (and, since clip numbers are copied too,
+correct clip range) for any ship type without its own HUD art yet.
+
+**Real bug found via an actual end-to-end test (not just unit tests) —
+fixed same day:** `ShipSelectionScreen.startMatch()` disposes this
+screen's own textures/batch when switching to `Client` — but it ran
+from inside `handleInput()`, itself called partway through `render()`,
+so that same `render()` call kept going afterward and tried to draw
+with the now-disposed `logoTexture`, crashing (`GdxRuntimeException: No
+buffer allocated!`) the very first time Start/ENTER was actually
+pressed — never caught by unit tests or a static screenshot, only by
+actually pressing the button in a running client. Fixed by having
+`handleInput()` report whether a transition happened and `render()`
+returning immediately if so. **General rule:** disposing `this`
+mid-method means every subsequent line in that call (and the rest of
+that frame, up the call stack) must not touch what was just disposed —
+return immediately, don't fall through.
+
+**Verified, for real this time — not just build+screenshot:** used
+PowerShell `SendKeys` (`SetForegroundWindow` + `SendKeys.SendWait`) to
+drive actual keyboard input into the running LWJGL window — the only way
+found to do this from here — to cycle the Ship Selection screen to the
+Star Destroyer and press ENTER, then screenshotted the live gameplay
+view confirming it renders at its correct non-square size with the
+expected X-wing-fallback HUD hull art, and confirmed via server/client
+logs a clean connect→spawn→snapshot round trip. Full `mvn clean verify`
+(34 tests) green across all 4 modules. **Also found and killed a stray
+`java -jar` server process left running from way earlier in this
+session** that was silently holding `server/target/StarWars-Server-*.jar`
+locked, breaking `mvn clean` (`Failed to delete ... .jar`) — a reminder
+to actually check `Get-Process java,javaw` (or, better, list full
+command lines via `Get-CimInstance Win32_Process`, which is what
+actually found this one after the simple name filter didn't) when a
+clean/build fails for a file-lock reason on Windows, rather than
+assuming no Java process is running just because a plain name-based
+check came back empty.
+
+**All six ships got their own real HUD hull art the same day**, provided
+by the user right after the above (`HUD_Status_Background_<Ship>.png`
+per ship in `assets-raw/hud/`, copied to `assets/textures/hud/<name>_hull.png`)
+— the X-wing-fallback screenshot above was accurate for exactly as long
+as it took the user to send the real art. Each one's HUD clip pixel
+range was computed (alpha-channel bounding box, ≥50/255 threshold) rather
+than eyeballed — validated first against the X-wing's own known-correct,
+user-supplied numbers (matched almost exactly) before trusting it for
+the rest. See design.md 2.7 for the exact per-ship numbers. Re-verified
+with a real server+client boot flying the TIE Fighter and the Falcon
+(via the same `SendKeys` technique) — both show their own correct hull
+silhouette in the HUD, not the X-wing fallback. Full `mvn clean verify`
+still green.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

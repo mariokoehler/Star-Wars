@@ -32,11 +32,13 @@ import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.WeaponStats;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 
 import java.io.IOException;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -90,9 +92,11 @@ public class Client implements Screen {
     /** Screen-pixel margin from the bottom-left corner for the ship status HUD widget. */
     private static final float HUD_STATUS_MARGIN = 24f;
 
+    private final ShipType selectedShipType;
+
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
-    private TextureRegion xwingRegion;
+    private final Map<ShipType, TextureRegion> shipRegionsByType = new EnumMap<>(ShipType.class);
     private TextureAtlas projectilesAtlas;
     private TextureRegion ownProjectileRegion;
     private TextureRegion enemyProjectileRegion;
@@ -111,6 +115,7 @@ public class Client implements Screen {
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
     private Body myBody;
+    private ShipType myShipType;
     private float myPreviousX;
     private float myPreviousY;
     private float myPreviousAngle;
@@ -119,13 +124,26 @@ public class Client implements Screen {
     private float myShieldCurrent;
     private float myShieldMax;
 
+    /**
+     * Creates the gameplay screen.
+     *
+     * @param selectedShipType the ship type chosen on the Ship Selection
+     *                         screen (design.md 5.1), sent to the server at
+     *                         handshake to spawn as
+     */
+    public Client(ShipType selectedShipType) {
+        this.selectedShipType = selectedShipType;
+    }
+
     @Override
     public void show() {
         Box2D.init();
 
         batch = new SpriteBatch();
         shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
-        xwingRegion = shipsAtlas.findRegion("xwing/xwing128", 20);
+        for (ShipType type : ShipType.values()) {
+            shipRegionsByType.put(type, shipsAtlas.findRegion(hullRegionName(type), 20));
+        }
         projectilesAtlas = new TextureAtlas(Gdx.files.internal("textures/projectiles.atlas"));
         ownProjectileRegion = projectilesAtlas.findRegion("red_dot");
         enemyProjectileRegion = projectilesAtlas.findRegion("blue_dot");
@@ -147,6 +165,26 @@ public class Client implements Screen {
         hudCamera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         connectToServer();
+    }
+
+    /**
+     * Maps a ship type to its {@code textures/ships.atlas} hull sprite
+     * region name — unlike the portrait regions (uniformly
+     * {@code <resourceName>/portrait}), hull frame region names don't
+     * follow one convention (each ship's source filename varies — e.g.
+     * {@code falcon256_0020.png}, {@code tie_fighter128_0020.png}), so this
+     * is an explicit table, same reasoning as
+     * {@code ShipSelectionScreen.descriptionRegionName}.
+     */
+    private static String hullRegionName(ShipType type) {
+        return switch (type) {
+            case XWING -> "xwing/xwing128";
+            case FALCON -> "falcon/falcon256";
+            case SNOWSPEEDER -> "snowspeeder/snowspeeder";
+            case STARDESTROYER -> "stardestroyer/stardestroyer256";
+            case TIEFIGHTER -> "tiefighter/tie_fighter128";
+            case TIEINTERCEPTOR -> "tieinterceptor/interceptor256";
+        };
     }
 
     private void connectToServer() {
@@ -174,11 +212,13 @@ public class Client implements Screen {
             // simply fatal for now.
             throw new IllegalStateException("Failed to connect to " + SERVER_HOST, e);
         }
-        networkClient.sendHandshake(DISPLAY_NAME);
+        networkClient.sendHandshake(DISPLAY_NAME, selectedShipType);
     }
 
     private void onShipSpawned(ShipSpawnedMessage spawned) {
         myPlayerId = spawned.getPlayerId();
+        myShipType = spawned.getShipType();
+        ShipStats myStats = ShipStats.forType(myShipType);
 
         if (localWorld == null) {
             localWorld = new World(new Vector2(0, 0), true);
@@ -187,15 +227,15 @@ public class Client implements Screen {
             // Respawning after death (see onShipDestroyed) - the old body was already destroyed.
             localWorld.destroyBody(myBody);
         }
-        myBody = ShipFactory.createBody(localWorld, spawned.getSpawnX(), spawned.getSpawnY(), ShipStats.XWING);
+        myBody = ShipFactory.createBody(localWorld, spawned.getSpawnX(), spawned.getSpawnY(), myStats);
         myPreviousX = myBody.getPosition().x;
         myPreviousY = myBody.getPosition().y;
         myPreviousAngle = myBody.getAngle();
 
         // Full hull/shield until the first WorldSnapshotMessage arrives - otherwise the HUD
         // would flash empty for a frame or two right after spawning/respawning.
-        myHullMax = myHullCurrent = ShipStats.XWING.getMaxHealth();
-        myShieldMax = myShieldCurrent = ShipStats.XWING.getShieldMaxCapacity();
+        myHullMax = myHullCurrent = myStats.getMaxHealth();
+        myShieldMax = myShieldCurrent = myStats.getShieldMaxCapacity();
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -221,7 +261,8 @@ public class Client implements Screen {
             }
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
-            RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id -> new RemoteShip(x, y, state.getAngle()));
+            RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(),
+                id -> new RemoteShip(x, y, state.getAngle(), state.getShipType()));
             ship.updateFromSnapshot(x, y, state.getAngle(),
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
                 state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
@@ -320,7 +361,7 @@ public class Client implements Screen {
         }
         float hullFraction = myHullMax > 0f ? myHullCurrent / myHullMax : 0f;
         float shieldFraction = myShieldMax > 0f ? myShieldCurrent / myShieldMax : 0f;
-        statusHud.render(batch, ShipStats.XWING, HUD_STATUS_MARGIN, HUD_STATUS_MARGIN, HUD_STATUS_SIZE,
+        statusHud.render(batch, ShipStats.forType(myShipType), HUD_STATUS_MARGIN, HUD_STATUS_MARGIN, HUD_STATUS_SIZE,
             hullFraction, shieldFraction);
     }
 
@@ -329,11 +370,12 @@ public class Client implements Screen {
         myPreviousY = myBody.getPosition().y;
         myPreviousAngle = myBody.getAngle();
 
+        ShipStats myStats = ShipStats.forType(myShipType);
         // Reapply input before every individual physics step (see PhysicsSystem#update(float,
         // Runnable)), not just once here - a frame hitch can make this need more than one step,
         // and Box2D clears applied forces/torque after each one.
         localPhysicsSystem.update(deltaTime, () ->
-            ShipControlSystem.applyInput(myBody, ShipStats.XWING.getThrustForce(), ShipStats.XWING.getTurnTorque(),
+            ShipControlSystem.applyInput(myBody, myStats.getThrustForce(), myStats.getTurnTorque(),
                 thrustForward, thrustReverse, turnLeft, turnRight));
     }
 
@@ -369,15 +411,16 @@ public class Client implements Screen {
     }
 
     private void drawRemoteShips() {
-        float widthPixels = ShipStats.XWING.getRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
-        float heightPixels = widthPixels;
-
         batch.setColor(OTHER_SHIP_TINT);
         for (RemoteShip ship : ships.values()) {
+            ShipStats stats = ShipStats.forType(ship.shipType);
+            float widthPixels = stats.getSpriteWidthMeters() * PhysicsConstants.PIXELS_PER_METER;
+            float heightPixels = stats.getSpriteHeightMeters() * PhysicsConstants.PIXELS_PER_METER;
+
             // The source art faces up/north when unrotated (design.md 4.3), and the server's
             // ShipControlSystem treats angle 0 as "facing north" too - so the ship's angle
             // maps directly onto the region's rotation with no offset needed.
-            batch.draw(xwingRegion,
+            batch.draw(shipRegionsByType.get(ship.shipType),
                 ship.renderX - widthPixels / 2f, ship.renderY - heightPixels / 2f,
                 widthPixels / 2f, heightPixels / 2f,
                 widthPixels, heightPixels,
@@ -396,10 +439,11 @@ public class Client implements Screen {
         float y = MathUtils.lerp(myPreviousY, myBody.getPosition().y, alpha) * PhysicsConstants.PIXELS_PER_METER;
         float angle = MathUtils.lerpAngle(myPreviousAngle, myBody.getAngle(), alpha);
 
-        float widthPixels = ShipStats.XWING.getRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
-        float heightPixels = widthPixels;
+        ShipStats myStats = ShipStats.forType(myShipType);
+        float widthPixels = myStats.getSpriteWidthMeters() * PhysicsConstants.PIXELS_PER_METER;
+        float heightPixels = myStats.getSpriteHeightMeters() * PhysicsConstants.PIXELS_PER_METER;
 
-        batch.draw(xwingRegion,
+        batch.draw(shipRegionsByType.get(myShipType),
             x - widthPixels / 2f, y - heightPixels / 2f,
             widthPixels / 2f, heightPixels / 2f,
             widthPixels, heightPixels,
@@ -480,6 +524,7 @@ public class Client implements Screen {
      * Javadoc).
      */
     private static final class RemoteShip {
+        final ShipType shipType;
         float baseX;
         float baseY;
         float baseAngle;
@@ -491,7 +536,8 @@ public class Client implements Screen {
         float renderY;
         float renderAngle;
 
-        RemoteShip(float x, float y, float angle) {
+        RemoteShip(float x, float y, float angle, ShipType shipType) {
+            this.shipType = shipType;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;

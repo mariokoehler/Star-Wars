@@ -80,6 +80,24 @@ public final class ShipStats {
     }
 
     /**
+     * Returns the width to draw this ship's hull sprite at.
+     *
+     * @return the sprite draw width, in meters
+     */
+    public float getSpriteWidthMeters() {
+        return config.getSpriteWidthMeters();
+    }
+
+    /**
+     * Returns the height to draw this ship's hull sprite at.
+     *
+     * @return the sprite draw height, in meters
+     */
+    public float getSpriteHeightMeters() {
+        return config.getSpriteHeightMeters();
+    }
+
+    /**
      * Returns the force applied while thrusting.
      *
      * @return the thrust force, in newtons

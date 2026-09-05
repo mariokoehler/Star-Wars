@@ -1,7 +1,7 @@
 {
-  "radiusMeters": 2.0,
-  "spriteWidthMeters": 4.0,
-  "spriteHeightMeters": 4.0,
+  "radiusMeters": 4.0,
+  "spriteWidthMeters": 8.0,
+  "spriteHeightMeters": 13.5,
   "thrustForce": 200.0,
   "turnTorque": 150.0,
   "hullMaxHealth": 100.0,
@@ -9,6 +9,6 @@
   "shieldRechargePerSecond": 5.0,
   "hudShieldClipTopPixel": 130.0,
   "hudShieldClipBottomPixel": 437.0,
-  "hudHullClipTopPixel": 175.0,
-  "hudHullClipBottomPixel": 377.0
+  "hudHullClipTopPixel": 157.0,
+  "hudHullClipBottomPixel": 418.0
 }

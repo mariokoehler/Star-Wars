@@ -1,6 +1,7 @@
 package de.mkoehler.starwars.render;
 
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -30,9 +31,14 @@ import java.util.Map;
  * <p>
  * The background panel and shield ring are generic HUD chrome, shared by
  * every ship type; the hull silhouette is ship-specific art, loaded lazily
- * per {@link ShipType} from {@code textures/hud/<resourceName>_hull.png}.
+ * per {@link ShipType} from {@code textures/hud/<resourceName>_hull.png} —
+ * falling back to the X-wing's own hull art (and, since every ship type
+ * currently copies the X-wing's hud clip numbers too, its correct clip
+ * range) for any ship type that doesn't have its own yet.
  */
 public class ShipStatusHud implements Disposable {
+
+    private static final String FALLBACK_HULL_TEXTURE_PATH = "textures/hud/xwing_hull.png";
 
     private final Texture background = new Texture(Gdx.files.internal("textures/hud/hud_status_background.png"));
     private final Texture shield = new Texture(Gdx.files.internal("textures/hud/hud_status_shield.png"));
@@ -56,8 +62,10 @@ public class ShipStatusHud implements Disposable {
      */
     public void render(SpriteBatch batch, ShipStats stats, float x, float y, float size,
                         float hullFraction, float shieldFraction) {
-        Texture hullTexture = hullTexturesByType.computeIfAbsent(stats.getType(), type ->
-            new Texture(Gdx.files.internal("textures/hud/" + type.getResourceName() + "_hull.png")));
+        Texture hullTexture = hullTexturesByType.computeIfAbsent(stats.getType(), type -> {
+            FileHandle preferred = Gdx.files.internal("textures/hud/" + type.getResourceName() + "_hull.png");
+            return new Texture(preferred.exists() ? preferred : Gdx.files.internal(FALLBACK_HULL_TEXTURE_PATH));
+        });
 
         batch.draw(background, x, y, size, size);
         drawClippedFromBottom(batch, shield, x, y, size, shieldFraction,

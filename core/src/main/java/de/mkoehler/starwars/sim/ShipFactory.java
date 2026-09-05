@@ -16,6 +16,7 @@ import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
+import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
 
@@ -55,6 +56,7 @@ public final class ShipFactory {
 
         Entity entity = new Entity();
         entity.add(new PlayerIdComponent(playerId));
+        entity.add(new ShipTypeComponent(stats.getType()));
         entity.add(new PhysicsBodyComponent(body));
         entity.add(new PlayerControlledComponent(stats.getThrustForce(), stats.getTurnTorque()));
         entity.add(new NetworkInputComponent());

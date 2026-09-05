@@ -22,6 +22,8 @@ package de.mkoehler.starwars.sim;
 public class ShipTypeConfig {
 
     private float radiusMeters;
+    private float spriteWidthMeters;
+    private float spriteHeightMeters;
     private float thrustForce;
     private float turnTorque;
     private float hullMaxHealth;
@@ -32,12 +34,51 @@ public class ShipTypeConfig {
     private float hudHullClipTopPixel;
     private float hudHullClipBottomPixel;
 
+    /**
+     * Returns the ship's collision/draw radius, used only for the fallback
+     * circle hitbox ({@link ShipFactory#createBody}) when no hitbox polygon
+     * has been authored — with every current ship type having one, this is
+     * effectively dormant, but still set to a sensible value per type.
+     *
+     * @return the radius, in meters
+     */
     public float getRadiusMeters() {
         return radiusMeters;
     }
 
     public void setRadiusMeters(float radiusMeters) {
         this.radiusMeters = radiusMeters;
+    }
+
+    /**
+     * Returns the width to draw this ship's hull sprite at — unlike
+     * {@link #getRadiusMeters()}, this (and {@link #getSpriteHeightMeters()})
+     * drive actual on-screen size and support non-square sprites (e.g. the
+     * Star Destroyer), derived directly from that ship's source sprite's
+     * pixel dimensions at {@link PhysicsConstants#PIXELS_PER_METER}.
+     *
+     * @return the sprite draw width, in meters
+     */
+    public float getSpriteWidthMeters() {
+        return spriteWidthMeters;
+    }
+
+    public void setSpriteWidthMeters(float spriteWidthMeters) {
+        this.spriteWidthMeters = spriteWidthMeters;
+    }
+
+    /**
+     * Returns the height to draw this ship's hull sprite at, see
+     * {@link #getSpriteWidthMeters()}.
+     *
+     * @return the sprite draw height, in meters
+     */
+    public float getSpriteHeightMeters() {
+        return spriteHeightMeters;
+    }
+
+    public void setSpriteHeightMeters(float spriteHeightMeters) {
+        this.spriteHeightMeters = spriteHeightMeters;
     }
 
     public float getThrustForce() {

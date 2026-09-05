@@ -14,6 +14,7 @@ import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.ShipType;
 
 /**
  * Registers every class sent over the wire with a {@link Kryo} instance, in a
@@ -55,5 +56,6 @@ public final class MessageRegistry {
         kryo.register(ProjectileState.class);
         kryo.register(ProjectileState[].class);
         kryo.register(ShipDestroyedMessage.class);
+        kryo.register(ShipType.class);
     }
 }

@@ -20,15 +20,10 @@ import de.mkoehler.starwars.sim.ShipType;
  * arrow keys) and start a match flying the one currently displayed (Start
  * button or ENTER).
  * <p>
- * **Known limitation, deliberate for now:** starting a match always hands
- * off to a plain {@code new Client()} regardless of which ship is selected
- * — {@link Client}/the server only actually know how to fly/spawn an
- * X-wing today (only {@link ShipType#XWING} has a {@code .stats.json}, see
- * that enum's Javadoc), and the Star Destroyer's non-square sprite doesn't
- * fit {@code Client}'s current square-bounding-box rendering assumption
- * either. This screen's selection is fully real (any of the six can be
- * highlighted and its portrait/description shown) — only the "actually fly
- * it" wiring is still pending a follow-up milestone.
+ * The selected ship type is sent to the server at handshake (design.md 5.1)
+ * and actually flown/spawned as — every ship type currently uses the same
+ * performance numbers (thrust/torque/hull/shield), copied from the X-wing's
+ * {@code .stats.json} until each gets its own real balancing pass.
  * <p>
  * All rendering uses pre-made dialog art at native pixel size/position (no
  * Scene2D/VisUI, matching this codebase's existing raw-{@link SpriteBatch}
@@ -150,7 +145,13 @@ public class ShipSelectionScreen implements Screen {
         float startButtonY = dialogScreenY - START_BUTTON_GAP - START_BUTTON_HEIGHT;
         boolean hoveringStartButton = contains(startButtonX, startButtonY, START_BUTTON_WIDTH, START_BUTTON_HEIGHT, mouseX, mouseY);
 
-        handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton);
+        if (handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton)) {
+            // startMatch() just disposed this screen's own textures/batch (switching to Client) -
+            // drawing anything else this frame would use them after disposal and crash (a GL
+            // "No buffer allocated!" error, found exactly this way): stop immediately instead of
+            // falling through into the batch calls below.
+            return;
+        }
 
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
@@ -168,7 +169,11 @@ public class ShipSelectionScreen implements Screen {
         batch.end();
     }
 
-    private void handleInput(boolean hoveringLeftArrow, boolean hoveringRightArrow, boolean hoveringStartButton) {
+    /**
+     * @return {@code true} if a match was just started — the caller must not
+     * touch this screen's (now-disposed) batch/textures again this frame
+     */
+    private boolean handleInput(boolean hoveringLeftArrow, boolean hoveringRightArrow, boolean hoveringStartButton) {
         boolean leftClicked = hoveringLeftArrow && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
         boolean rightClicked = hoveringRightArrow && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
 
@@ -181,13 +186,13 @@ public class ShipSelectionScreen implements Screen {
         boolean startClicked = hoveringStartButton && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
         if (startClicked || Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
             startMatch();
+            return true;
         }
+        return false;
     }
 
     private void startMatch() {
-        // See class Javadoc's "Known limitation" note: the selection isn't threaded through to
-        // Client yet, since only the X-wing actually has the stats/rendering support to fly.
-        Client next = new Client();
+        Client next = new Client(SHIP_TYPES[selectedIndex]);
         game.setScreen(next);
         dispose();
     }

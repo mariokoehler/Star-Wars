@@ -14,6 +14,7 @@ import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
 
@@ -49,6 +50,7 @@ public class WeaponSystem extends IteratingSystem {
     private final ComponentMapper<WeaponComponent> weaponMapper = ComponentMapper.getFor(WeaponComponent.class);
     private final ComponentMapper<NetworkInputComponent> inputMapper = ComponentMapper.getFor(NetworkInputComponent.class);
     private final ComponentMapper<PlayerIdComponent> playerIdMapper = ComponentMapper.getFor(PlayerIdComponent.class);
+    private final ComponentMapper<ShipTypeComponent> shipTypeMapper = ComponentMapper.getFor(ShipTypeComponent.class);
 
     private final Engine engine;
     private final World world;
@@ -61,7 +63,8 @@ public class WeaponSystem extends IteratingSystem {
      * @param world  the Box2D world to create fired projectiles' bodies in
      */
     public WeaponSystem(Engine engine, World world) {
-        super(Family.all(PhysicsBodyComponent.class, WeaponComponent.class, NetworkInputComponent.class, PlayerIdComponent.class).get());
+        super(Family.all(PhysicsBodyComponent.class, WeaponComponent.class, NetworkInputComponent.class,
+            PlayerIdComponent.class, ShipTypeComponent.class).get());
         this.engine = engine;
         this.world = world;
     }
@@ -78,13 +81,14 @@ public class WeaponSystem extends IteratingSystem {
 
         Body body = bodyMapper.get(entity).getBody();
         int ownerPlayerId = playerIdMapper.get(entity).getPlayerId();
+        ShipStats shipStats = ShipStats.forType(shipTypeMapper.get(entity).getShipType());
 
-        List<PixelPoint> spawnPoints = ShipStats.XWING.getSpriteMetadata()
+        List<PixelPoint> spawnPoints = shipStats.getSpriteMetadata()
             .map(metadata -> metadata.getAttachmentPoints().get(PROJECTILE_ATTACHMENT_NAME))
             .orElse(null);
 
         if (spawnPoints == null || spawnPoints.isEmpty()) {
-            fireFromDefaultOffset(body, ownerPlayerId, weapon);
+            fireFromDefaultOffset(body, ownerPlayerId, weapon, shipStats);
         } else {
             for (PixelPoint spawnPoint : spawnPoints) {
                 fireFromAttachmentPoint(body, ownerPlayerId, weapon, spawnPoint);
@@ -106,8 +110,8 @@ public class WeaponSystem extends IteratingSystem {
     //
     // Used as a fallback for ships with no authored PROJECTILE attachment points yet (design.md
     // 2.4) - once a ship's metadata defines them, fireFromAttachmentPoint is used instead.
-    private void fireFromDefaultOffset(Body body, int ownerPlayerId, WeaponComponent weapon) {
-        float spawnDistance = ShipStats.XWING.getRadiusMeters() + weapon.getStats().getProjectileRadiusMeters() + 0.1f;
+    private void fireFromDefaultOffset(Body body, int ownerPlayerId, WeaponComponent weapon, ShipStats shipStats) {
+        float spawnDistance = shipStats.getRadiusMeters() + weapon.getStats().getProjectileRadiusMeters() + 0.1f;
         SPAWN_OFFSET.set(0, 1).rotateRad(body.getAngle()).scl(spawnDistance);
 
         ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,

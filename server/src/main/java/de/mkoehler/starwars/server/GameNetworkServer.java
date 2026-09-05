@@ -26,12 +26,14 @@ import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
+import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
 import de.mkoehler.starwars.sim.systems.ShieldRegenSystem;
@@ -81,6 +83,7 @@ public class GameNetworkServer extends NetworkServer {
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
+    private final Map<Integer, ShipType> shipTypeByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
@@ -274,10 +277,13 @@ public class GameNetworkServer extends NetworkServer {
         // is still an open question.
         float spawnX = 0f;
         float spawnY = 0f;
-        spawnShip(playerId, spawnX, spawnY);
+        // The player's requested ship type doesn't change across respawns within a match -
+        // recorded once at handshake time (see handleHandshake), just read back here.
+        ShipType shipType = shipTypeByPlayerId.get(playerId);
+        spawnShip(playerId, spawnX, spawnY, shipType);
         Connection connection = connectionsByPlayerId.get(playerId);
         if (connection != null) {
-            connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY));
+            connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY, shipType));
         }
     }
 
@@ -287,11 +293,13 @@ public class GameNetworkServer extends NetworkServer {
         // Fixed spawn point for now - map/arena design (design.md 7) is still an open question.
         float spawnX = 0f;
         float spawnY = 0f;
+        ShipType shipType = request.getShipType();
         pendingActions.add(() -> {
             connectionsByPlayerId.put(playerId, connection);
-            spawnShip(playerId, spawnX, spawnY);
+            shipTypeByPlayerId.put(playerId, shipType);
+            spawnShip(playerId, spawnX, spawnY, shipType);
         });
-        connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY));
+        connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY, shipType));
         return new HandshakeResponse(true, "Welcome, " + request.getDisplayName() + ".");
     }
 
@@ -309,17 +317,18 @@ public class GameNetworkServer extends NetworkServer {
         int playerId = connection.getID();
         pendingActions.add(() -> {
             connectionsByPlayerId.remove(playerId);
+            shipTypeByPlayerId.remove(playerId);
             respawnTimers.remove(playerId);
             despawnShip(playerId);
         });
         sendToAllTCP(new PlayerLeftMessage(playerId));
     }
 
-    private void spawnShip(int playerId, float x, float y) {
+    private void spawnShip(int playerId, float x, float y, ShipType shipType) {
         if (shipsByPlayerId.containsKey(playerId)) {
             return;
         }
-        Entity ship = ShipFactory.createShip(engine, world, playerId, x, y, ShipStats.XWING);
+        Entity ship = ShipFactory.createShip(engine, world, playerId, x, y, ShipStats.forType(shipType));
         shipsByPlayerId.put(playerId, ship);
     }
 
@@ -350,10 +359,11 @@ public class GameNetworkServer extends NetworkServer {
             Body body = ship.getComponent(PhysicsBodyComponent.class).getBody();
             HullComponent hull = ship.getComponent(HullComponent.class);
             ShieldComponent shield = ship.getComponent(ShieldComponent.class);
+            ShipType shipType = ship.getComponent(ShipTypeComponent.class).getShipType();
             shipStates[i++] = new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
-                hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax());
+                hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType);
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(

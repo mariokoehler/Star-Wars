@@ -452,6 +452,104 @@ the gauge actually drain in a live dogfight (no way to simulate real
 combat input from here) — needs the user to actually take a hit and
 check it looks right.
 
+### 2.7 Multi-ship-type spawning (2026-09-05)
+
+The five non-X-wing ships (2.5/4.3) are now actually selectable and
+flyable, not just displayed in the Ship Selection menu — the user
+finished authoring all five `.meta.json` hitbox/attachment files, then
+asked for the ships to become spawnable, explicitly reusing the X-wing's
+performance numbers (thrust/torque/hull/shield) for all of them until a
+real balancing pass happens.
+
+**New `.stats.json` per non-X-wing ship**, thrust/torque/hull/shield/hud
+clip numbers copied verbatim from the X-wing's — **`radiusMeters` and two
+new fields, `spriteWidthMeters`/`spriteHeightMeters`, are per-ship**,
+derived from each ship's actual sprite pixel dimensions at
+`PIXELS_PER_METER`, not copied: Falcon/TIE Interceptor 8×8m, Snowspeeder/
+TIE Fighter 4×4m, Star Destroyer 8×13.5m (its sprite is 256×432, not
+square). The new width/height pair is what actually fixed the "square
+bounding box" limitation flagged in 5.1 — `Client`'s ship rendering used
+to force `heightPixels = widthPixels` from a single radius, which would
+have squashed the Star Destroyer into a square; it now draws each ship at
+its own width/height.
+
+**Protocol change: ship type now travels end-to-end.**
+`HandshakeRequest` gained a `ShipType` field (sent from the selected
+Ship Selection screen entry); `ShipSpawnedMessage` and `ShipState` each
+gained one too, so the owning client (from the spawn message) and every
+*other* client (from snapshot state, since other clients never receive
+a `ShipSpawnedMessage` for someone else's ship) both know what to
+render/simulate. `ShipType` itself is now `kryo.register(...)`ed in
+`MessageRegistry` like every other wire type. `GameNetworkServer` tracks
+each player's requested type (`shipTypeByPlayerId`, populated at
+handshake, read again at respawn — a player's ship type doesn't change
+mid-match) and spawns/respawns with `ShipStats.forType(...)` instead of
+the old hardcoded `ShipStats.XWING`.
+
+**New `ShipTypeComponent`** (Ashley component, added by `ShipFactory`)
+lets server-side systems look up an entity's *own* stats instead of
+assuming X-wing — `WeaponSystem` now does this for its attachment-point/
+default-offset lookups, the last remaining hardcoded-X-wing spot outside
+`GameNetworkServer` itself.
+
+**Client rendering** now keys a `Map<ShipType, TextureRegion>` (hull
+sprite, loaded once in `show()`) and reads each ship's own
+`spriteWidthMeters`/`spriteHeightMeters` — for the local player (tracked
+via a new `myShipType`, set from the server's `ShipSpawnedMessage`) and
+for every remote `RemoteShip` (now carries its own `shipType`, set once
+at creation from `ShipState`). Hull sprite region names don't follow one
+naming convention (`falcon256_0020.png` vs `tie_fighter128_0020.png`
+etc.), so `Client.hullRegionName(ShipType)` is an explicit table, same
+shape as `ShipSelectionScreen.descriptionRegionName`.
+
+**HUD gracefully falls back to the X-wing's hull art** for any ship type
+without its own `textures/hud/<name>_hull.png` — checked via
+`FileHandle.exists()` in `ShipStatusHud`, falling back to
+`xwing_hull.png` (and its clip range, when a ship's own hud clip numbers
+haven't been set yet either). Confirmed visually the moment it mattered:
+flying a Star Destroyer, before its own HUD art existed, showed the
+X-wing silhouette in the hull gauge rather than crashing or stretching.
+**All six ships have their own real hull HUD art as of the same day** —
+the user provided `HUD_Status_Background_<Ship>.png` for the remaining
+five (matching the X-wing's), so the fallback is currently dormant for
+every existing ship type, kept only as a safety net for a future one
+added before its own art exists. Each one's visible-pixel clip range
+(`hudHullClipTopPixel`/`BottomPixel`) was computed, not eyeballed: an
+alpha-channel bounding box at a ≥50/255 threshold, validated first
+against the X-wing's already-known-correct user-supplied values (130–437
+shield, 175–377 hull) before trusting it for the other five — it
+reproduced the shield range almost exactly and the hull bottom edge
+exactly, confirming the method. Falcon 154–416, Snowspeeder 188–384,
+Star Destroyer 157–418, TIE Fighter 187–382, TIE Interceptor 191–380.
+
+**Real bug found via an actual end-to-end test, fixed same day:**
+`ShipSelectionScreen.startMatch()` disposes the screen's own textures/
+batch (switching to `Client`) — but it was called from partway through
+`handleInput()`, itself called partway through `render()`, so the *same*
+`render()` call kept executing afterward and tried to draw with the
+now-disposed `logoTexture`, crashing with a GL `"No buffer allocated!"`
+error the very first time Start/ENTER was actually pressed. Fixed by
+having `handleInput()` report whether a transition happened, and
+`render()` returning immediately if so, before touching any batch/texture
+calls for that frame. **General rule for later:** disposing `this`
+mid-method is fine, but every subsequent line in that same call (and its
+caller, up the stack, for the rest of that frame) must not touch what
+was just disposed — return immediately, don't fall through.
+
+**Verified — a real end-to-end test, not just unit tests:** built a real
+server + client, used simulated keyboard input (`SendKeys`, via
+PowerShell — the only way found to drive an actual LWJGL window's input
+from here) to cycle the Ship Selection screen to the Star Destroyer and
+press ENTER, confirmed via screenshot that it renders in-game at its
+correct non-square size (not squashed into a square) with the expected
+HUD hull-art fallback, and confirmed via server/client logs that the
+connect → spawn → snapshot round trip produced no exceptions on either
+side. Full `mvn clean verify` (34 tests) across all 4 modules also green.
+**Not verified:** actually taking damage/firing/dying as a non-X-wing
+ship (needs a real dogfight, same as every other combat-adjacent
+milestone this session) — should behave identically to the X-wing since
+every ship currently shares its stats, but hasn't been watched happen.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -1457,16 +1555,18 @@ once a component is actually being worked on.
       a finished combat system.
 - [ ] **Ship roster (data-driven)** — stats (mass, thrust, turn rate, hit
       points, weapon loadout) per ship, starting with a small roster (2–3
-      ships) before expanding. **Groundwork laid 2026-09-05:** a
-      `ShipType` enum now exists (one value, `XWING`) and per-type stats
-      already load from JSON (`ShipTypeConfig`, see 2.6) — adding a
-      second ship type is now "add an enum value + a `.stats.json`
-      (+ `.meta.json`)," not a code change to every consumer.
-- [x] **Ship Selection screen (first pass, 2026-09-05)** — see 5.1 for the
-      full writeup: cycle every ship type, Start to match. No XP-gating
-      yet (no XP system exists, design.md 6 below); shows all six known
-      ship types unconditionally. Starting a match still always flies the
-      X-wing regardless of selection (pending per-ship stats).
+      ships) before expanding. **Groundwork laid 2026-09-05, all six ship
+      types spawnable as of the same day (2.7):** `ShipType` now has all
+      six values; each has a `.stats.json` and can actually be selected
+      and flown. Still genuinely open: every ship currently shares the
+      exact same performance numbers (copied from the X-wing) — no real
+      per-ship balance pass has happened yet.
+- [x] **Ship Selection screen (first pass, 2026-09-05; fully wired
+      2026-09-05, same day)** — see 5.1/2.7 for the full writeup: cycle
+      every ship type, Start to match, flying the ship actually selected
+      (not always the X-wing as in the original first pass). No
+      XP-gating yet (no XP system exists, design.md 6 below); shows all
+      six known ship types unconditionally.
 - [x] **Client-side prediction & reconciliation (2026-09-05)** — see 3.5
       for the full writeup (local Box2D body, `ShipControlSystem.applyInput`
       shared with the server, blend/snap reconciliation against
