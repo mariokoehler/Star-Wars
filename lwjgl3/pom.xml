@@ -41,6 +41,15 @@
       <version>${gdxVersion}</version>
       <classifier>natives-desktop</classifier>
     </dependency>
+    <!-- Test-scoped so it never ends up in the shaded runtime jar: used only by the
+         AtlasPacker dev tool under src/test, run on demand to (re)build texture atlases
+         from assets-raw/. See CLAUDE.md "Build system" for the command to run it. -->
+    <dependency>
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-tools</artifactId>
+      <version>${gdxVersion}</version>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -56,7 +65,12 @@
     </resources>
     <plugins>
       <plugin>
-        <!-- Run with: mvn -pl lwjgl3 -am compile exec:exec -->
+        <!-- Run with: mvn -pl lwjgl3 compile exec:exec (core must already be installed
+             locally, see the "install core first" note in CLAUDE.md's Build system
+             section - do NOT add -am here: a bare goal invoked with -am runs across the
+             WHOLE computed reactor, including the parent aggregator pom, which has no
+             config for this plugin and fails immediately with a missing 'executable'
+             parameter; @executionId does not fix this, it still walks the full reactor). -->
         <groupId>org.codehaus.mojo</groupId>
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.5.0</version>

@@ -212,6 +212,30 @@ plausible few-meters "length" in Box2D terms; revisit once real ship
 sprite dimensions (4.3) are actually plugged into a scene, since that's
 what will make an off scale obvious.
 
+**Fixed-timestep rendering requires interpolation — found and fixed
+(2026-09-05):** `PhysicsSystem` steps Box2D at a fixed
+`PhysicsConstants.TIME_STEP` (1/60s) via an accumulator, independent of
+the variable render frame rate. Drawing entities at their raw,
+just-stepped Box2D position causes visible jitter — some render frames
+get 0 fixed steps, others get 1 or 2, so the on-screen position doesn't
+advance by a consistent amount per frame even though the *simulation* is
+advancing at a constant rate. This is imperceptible at low speed
+(small per-step position delta) but very visible at higher/terminal
+speed (large per-step delta) — exactly the symptom reported from
+play-testing ("jitter only at terminal velocity, background stays
+smooth"). **Fix:** `PhysicsBodyComponent` tracks a pre-step "previous"
+position/angle snapshot (taken once per render frame, before that
+frame's fixed steps run); `RenderSystem` draws at the position/angle
+*interpolated* between that previous snapshot and the current (post-step)
+state, using `PhysicsSystem.getAlpha()` (how far the accumulator is
+toward the next step) as the blend factor — the standard "fix your
+timestep" technique. `Client.java`'s camera-follow target uses the same
+interpolated position, for the same reason. This is the same category of
+technique (interpolating between two known simulation states using a
+blend factor) that 3.5's "other clients' ships: interpolated/extrapolated
+between received snapshots" will need over the network later — good to
+have already exercised it locally.
+
 ### 3.4 Networking
 
 **Decision: [KryoNet fork](https://github.com/crykn/kryonet) —
@@ -389,6 +413,20 @@ there's a flyable ship to tune it against:
   lerp/spring toward the target position rather than a hard snap is the
   obvious implementation.
 
+**Partially implemented (2026-09-05):** `Client.java` currently does a
+plain exponential-ease camera follow (lerp toward the ship's position
+every frame) as part of the single-player flight prototype — this is
+just enough to make flying testable, **not** the full speed-linked zoom
+model above, which is still unimplemented.
+
+**Window/viewport size — decided:** 1920×1080 (`Lwjgl3Launcher`'s
+`setWindowedMode`, matched by the `OrthographicCamera`'s viewport size in
+`Client.java`) — plain 16:9 HD, chosen over the Liftoff template's
+640×480 default now that there's something worth seeing on screen. No
+resize handling wired up yet (the camera's viewport size is fixed at
+startup, doesn't track window resizes) — not needed until the window is
+actually made user-resizable.
+
 Both are purely client-side presentation — they don't touch simulation
 state and don't need to be networked, unlike the combat-lock timers in
 2.3, which must stay server-authoritative. Every client can run its own
@@ -401,8 +439,55 @@ moving at a different fraction of camera movement (a distant layer
 slower, a near layer faster) to fake depth cheaply — a simple, well-worn
 effect for this genre/viewpoint that reads well for very little cost. A
 third, near-static "very distant" layer is worth trying too, but two
-layers is the committed v1 minimum. No specific art asset decided yet —
-a small tileable star pattern is enough to start iterating with.
+layers is the committed v1 minimum.
+
+**Implementation — decided and implemented (2026-09-05):**
+`ParallaxBackground`/`ParallaxBackground.Layer` (`core`,
+`de.mkoehler.starwars.render`) implement each layer as a single
+seamlessly-**tileable** texture with `TextureWrap.Repeat` set on both
+axes, sampled with a texture-coordinate offset that slides as
+`cameraPosition * parallaxFactor`, and drawn as one quad covering the
+current viewport — not discrete sprite copies tiled next to each other.
+This covers an arbitrarily large/moving world with a single draw call
+per layer and no "ran out of tiles" edge case. It's drawn in its own
+`batch.begin()`/`end()` pass before the Ashley `RenderSystem` runs, so it
+always sits behind every gameplay entity.
+
+- **Art requirement:** every layer's image must tile seamlessly (edges
+  match up), full stop. **Transparency is only required for every layer
+  except the backmost one** — the backmost layer is opaque and fully
+  covers the screen itself (replacing the plain space-black clear
+  color), while every layer drawn on top of it needs transparency so the
+  layers beneath still show through. This is looser than originally
+  assumed; see the real asset below, which is opaque and works fine as
+  the back layer specifically because of this.
+- **Any number of layers, any mix of imagery is fine** — the code takes
+  an arbitrary number of independently-configured `Layer`s. Perceived
+  depth comes from the *relative motion* between layers (different
+  `parallaxFactor`s), not strictly from using different images, though
+  different imagery (e.g. a nebula behind sparser/denser star fields)
+  reads even better when available.
+- **Real asset in place (2026-09-05):** the backmost layer is now
+  `assets/textures/backgrounds/blue_nebula.png` ("Blue_Nebula_08" from
+  Screaming Brain Studios' *Seamless Space Backgrounds* pack, **CC0 1.0 /
+  Public Domain** — no attribution required, license text kept at
+  `assets-raw/backgrounds/blue-nebula/License.txt`, referenced in
+  `README.md`). It's tileable but **not** transparent — exactly why it's
+  the backmost layer. One transparent, procedurally-generated star layer
+  (`PlaceholderStarfield.generate(...)`, same package — still a
+  placeholder, per design.md's "Awaiting from the user" note in
+  CLAUDE.md, until real transparent star art is sourced) is drawn on top
+  of it for closer, faster-scrolling depth. Swapping either texture for
+  something else is a one-line change in `Client.java` —
+  `ParallaxBackground.Layer` doesn't care where its texture came from.
+- **Bug found and fixed (2026-09-05):** the vertical scroll direction
+  was inverted (moving north/south visibly scrolled the background the
+  wrong way, while east/west was always correct) — raw OpenGL texture V
+  runs opposite to world/screen Y, so the V texture-coordinate offset
+  needs negating relative to camera Y (U needs no such negation for X).
+  Fixed in `ParallaxBackground.Layer.render(...)`; caught via actual
+  play-testing, not something a unit test would realistically have
+  caught.
 
 ### 4.3 Ship sprites & animation
 
@@ -454,6 +539,41 @@ pickup mentioned in 2.2).
 **Confirmed constraint:** the game is strictly 2D — every moving visual
 element is a sprite (ships, projectiles, pickups) or a particle effect
 (engine glow, explosions, muzzle flashes). No 3D models anywhere.
+
+**Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
+at runtime; sprites are packed into texture atlases with libGDX's
+`TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain
+`process(...)`/`main()` API — no GUI step needed, it's run as part of the
+dev workflow.
+
+- **Raw source images are committed to the repo** under `assets-raw/`
+  (e.g. `assets-raw/ships/xwing/xwing128_0020.png`), copied in from
+  `R:\StarWars\sprites` on a per-ship, per-frame basis as each is actually
+  used — not a bulk import of the whole local sprite library up front.
+  Committing the source (not just the packed atlas) doubles as backup for
+  art that otherwise only exists on a local drive.
+- **Packed atlases are generated into `assets/textures/`** (e.g.
+  `ships.atlas` + `ships.png`), which is what the game actually loads at
+  runtime via `TextureAtlas`.
+- **`gdx-tools` is a test-scoped dependency** of `lwjgl3` (see
+  `AtlasPacker` under its `src/test`), specifically so it never ends up on
+  the shaded runtime jar's classpath — it's a build-time tool, not
+  something the shipped client needs.
+- **Regenerate the atlas whenever `assets-raw/` changes** with:
+  `mvn -pl lwjgl3 -am install -DskipTests` (installs `core` locally so
+  `lwjgl3` resolves it as a plain module dependency) then
+  `mvn -pl lwjgl3 dependency:build-classpath -Dmdep.outputFile=target/test-cp.txt -DincludeScope=test`
+  and run `AtlasPacker`'s `main()` with a classpath combining
+  `target/classes`, `target/test-classes` and that file's contents — see
+  CLAUDE.md for the exact commands; this isn't wired into a Maven phase on
+  purpose, since it only needs to run when art actually changes, not on
+  every build.
+- TexturePacker automatically groups same-prefix, numbered files (like
+  `xwing128_0020.png`) into one named, indexed region
+  (`atlas.findRegion("xwing/xwing128", 20)`) — convenient if/when the
+  bank-angle frames (above) are added to the same atlas later, since
+  they'd automatically become one indexed animation rather than needing
+  manual region bookkeeping.
 
 ### 4.4 UI framework
 
@@ -597,10 +717,26 @@ once a component is actually being worked on.
       prefilled from local config, error display on failed auth.
 - [ ] **Keybind Setup screen** — press-to-bind capture, localized key-label
       display (see 3.8 implementation note), persists to local config.
-- [ ] **Entity/component model** (Ashley) for ships, projectiles, pickups.
-- [ ] **Newtonian flight model** on Box2D bodies — thrust, rotation
-      (torque), inertia/drag tuning so it feels like flying, not floating
-      forever or drifting like a brick.
+- [x] **Entity/component model (first pass)** — Ashley set up in `core`
+      under `de.mkoehler.starwars.sim`: `PhysicsBodyComponent`,
+      `SpriteComponent`, `PlayerControlledComponent`, plus
+      `PhysicsSystem`/`PlayerInputSystem`/`RenderSystem` and a
+      `ShipFactory`. Only covers one player-controlled ship so far —
+      projectiles/pickups aren't modeled yet.
+- [x] **Newtonian flight model (first pass, 2026-09-05; tuning in
+      progress)** — single-player prototype: WASD thrust/rotate (5.3
+      defaults, not yet driven by remappable keybinds), Box2D
+      force/torque on a fixed-timestep world,
+      `PhysicsConstants.PIXELS_PER_METER` now a real code constant (still
+      the proposed 32px/m default from 3.3, unconfirmed/untuned). Thrust
+      force, turn torque, and linear/angular damping are all placeholder
+      numbers meant to be tuned by feel, not final values — turn torque
+      already bumped 15→22.5 N·m (+50%) after the first play-test felt
+      too sluggish. Rendering interpolates between fixed-timestep physics
+      states (see 3.3's "Fixed-timestep rendering requires interpolation"
+      note) — fixes a real jitter bug found in play-testing, not just a
+      theoretical concern. No networking of ship state yet — this is
+      local-only.
 - [ ] **Power distribution system** — server-authoritative allocation
       state per ship (not networked to other clients), feeding shield
       regen rate / weapon fire rate / engine thrust & agility; the

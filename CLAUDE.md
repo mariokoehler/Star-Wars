@@ -44,6 +44,76 @@ jar to confirm it boots and stays up, not just unit-tested. See design.md
 3.2/3.4/3.5 and §6 for exactly what's done vs. still open (real gameplay
 messages, tick/snapshot rate, client-side prediction, accounts).
 
+**Flight prototype (first milestone) — implemented 2026-09-05:** a
+single-player Newtonian flight prototype now lives in `Client.java`
+(`core`) — one player-controlled X-wing, WASD thrust/rotate (design.md
+5.3 defaults, hardcoded, not yet driven by remappable keybinds), Box2D
+body + Ashley ECS (`de.mkoehler.starwars.sim`: components
+`PhysicsBodyComponent`/`SpriteComponent`/`PlayerControlledComponent`,
+systems `PhysicsSystem`/`PlayerInputSystem`/`RenderSystem`, plus
+`ShipFactory`), a plain camera-ease-follow, and a real texture atlas
+pipeline (see "Texture atlas pipeline" below). No networking of ship
+state yet; no other ships, weapons, or HUD.
+
+**First user play-test (2026-09-05) — feedback applied:** turn torque
+felt sluggish → bumped 15→22.5 N·m (+50%, design.md 5/§6). Speed was
+hard to judge with no visible background → added the parallax starfield
+(design.md 4.2, `de.mkoehler.starwars.render.ParallaxBackground`). This
+is the expected loop for this milestone: implement → the user plays it →
+tune/extend based on actual feel, not further design-on-paper.
+
+**Second play-test round (2026-09-05) — feedback applied:** turn rate
+and speed perception both fine now, no further tuning needed until
+per-ship stats become a real topic (design.md §7 "ship roster"). Found
+and fixed a real bug: vertical parallax scroll was inverted (see
+design.md 4.2's "Bug found and fixed" note — a raw-OpenGL-V-vs-world-Y
+sign issue, only visible by actually flying, not something a unit test
+would have caught). Window/camera bumped to 1920×1080 (design.md 4.1).
+Real nebula art now in as the backmost parallax layer (CC0, see
+"Texture atlas pipeline" below and `README.md`'s "Third-party assets");
+the star-dot layer on top of it is still `PlaceholderStarfield` —
+**still awaiting real transparent star art** from the user for that one
+layer specifically (the nebula layer no longer needs it, see design.md
+4.2's updated transparency rule: only non-backmost layers need
+transparency).
+
+**Third play-test round (2026-09-05) — real bug fixed:** the user
+reported ship jitter specifically at terminal velocity, background
+staying smooth, and correctly intuited it was an interaction between two
+update rates (though not quite the camera specifically). Root cause:
+classic fixed-timestep-without-interpolation jitter — `PhysicsSystem`
+steps Box2D on a fixed 1/60s accumulator, so some render frames get 0
+fixed steps and others get 1+, and drawing the raw post-step body
+position each frame doesn't advance smoothly relative to render time.
+Invisible at low speed (tiny per-step delta), obvious at high speed
+(large per-step delta) — exactly the reported symptom. Fixed by
+interpolating: `PhysicsBodyComponent` now snapshots a pre-step
+position/angle every frame, `PhysicsSystem` exposes an alpha (how far
+the accumulator is toward the next step), and `RenderSystem`/the camera-
+follow target both draw/track the interpolated state instead of the raw
+one. See design.md 3.3's "Fixed-timestep rendering requires
+interpolation" note for the full writeup — this is the same
+"interpolate between two known states via a blend factor" technique
+design.md 3.5 already calls for with networked snapshots, just applied
+locally first.
+
+**Implementation note:** fixing this required `Client.java` to stop
+calling `engine.update(deltaTime)` as a single call, and instead call
+`playerInputSystem`/`physicsSystem`/`renderSystem`'s `update()` directly
+in sequence, with camera-follow and background drawing interleaved
+between the physics and render steps — Ashley's automatic engine update
+doesn't have a hook for "run arbitrary non-system code between two
+systems." Flagged in `Client.java`'s class Javadoc as something to
+revisit (e.g. camera-follow and background as their own Ashley systems)
+once there's more than this one entity/pipeline to coordinate.
+
+**Accepted as-is:** interpolation reduced the jitter significantly but
+didn't eliminate it completely at top speed — the user tried it, judged
+the remainder good enough to live with for now (half-joked it could
+even pass as an intentional near-max-speed camera-shake effect), and
+explicitly said not to keep chasing it further. Don't treat the small
+residual as an open bug to keep fixing without being asked.
+
 Read `design.md` in full before continuing further implementation — this
 project moves in explicit milestones the user signs off on one at a time,
 not open-ended feature sprints.
@@ -52,11 +122,58 @@ not open-ended feature sprints.
 and §4 (UX flow), which renumbered old §4/§5/§6 to §5/§6/§7 — if a
 cross-reference to design.md looks off by one section, that's why.
 
-**Art assets:** the user has usable sprite sets from an earlier,
-sourceless version of this same game, currently at `R:\StarWars\sprites`
-(local machine, **not** in the repo). See design.md §4.3 for the full
-inventory/conventions. Needs copying into `assets/` once rendering work
-starts — don't forget this isn't already in the project.
+**Art assets:** the user has a full sprite library from an earlier,
+sourceless version of this same game, at `R:\StarWars\sprites` (local
+machine). See design.md §4.3 for the full inventory/conventions.
+**Decided: don't bulk-import it.** Copy individual source files into
+`assets-raw/` (repo-tracked) one ship/frame at a time, only as each is
+actually used — the X-wing neutral frame is the only one copied in so
+far. See "Texture atlas pipeline" below for how raw art becomes a
+runtime atlas.
+
+**Background art (2026-09-05):** the backmost parallax layer is real art
+now — `assets-raw/backgrounds/blue-nebula/` /
+`assets/textures/backgrounds/blue_nebula.png`, CC0-licensed (license
+text alongside it, referenced in `README.md`'s "Third-party assets").
+Tileable backgrounds don't need atlas-packing (a shared atlas page would
+bleed at tile edges under `TextureWrap.Repeat`) — they're loaded as a
+plain, dedicated `Texture` straight from `assets/`, same pattern any
+future tileable background should follow.
+
+**Still awaiting from the user:** a real, **transparent**, tileable
+star-dot image for the layer drawn on top of the nebula (the nebula
+itself doesn't need transparency, being the backmost layer — see
+design.md 4.2's transparency rule). When it arrives: same drop-in
+process, `assets-raw/backgrounds/<name>/` + a plain `Texture` swapped in
+for `PlaceholderStarfield.generate(...)` in `Client.java` — one line,
+`ParallaxBackground.Layer` itself doesn't change.
+
+### Texture atlas pipeline (added 2026-09-05)
+
+Raw source PNGs live in `assets-raw/<category>/<name>/...` (repo-tracked,
+doubles as backup for art that only otherwise exists on `R:\`). Generated
+atlases (`.atlas` + page `.png`) live in `assets/textures/`, which is
+what the game actually loads at runtime — never load loose PNGs from
+`assets-raw/` directly. See design.md 4.3 for the full rationale.
+
+Packing uses libGDX's `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`,
+CLI/programmatic, no GUI needed), via `AtlasPacker`
+(`lwjgl3/src/test/java/.../lwjgl3/tools/AtlasPacker.java`) — deliberately
+under `src/test`, not `src/main`, and `gdx-tools` is a **test-scoped**
+dependency, specifically so the packer tool and its dependency never end
+up on the shaded runtime jar's classpath. It's a `main()` method, not a
+`@Test`, so `mvn test` won't run it — it's invoked by hand only when
+`assets-raw/` changes:
+
+```
+mvn -q -pl core -am install -DskipTests
+mvn -pl lwjgl3 dependency:build-classpath -Dmdep.outputFile=target/test-cp.txt -DincludeScope=test
+cd lwjgl3 && java -cp "target/classes;target/test-classes;$(cat target/test-cp.txt)" de.mkoehler.starwars.lwjgl3.tools.AtlasPacker
+```
+
+(See the surefire/exec-maven-plugin gotcha below for why this doesn't
+just run via `exec:java`.) Add a new `pack(...)` call in `AtlasPacker.main()`
+for each new raw asset folder.
 
 ## Build system
 
@@ -68,10 +185,14 @@ client), `server` (`gdx-backend-headless` dedicated server, added
 - `mvn clean package` from repo root builds everything; the runnable client
   jar ends up at `lwjgl3/target/StarWars-<version>.jar`, the runnable
   server jar at `server/target/StarWars-Server-<version>.jar`.
-- `mvn -pl lwjgl3 -am compile exec:exec` runs the client directly.
-- `mvn -pl server -am compile exec:java` runs the dedicated server
-  directly (no `<classpath/>`/exec:exec workaround needed here — headless
-  has no native windowing to fight with, plain `exec:java` is enough).
+- To run the client or server directly (not the packaged jar), `core`
+  must be installed locally first, **then** run the target module *alone*
+  — no `-am` on the exec step itself (see the gotcha below for why):
+  ```
+  mvn install -pl core -am -DskipTests
+  mvn -pl lwjgl3 compile exec:exec
+  mvn -pl server compile exec:java
+  ```
 - `mvn test` runs the JUnit 5 suite (currently in `core`, covering the
   network layer).
 - Java 25, targeted via `maven.compiler.release` in the parent `pom.xml`.
@@ -133,6 +254,30 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   registration calls on each end is what actually guarantees this, and is
   covered by a test (`MessageRegistryTest`) that registers into two
   independent `Kryo` instances and asserts identical ids.
+- **A plugin's top-level `<configuration>` (outside `<executions>`)
+  applies to *every* goal of that plugin invoked directly from the CLI**,
+  not just the one it was written for. `lwjgl3/pom.xml`'s
+  exec-maven-plugin config (the `<classpath/>` special-element trick) is
+  written for `exec:exec`; invoking `exec:java` on the same module picks
+  up that same config and fails (`Cannot store value into array...`)
+  because `exec:java`'s `arguments` parameter doesn't understand the
+  `<classpath/>` marker. Don't try to reuse that block for `exec:java` —
+  the atlas packer above resolves its classpath a different way instead.
+- **Invoking a bare plugin goal (e.g. `exec:java`, `exec:exec`) with
+  `-pl <module> -am` runs it across the whole reactor, not just
+  `<module>`** — it ran (and failed) against the parent `pom`-packaging
+  project first here, before ever reaching the intended module, both for
+  the client (`exec:exec`) and the server (`exec:java`) run commands (the
+  README/this file both had this bug — a user actually hit it running the
+  client). Fix: `mvn install -pl core -am -DskipTests` once to put `core`
+  in the local repo, then invoke the exec goal with plain `-pl <module>`
+  (no `-am`) so the reactor is just that one project.
+  **Tried and does NOT work:** binding the exec-plugin config to a named
+  `<execution id="...">` and invoking `exec:goal@id` — that CLI syntax
+  does not restrict which reactor projects the goal runs against, it
+  still walks the whole reactor and just fails the same way on any
+  project that doesn't declare that execution id. Dropping `-am` on the
+  exec step itself is the actual fix, not `@id`.
 
 ## Git / GitHub
 
@@ -167,6 +312,12 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   the combat-lock timer logic, account creation/auth validation. Skip
   tests for thin glue code or anything that's really just wiring
   libGDX/Scene2D together.
+  **Applied 2026-09-05:** the flight prototype (`de.mkoehler.starwars.sim`)
+  intentionally has no unit tests — `PhysicsSystem`/`PlayerInputSystem`/
+  `RenderSystem` are thin Box2D/Ashley/`Gdx.input` wiring, not standalone
+  logic, matching this rule rather than a coverage gap. Revisit if real
+  testable logic (e.g. a data-driven ship-stats lookup) lands in that
+  package later.
 - **JSON handling — latest Jackson** (`com.fasterxml.jackson.core`/
   `jackson-databind`), for every local/server JSON file described in
   design.md (accounts store, client connection config, client keybinds
@@ -196,3 +347,9 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   explicitly relies on `design.md` + this file to pick the thread back up
   next time — always leave both fully in sync before a session ends,
   don't just describe changes in chat.
+- **The user has Photoshop and is willing to manually edit image assets**
+  (resize, reformat, re-tile, etc.) on request — if a texture/sprite
+  needs some transformation that's easier done by hand than scripted
+  (e.g. resizing an asset, making a background seamlessly tileable,
+  adding an alpha channel), just ask rather than trying to script an
+  equivalent transformation.
