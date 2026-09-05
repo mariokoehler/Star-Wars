@@ -1,14 +1,20 @@
 package de.mkoehler.starwars.net.messages;
 
 /**
- * One ship's position, orientation and velocity at the moment a
- * {@link WorldSnapshotMessage} was built. Not sent on its own, only as an
- * element of that message's ship list.
+ * One ship's position, orientation, velocity, and hull/shield status at the
+ * moment a {@link WorldSnapshotMessage} was built. Not sent on its own,
+ * only as an element of that message's ship list.
  * <p>
  * Velocity is included (not just position/angle) so a client reconciling its
  * own predicted ship against this authoritative state can correct both —
  * correcting position alone while leaving a mismatched velocity in place
  * would just cause the ship to immediately drift out of sync again.
+ * <p>
+ * Hull/shield current and max (design.md 2.5) are included for every ship,
+ * not just the local player's own, even though only the local player's HUD
+ * ({@link de.mkoehler.starwars.render.ShipStatusHud}) reads them today —
+ * broadcasting them for everyone costs little and leaves the door open for
+ * a future enemy health readout without a protocol change.
  */
 public class ShipState {
 
@@ -19,6 +25,10 @@ public class ShipState {
     private float velocityX;
     private float velocityY;
     private float angularVelocity;
+    private float hullCurrent;
+    private float hullMax;
+    private float shieldCurrent;
+    private float shieldMax;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -36,9 +46,14 @@ public class ShipState {
      * @param velocityX       the ship's linear velocity, in meters/second
      * @param velocityY       the ship's linear velocity, in meters/second
      * @param angularVelocity the ship's angular velocity, in radians/second
+     * @param hullCurrent     the ship's current hull health
+     * @param hullMax         the ship's maximum hull health
+     * @param shieldCurrent   the ship's current shield strength
+     * @param shieldMax       the ship's maximum shield capacity
      */
     public ShipState(int playerId, float x, float y, float angle,
-                      float velocityX, float velocityY, float angularVelocity) {
+                      float velocityX, float velocityY, float angularVelocity,
+                      float hullCurrent, float hullMax, float shieldCurrent, float shieldMax) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -46,6 +61,10 @@ public class ShipState {
         this.velocityX = velocityX;
         this.velocityY = velocityY;
         this.angularVelocity = angularVelocity;
+        this.hullCurrent = hullCurrent;
+        this.hullMax = hullMax;
+        this.shieldCurrent = shieldCurrent;
+        this.shieldMax = shieldMax;
     }
 
     /**
@@ -109,5 +128,41 @@ public class ShipState {
      */
     public float getAngularVelocity() {
         return angularVelocity;
+    }
+
+    /**
+     * Returns the ship's current hull health.
+     *
+     * @return the current hull health
+     */
+    public float getHullCurrent() {
+        return hullCurrent;
+    }
+
+    /**
+     * Returns the ship's maximum hull health.
+     *
+     * @return the maximum hull health
+     */
+    public float getHullMax() {
+        return hullMax;
+    }
+
+    /**
+     * Returns the ship's current shield strength.
+     *
+     * @return the current shield strength
+     */
+    public float getShieldCurrent() {
+        return shieldCurrent;
+    }
+
+    /**
+     * Returns the ship's maximum shield capacity.
+     *
+     * @return the maximum shield capacity
+     */
+    public float getShieldMax() {
+        return shieldMax;
     }
 }

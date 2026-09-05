@@ -23,15 +23,18 @@ import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
-import de.mkoehler.starwars.sim.components.HealthComponent;
+import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
+import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
+import de.mkoehler.starwars.sim.systems.ShieldRegenSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 import de.mkoehler.starwars.sim.systems.WeaponSystem;
 
@@ -74,6 +77,7 @@ public class GameNetworkServer extends NetworkServer {
     private final PhysicsSystem physicsSystem = new PhysicsSystem(world);
     private final WeaponSystem weaponSystem = new WeaponSystem(engine, world);
     private final ProjectileLifetimeSystem projectileLifetimeSystem = new ProjectileLifetimeSystem(engine, world);
+    private final ShieldRegenSystem shieldRegenSystem = new ShieldRegenSystem();
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
@@ -90,6 +94,7 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(physicsSystem);
         engine.addSystem(weaponSystem);
         engine.addSystem(projectileLifetimeSystem);
+        engine.addSystem(shieldRegenSystem);
 
         // Without this, a freshly-fired projectile would generate a real Box2D collision
         // against its own shooter's ship the instant it spawns (previously spawned exactly at
@@ -135,11 +140,12 @@ public class GameNetworkServer extends NetworkServer {
 
     /**
      * Advances the simulation by one tick: applies every queued network
-     * action (spawns, input updates, despawns), fires weapons, steps
-     * physics (which is also where projectile-vs-ship contacts are
-     * detected), resolves any hits, expires old projectiles, advances
-     * respawn timers, and broadcasts the resulting world state to every
-     * connected client.
+     * action (spawns, input updates, despawns), steps physics (which is
+     * also where projectile-vs-ship contacts are detected), fires weapons,
+     * resolves any hits (splitting damage between shield and hull, see
+     * {@link ShipDamage}), regenerates shields, expires old projectiles,
+     * advances respawn timers, and broadcasts the resulting world state to
+     * every connected client.
      *
      * @param deltaTime time since the last tick, in seconds
      */
@@ -169,6 +175,7 @@ public class GameNetworkServer extends NetworkServer {
         weaponSystem.update(deltaTime);
 
         resolvePendingHits();
+        shieldRegenSystem.update(deltaTime);
         projectileLifetimeSystem.update(deltaTime);
         tickRespawns(deltaTime);
 
@@ -221,7 +228,8 @@ public class GameNetworkServer extends NetworkServer {
             if (!projectilesToRemove.add(hit.projectile)) {
                 continue; // already resolved this tick (e.g. two simultaneous contact events)
             }
-            hit.ship.getComponent(HealthComponent.class).damage(hit.projectile.getComponent(ProjectileComponent.class).getDamage());
+            float damage = hit.projectile.getComponent(ProjectileComponent.class).getDamage();
+            ShipDamage.apply(hit.ship.getComponent(ShieldComponent.class), hit.ship.getComponent(HullComponent.class), damage);
             shipsToCheck.add(hit.ship);
         }
         pendingHits.clear();
@@ -231,7 +239,7 @@ public class GameNetworkServer extends NetworkServer {
             engine.removeEntity(projectile);
         }
         for (Entity ship : shipsToCheck) {
-            if (ship.getComponent(HealthComponent.class).isDestroyed()) {
+            if (ship.getComponent(HullComponent.class).isDestroyed()) {
                 handleShipDestroyed(ship);
             }
         }
@@ -338,10 +346,14 @@ public class GameNetworkServer extends NetworkServer {
         ShipState[] shipStates = new ShipState[shipsByPlayerId.size()];
         int i = 0;
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
-            Body body = entry.getValue().getComponent(PhysicsBodyComponent.class).getBody();
+            Entity ship = entry.getValue();
+            Body body = ship.getComponent(PhysicsBodyComponent.class).getBody();
+            HullComponent hull = ship.getComponent(HullComponent.class);
+            ShieldComponent shield = ship.getComponent(ShieldComponent.class);
             shipStates[i++] = new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
-                body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity());
+                body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
+                hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax());
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(

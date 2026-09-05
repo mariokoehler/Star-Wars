@@ -349,6 +349,109 @@ throwing. The Swing UI/mouse/keyboard wiring itself is not unit-tested
 instead by launching the editor and the actual game (server + client)
 with no `.meta.json` present, confirming zero exceptions either way.
 
+### 2.6 Shield & hull damage model, ship type config, and the status HUD (2026-09-05)
+
+Ships previously had a single `HealthComponent` pool taking full damage per
+hit. This milestone adds a regenerating **shield** in front of a
+non-regenerating **hull** — the pairing the power-distribution section
+(2.2) already anticipated ("Shields — more power = faster shield
+regeneration") — plus a corner HUD widget showing both, using art the user
+provided (`assets-raw/hud/`: a holographic panel background, a circular
+shield-ring overlay, and a green-to-red hull-silhouette gradient overlay,
+all sharing one 512x512 canvas so they align with no offset math).
+
+**Damage split — as specified, implemented in `ShipDamage.apply(...)`:**
+the shield absorbs a share of each hit equal to its *current fraction of
+capacity* — 100% shield takes the full hit, 90% shield takes 90% (10%
+bleeds to hull), 0% shield takes none (hull takes it all). One case the
+spec didn't explicitly cover: if the shield's designated share exceeds
+what's actually left of it (only possible once nearly depleted — damage
+has to exceed the shield's *max* capacity for this to trigger at all,
+regardless of current fraction), the excess isn't absorbed for free — it
+bleeds through to the hull too, so a hit is never partially "lost." Pure
+function, unit-tested (`ShipDamageTest`, 5 cases including the exact 90/10
+example above and the overflow case) — a good instance of this project's
+"logic-heavy code gets tests" convention (3.9/CLAUDE.md).
+
+**Shield regen — flat rate for now:** `ShieldComponent.regenerate(...)`
+adds a fixed points/second rate every tick via a new
+`ShieldRegenSystem`, run after that tick's hits are resolved. Standing in
+for the eventual power-distribution-driven rate (2.2's "Shields"
+allocation) the same way `WeaponStats`' fixed cooldown stands in for the
+capacitor mechanic — revisit once power distribution exists. **No
+regen-delay-after-hit** (a common shooter convention — shields pause
+regenerating for a few seconds after taking damage) — deliberately not
+built until it's asked for; shields currently start regenerating again
+the very next tick after a hit.
+
+**`ShipType` enum, introduced ahead of a second ship type actually
+existing.** A single `XWING` value so far, but every ship-type-keyed
+resource now hangs off it by convention: `shipdata/<resourceName>.stats.json`
+(balance numbers, see below), `shipdata/<resourceName>.meta.json`
+(hitbox/attachment points, 2.5, unchanged), and
+`textures/hud/<resourceName>_hull.png` (HUD hull silhouette art). The
+background panel and shield ring are generic HUD chrome, shared by every
+ship type — only the hull silhouette is ship-specific art.
+
+**`ShipStats` now loads a required `ShipTypeConfig` per ship type**
+(`shipdata/<name>.stats.json`, throws if missing — unlike the optional
+sprite metadata, these numbers are load-bearing for basic simulation, not
+a nice-to-have) alongside the existing optional sprite metadata. Radius/
+thrust/torque/hull-max moved out of hardcoded Java constants into this
+JSON with their exact existing values preserved (200N/150 N·m/2m/100 —
+**still don't recalculate these toward a formula, they're tuned by
+feel**) — plus four new numbers: shield max capacity, shield recharge
+rate (both untuned placeholders, 100 and 5/sec, pending a real balancing
+pass), and the HUD clip pixel range for each of the shield and hull
+overlays (see below). `ShipSpriteMetadataLoader`'s classpath-loading logic
+was extracted into a small generic `JsonResourceLoader` so `ShipTypeConfig`
+doesn't duplicate it.
+
+**HUD clipping — a bottom-anchored "fuel gauge."** Each overlay image's
+*actually-visible* content only occupies part of the shared 512px canvas
+(the rest is transparent padding kept for alignment) — the shield ring
+between pixel rows 130–437, the X-wing hull silhouette between 175–377,
+both counted from the top (`ShipTypeConfig`'s `hud*ClipTopPixel`/
+`hud*ClipBottomPixel`, differing per ship type since each ship's art
+occupies a different vertical extent). At 100% the full range renders; at
+a lower fraction, only the *bottom* portion of that range renders — the
+revealed slice's top edge moves down toward the fixed bottom edge as the
+fraction drops, like a fuel gauge draining from the top. The actual pixel
+math (which rows to reveal, where the resulting slice lands on screen) is
+pulled into a pure `HudGaugeClip.compute(...)` specifically so it's
+unit-testable without a GL context (a `Texture` can't be constructed
+outside a running libGDX app, unlike this class's plain-float inputs) —
+same split as `SpriteCoordinates` in the dev-tools editor.
+`HudGaugeClipTest` (6 cases) checks full/zero/half fractions, that every
+fraction's revealed slice shares the same bottom screen edge, and
+fraction clamping. `ShipStatusHud` (in `core.render`, alongside
+`ParallaxBackground`) does the actual texture loading/drawing on top of
+that math — background panel, then shield ring, then hull silhouette, all
+at the same position/size.
+
+**Client rendering:** a second, screen-space `OrthographicCamera`
+(`hudCamera`, un-zoomed/un-panned, updated on resize) is used for a
+second `batch.begin()`/`end()` pass after the world-space one, rather
+than swapping `SpriteBatch`'s projection matrix mid-batch — safer than
+relying on an implicit flush. The widget sits at a fixed bottom-left
+screen position (220px, 24px margin — untuned placeholders), showing only
+the **local player's own** hull/shield (broadcast for every ship in
+`ShipState`, so a future enemy-health readout needs no protocol change,
+but only the local player's is rendered today). Defaults to full
+hull/shield immediately on spawn/respawn (before the first
+`WorldSnapshotMessage` arrives) so the widget doesn't flash empty for a
+frame.
+
+**Verified:** full `mvn clean verify` (28 tests) across all 4 modules; a
+real server+client boot with zero exceptions; and a screenshot of the
+actual running client confirming the widget renders correctly at full
+health (panel, full blue shield ring, full green hull gradient, all
+aligned). **Not verified: the partial-clip case under real damage** —
+confirmed only via `HudGaugeClipTest`'s pure-math cases, not by watching
+the gauge actually drain in a live dogfight (no way to simulate real
+combat input from here) — needs the user to actually take a hit and
+check it looks right.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -1208,7 +1311,11 @@ once a component is actually being worked on.
       a finished combat system.
 - [ ] **Ship roster (data-driven)** — stats (mass, thrust, turn rate, hit
       points, weapon loadout) per ship, starting with a small roster (2–3
-      ships) before expanding.
+      ships) before expanding. **Groundwork laid 2026-09-05:** a
+      `ShipType` enum now exists (one value, `XWING`) and per-type stats
+      already load from JSON (`ShipTypeConfig`, see 2.6) — adding a
+      second ship type is now "add an enum value + a `.stats.json`
+      (+ `.meta.json`)," not a code change to every consumer.
 - [ ] **Ship Selection screen** — lists ships unlocked by current XP.
 - [x] **Client-side prediction & reconciliation (2026-09-05)** — see 3.5
       for the full writeup (local Box2D body, `ShipControlSystem.applyInput`
@@ -1226,9 +1333,12 @@ once a component is actually being worked on.
 - [ ] **UI framework integration** — add VisUI on top of Scene2D (4.4);
       build out the Connect Dialog, Keybind Setup, and Ship Selection
       screens against it.
-- [ ] **HUD** — health, shield, target/radar or minimap, kill feed,
-      scoreboard. (No power-distribution readout for *other* players —
-      that's intentionally hidden, see 2.2.)
+- [x] **HUD (hull/shield status widget, first pass, 2026-09-05)** — see
+      2.6 for the full writeup: a corner widget showing the local player's
+      current hull and shield as clipped "fuel gauge" overlays. Still
+      open: target/radar or minimap, kill feed, scoreboard. (No
+      power-distribution readout for *other* players — that's
+      intentionally hidden, see 2.2.)
 - [ ] **Death Screen** — random Star Wars quote + matching image; needs a
       content pool (see 6.1) and ENTER-to-continue handling.
 - [ ] **XP & progression** — award XP per match/kill, unlock additional

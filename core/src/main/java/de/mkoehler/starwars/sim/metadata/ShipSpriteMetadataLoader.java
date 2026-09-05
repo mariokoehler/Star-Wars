@@ -5,8 +5,6 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
 import java.util.Optional;
 
 /**
@@ -38,14 +36,7 @@ public final class ShipSpriteMetadataLoader {
      * @throws UncheckedIOException if the resource exists but isn't valid JSON
      */
     public static Optional<ShipSpriteMetadata> loadFromClasspath(String resourcePath) {
-        try (InputStream stream = ShipSpriteMetadataLoader.class.getClassLoader().getResourceAsStream(resourcePath)) {
-            if (stream == null) {
-                return Optional.empty();
-            }
-            return Optional.of(MAPPER.readValue(stream, ShipSpriteMetadata.class));
-        } catch (IOException e) {
-            throw new UncheckedIOException("Failed to load ship sprite metadata from " + resourcePath, e);
-        }
+        return JsonResourceLoader.loadFromClasspath(resourcePath, ShipSpriteMetadata.class);
     }
 
     /**

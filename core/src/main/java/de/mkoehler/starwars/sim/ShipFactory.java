@@ -10,11 +10,12 @@ import com.badlogic.gdx.physics.box2d.FixtureDef;
 import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.Shape;
 import com.badlogic.gdx.physics.box2d.World;
-import de.mkoehler.starwars.sim.components.HealthComponent;
+import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
 
@@ -57,7 +58,8 @@ public final class ShipFactory {
         entity.add(new PhysicsBodyComponent(body));
         entity.add(new PlayerControlledComponent(stats.getThrustForce(), stats.getTurnTorque()));
         entity.add(new NetworkInputComponent());
-        entity.add(new HealthComponent(stats.getMaxHealth()));
+        entity.add(new HullComponent(stats.getMaxHealth()));
+        entity.add(new ShieldComponent(stats.getShieldMaxCapacity(), stats.getShieldRechargePerSecond()));
         entity.add(new WeaponComponent(WeaponStats.BLASTER));
         engine.addEntity(entity);
         body.setUserData(entity);

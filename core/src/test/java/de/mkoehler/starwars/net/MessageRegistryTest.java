@@ -114,8 +114,8 @@ class MessageRegistryTest {
     void worldSnapshotMessageSurvivesRoundTrip() {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
-                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f),
-                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f)
+                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f),
+                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f)
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 0.5f)
@@ -125,6 +125,10 @@ class MessageRegistryTest {
         assertEquals(1, copy.getShips()[0].getPlayerId());
         assertEquals(10f, copy.getShips()[0].getX());
         assertEquals(2f, copy.getShips()[0].getVelocityY());
+        assertEquals(80f, copy.getShips()[0].getHullCurrent());
+        assertEquals(100f, copy.getShips()[0].getHullMax());
+        assertEquals(60f, copy.getShips()[0].getShieldCurrent());
+        assertEquals(100f, copy.getShips()[0].getShieldMax());
         assertEquals(-1.2f, copy.getShips()[1].getAngle());
         assertEquals(-0.3f, copy.getShips()[1].getAngularVelocity());
         assertEquals(1, copy.getProjectiles().length);

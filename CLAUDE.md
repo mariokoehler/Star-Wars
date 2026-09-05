@@ -452,6 +452,71 @@ number twice. **General rule for later:** never call a
 row for two ports that need to be distinct — get both from open sockets
 first, close both after.
 
+**Shield/hull damage model + hull/shield status HUD — implemented
+2026-09-05.** See design.md 2.6 for the full writeup. User provided HUD
+art (`assets-raw/hud/`: holographic panel background, circular shield
+ring, green-to-red X-wing hull gradient — all 512x512, sharing one canvas
+for alignment) plus the exact damage-split spec (shield absorbs its
+current-fraction share of each hit, e.g. 90% shield → 90/10 split) and
+regen model (regenerating shield, non-regenerating hull beneath it).
+Summary of what's new:
+
+- **`ShipType` enum** (one value, `XWING`) — introduced now, ahead of a
+  second ship type actually existing, so ship-type-keyed resources
+  (`shipdata/<name>.stats.json`, `.meta.json`, `textures/hud/<name>_hull.png`)
+  have one shared identifier instead of every consumer hardcoding "xwing".
+- **`ShipTypeConfig`** (new Jackson bean, `shipdata/xwing.stats.json`,
+  **required** unlike the optional sprite metadata) now holds what used
+  to be hardcoded Java constants — radius/thrust/torque/hull-max, exact
+  values preserved (200N/150 N·m/2m/100, still don't recalculate these
+  toward a formula) — plus 6 new numbers: shield max capacity, shield
+  recharge rate (both untuned placeholders: 100, 5/sec), and 4 HUD clip
+  pixel coordinates (2 per overlay: shield 130–437, hull 175–377, both
+  out of a 512px canvas). Extracted `ShipSpriteMetadataLoader`'s
+  classpath-loading into a small generic `JsonResourceLoader` so this
+  didn't duplicate it.
+- **`HealthComponent` renamed to `HullComponent`**; new `ShieldComponent`
+  (current/max/rechargePerSecond). New `ShipDamage.apply(shield, hull,
+  damage)` — a pure, unit-tested (`ShipDamageTest`, 5 cases) function
+  implementing the proportional split, including a self-decided overflow
+  rule the spec didn't cover: if the shield's designated share exceeds
+  what's left of it, the excess bleeds through to hull too rather than
+  being silently absorbed for free. New `ShieldRegenSystem` (flat rate,
+  no regen-delay-after-hit — a common enhancement, deliberately not
+  built until asked for), run in `GameNetworkServer.tick()` after hits
+  resolve.
+- **`ShipState` gained 4 fields** (hull/shield current/max), broadcast for
+  every ship (not just the local player) even though only the local
+  player's HUD reads them today — cheap now, avoids a protocol change
+  for a future enemy-health readout.
+- **New `core.render.ShipStatusHud`** draws the widget: background panel,
+  then a clipped shield ring, then a clipped hull silhouette, all at the
+  same position — clipping is a bottom-anchored "fuel gauge": at 100% the
+  full authored pixel range renders, below that only the *bottom* portion
+  does, so the visible slice shrinks from the top down as health drops.
+  The actual pixel math is a pure `HudGaugeClip.compute(...)`, pulled out
+  specifically so it's unit-testable without a GL context (a `Texture`
+  needs a running libGDX app; plain floats don't) — same
+  logic/rendering split as `SpriteCoordinates` in the dev-tools editor.
+  `HudGaugeClipTest` (6 cases) covers full/zero/half fractions, the
+  shared bottom screen edge across every fraction, and clamping.
+- **Client** uses a second, screen-space `OrthographicCamera` (updated on
+  resize) and a second `batch.begin()/end()` pass after the world-space
+  one to draw the HUD — safer than swapping `SpriteBatch`'s projection
+  matrix mid-batch. Widget sits at a fixed bottom-left position (220px,
+  24px margin, untuned placeholders); defaults to full hull/shield right
+  at spawn/respawn so it doesn't flash empty before the first
+  `WorldSnapshotMessage` arrives.
+- **Verified:** full `mvn clean verify` (28 tests) across all 4 modules;
+  a real server+client boot, zero exceptions; and — since I can't drive
+  keyboard/mouse input into a running LWJGL window from here — a
+  PowerShell screen-capture of the actual running client, confirming the
+  widget renders correctly at full health (panel + full shield ring +
+  full green hull gradient, all aligned). **Not verified this way: the
+  partial-clip case under real damage** — only checked via
+  `HudGaugeClipTest`'s pure math, not an actual live gauge drain; needs
+  the user to take a real hit and confirm it looks right.
+
 **Note:** `design.md` §4 was inserted between the old §3 (Architecture)
 and §4 (UX flow), which renumbered old §4/§5/§6 to §5/§6/§7 — if a
 cross-reference to design.md looks off by one section, that's why.

@@ -28,6 +28,7 @@ import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
+import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
@@ -83,6 +84,11 @@ public class Client extends ApplicationAdapter {
 
     private static final Color OTHER_SHIP_TINT = new Color(0.6f, 0.85f, 1f, 1f);
 
+    /** Size, in screen pixels, of the ship status HUD widget - placeholder until tuned by feel. */
+    private static final float HUD_STATUS_SIZE = 220f;
+    /** Screen-pixel margin from the bottom-left corner for the ship status HUD widget. */
+    private static final float HUD_STATUS_MARGIN = 24f;
+
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
     private TextureRegion xwingRegion;
@@ -90,8 +96,10 @@ public class Client extends ApplicationAdapter {
     private TextureRegion ownProjectileRegion;
     private TextureRegion enemyProjectileRegion;
     private ParallaxBackground background;
+    private ShipStatusHud statusHud;
     private OrthographicCamera camera;
     private Viewport viewport;
+    private OrthographicCamera hudCamera;
 
     private NetworkClient networkClient;
     private final Queue<Runnable> pendingUpdates = new ConcurrentLinkedQueue<>();
@@ -105,6 +113,10 @@ public class Client extends ApplicationAdapter {
     private float myPreviousX;
     private float myPreviousY;
     private float myPreviousAngle;
+    private float myHullCurrent;
+    private float myHullMax;
+    private float myShieldCurrent;
+    private float myShieldMax;
 
     @Override
     public void create() {
@@ -122,10 +134,16 @@ public class Client extends ApplicationAdapter {
                 Gdx.files.internal("textures/backgrounds/blue_nebula.png")), 0.1f),
             new ParallaxBackground.Layer(PlaceholderStarfield.generate(512, 120, 1L), 0.4f)
         );
+        statusHud = new ShipStatusHud();
 
         camera = new OrthographicCamera();
         viewport = new ScreenViewport(camera);
         viewport.update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
+
+        // A separate, un-zoomed, un-panned camera for the HUD layer - screen pixel coordinates
+        // with (0,0) at the bottom-left, unrelated to the world camera's position/zoom.
+        hudCamera = new OrthographicCamera();
+        hudCamera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         connectToServer();
     }
@@ -172,6 +190,11 @@ public class Client extends ApplicationAdapter {
         myPreviousX = myBody.getPosition().x;
         myPreviousY = myBody.getPosition().y;
         myPreviousAngle = myBody.getAngle();
+
+        // Full hull/shield until the first WorldSnapshotMessage arrives - otherwise the HUD
+        // would flash empty for a frame or two right after spawning/respawning.
+        myHullMax = myHullCurrent = ShipStats.XWING.getMaxHealth();
+        myShieldMax = myShieldCurrent = ShipStats.XWING.getShieldMaxCapacity();
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -189,6 +212,10 @@ public class Client extends ApplicationAdapter {
         for (ShipState state : snapshot.getShips()) {
             if (state.getPlayerId() == myPlayerId) {
                 reconcileWithServer(state);
+                myHullCurrent = state.getHullCurrent();
+                myHullMax = state.getHullMax();
+                myShieldCurrent = state.getShieldCurrent();
+                myShieldMax = state.getShieldMax();
                 continue;
             }
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
@@ -278,6 +305,24 @@ public class Client extends ApplicationAdapter {
         drawLocalShip();
         drawProjectiles();
         batch.end();
+
+        // Separate begin/end pair with the HUD's own screen-space camera - SpriteBatch doesn't
+        // reliably re-flush already-queued sprites if the projection matrix were swapped
+        // mid-batch instead.
+        batch.setProjectionMatrix(hudCamera.combined);
+        batch.begin();
+        drawHud();
+        batch.end();
+    }
+
+    private void drawHud() {
+        if (myBody == null) {
+            return;
+        }
+        float hullFraction = myHullMax > 0f ? myHullCurrent / myHullMax : 0f;
+        float shieldFraction = myShieldMax > 0f ? myShieldCurrent / myShieldMax : 0f;
+        statusHud.render(batch, ShipStats.XWING, HUD_STATUS_MARGIN, HUD_STATUS_MARGIN, HUD_STATUS_SIZE,
+            hullFraction, shieldFraction);
     }
 
     private void predictLocalShip(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, float deltaTime) {
@@ -384,6 +429,7 @@ public class Client extends ApplicationAdapter {
         // false: don't recenter the camera on the world origin, keep wherever it's currently
         // following the ship - only the visible area changes, matching the current position.
         viewport.update(width, height, false);
+        hudCamera.setToOrtho(false, width, height);
     }
 
     @Override
@@ -398,6 +444,7 @@ public class Client extends ApplicationAdapter {
         shipsAtlas.dispose();
         projectilesAtlas.dispose();
         background.dispose();
+        statusHud.dispose();
     }
 
     /**
