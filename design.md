@@ -419,13 +419,26 @@ every frame) as part of the single-player flight prototype — this is
 just enough to make flying testable, **not** the full speed-linked zoom
 model above, which is still unimplemented.
 
-**Window/viewport size — decided:** 1920×1080 (`Lwjgl3Launcher`'s
-`setWindowedMode`, matched by the `OrthographicCamera`'s viewport size in
-`Client.java`) — plain 16:9 HD, chosen over the Liftoff template's
-640×480 default now that there's something worth seeing on screen. No
-resize handling wired up yet (the camera's viewport size is fixed at
-startup, doesn't track window resizes) — not needed until the window is
-actually made user-resizable.
+**Window/viewport size — decided:** 1920×1080 initially
+(`Lwjgl3Launcher`'s `setWindowedMode`) — plain 16:9 HD, chosen over the
+Liftoff template's 640×480 default now that there's something worth
+seeing on screen.
+
+**Resize behavior — decided and implemented (2026-09-05):** the window
+is user-resizable (libGDX's default), and resizing to a different aspect
+ratio must **not** stretch/distort the rendered content — the player
+should just see more (or less) of the world, matching the "more world
+visible, no distortion" way most 2D games handle this. Implemented with
+libGDX's `ScreenViewport` wrapping the `OrthographicCamera` in
+`Client.java`, updated from `resize(width, height)`. This is a natural
+fit specifically because our "world" units already *are* screen pixels
+(everything is scaled through `PhysicsConstants.PIXELS_PER_METER` before
+reaching the camera) — `ScreenViewport` keeps that same 1:1 pixel
+mapping and just grows/shrinks the visible area with the window, rather
+than rescaling content the way `StretchViewport` (the bug's cause) or
+`FitViewport` (would add letterboxing instead) do. `viewport.update(...,
+false)` on resize deliberately doesn't recenter the camera, so it keeps
+following the ship rather than snapping back to the world origin.
 
 Both are purely client-side presentation — they don't touch simulation
 state and don't need to be networked, unlike the combat-lock timers in

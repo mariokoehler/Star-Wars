@@ -114,6 +114,22 @@ even pass as an intentional near-max-speed camera-shake effect), and
 explicitly said not to keep chasing it further. Don't treat the small
 residual as an open bug to keep fixing without being asked.
 
+**Fourth play-test round (2026-09-05) — real bug fixed:** resizing the
+window to a different aspect ratio stretched/distorted both the ship and
+background. Cause: the `OrthographicCamera` was created with a fixed
+1920×1080 viewport and nothing updated it on resize — `Client` didn't
+override `resize(...)` at all, so the camera's projection kept assuming
+1920×1080 while the actual framebuffer became a different shape,
+distorting everything drawn through it. Fixed with libGDX's
+`ScreenViewport` (wrapping the same camera, updated from a new
+`resize(width, height)` override) rather than hand-rolling the math —
+see design.md 4.1's "Resize behavior" note for why `ScreenViewport`
+specifically (not `FitViewport`/`StretchViewport`) is the right fit given
+our pixel-space world convention. `viewport.update(w, h, false)` — the
+`false` matters, it stops the camera from recentering to the world
+origin on every resize, which would otherwise fight the camera-follow
+logic.
+
 Read `design.md` in full before continuing further implementation — this
 project moves in explicit milestones the user signs off on one at a time,
 not open-ended feature sprints.

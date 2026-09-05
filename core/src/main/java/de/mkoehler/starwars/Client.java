@@ -14,6 +14,8 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Box2D;
 import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.utils.ScreenUtils;
+import com.badlogic.gdx.utils.viewport.ScreenViewport;
+import com.badlogic.gdx.utils.viewport.Viewport;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.sim.PhysicsConstants;
@@ -54,6 +56,7 @@ public class Client extends ApplicationAdapter {
     private PhysicsSystem physicsSystem;
     private RenderSystem renderSystem;
     private OrthographicCamera camera;
+    private Viewport viewport;
     private Entity playerShip;
 
     @Override
@@ -81,7 +84,13 @@ public class Client extends ApplicationAdapter {
         engine.addSystem(playerInputSystem);
         engine.addSystem(physicsSystem);
 
-        camera = new OrthographicCamera(1920, 1080);
+        // ScreenViewport rather than a fixed-size camera: our "world" units already are
+        // screen pixels (via PhysicsConstants.PIXELS_PER_METER), so 1:1 mapping the camera's
+        // viewport to the actual window size on resize shows more/less world with no
+        // stretching or letterboxing, instead of distorting a fixed 1920x1080 view.
+        camera = new OrthographicCamera();
+        viewport = new ScreenViewport(camera);
+        viewport.update(Gdx.graphics.getWidth(), Gdx.graphics.getHeight(), true);
         renderSystem = new RenderSystem(batch, camera, physicsSystem);
         engine.addSystem(renderSystem);
 
@@ -124,6 +133,13 @@ public class Client extends ApplicationAdapter {
         camera.position.x += (targetX - camera.position.x) * lerp;
         camera.position.y += (targetY - camera.position.y) * lerp;
         camera.update();
+    }
+
+    @Override
+    public void resize(int width, int height) {
+        // false: don't recenter the camera on the world origin, keep wherever it's currently
+        // following the ship - only the visible area changes, matching the current position.
+        viewport.update(width, height, false);
     }
 
     @Override
