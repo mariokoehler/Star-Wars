@@ -16,6 +16,7 @@
     <module>core</module>
     <module>lwjgl3</module>
     <module>server</module>
+    <module>dev-tools</module>
   </modules>
 
   <properties>
@@ -30,6 +31,8 @@
     <kryonetVersion>2.22.9</kryonetVersion>
     <!-- JUnit 5, see CLAUDE.md "Code style & testing" -->
     <junitVersion>5.14.4</junitVersion>
+    <!-- JSON handling, see design.md 3.9 -->
+    <jacksonVersion>2.22.2</jacksonVersion>
   </properties>
 
   <!-- The KryoNet fork is only published on JitPack, not Maven Central. -->
@@ -52,6 +55,11 @@
         <artifactId>junit-jupiter</artifactId>
         <version>${junitVersion}</version>
         <scope>test</scope>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>${jacksonVersion}</version>
       </dependency>
       <dependency>
         <groupId>org.lwjgl</groupId>

@@ -149,8 +149,6 @@ public class GameNetworkServer extends NetworkServer {
             action.run();
         }
 
-        weaponSystem.update(deltaTime);
-
         // Reapply every ship's current input before each individual physics step, not once
         // per tick - the server ticks at 30Hz but physics steps at a fixed 60Hz, so most
         // ticks need two steps, and Box2D clears applied forces after every step. Applying
@@ -159,6 +157,16 @@ public class GameNetworkServer extends NetworkServer {
         // play-testing that felt like "flying in slow motion" compared to the unnetworked
         // prototype, plus knock-on jitter from reconciliation fighting that speed gap.
         physicsSystem.update(deltaTime, () -> shipControlSystem.update(0f));
+
+        // Fires weapons *after* this tick's physics stepping, not before: a projectile created
+        // here won't be moved by this tick's world.step() calls at all, so the position first
+        // broadcast for it is its exact spawn point. Firing before physics stepping (the
+        // original order) let a freshly-spawned projectile get swept forward by however many
+        // physics steps this tick ran (~2, at 30Hz tick / 60Hz step) before ever being
+        // broadcast - found via play-testing: shots visually originated well ahead of their
+        // attachment point, in a straight line along the correct facing, which pointed at "it
+        // moved before its first render" rather than a spawn-position bug.
+        weaponSystem.update(deltaTime);
 
         resolvePendingHits();
         projectileLifetimeSystem.update(deltaTime);

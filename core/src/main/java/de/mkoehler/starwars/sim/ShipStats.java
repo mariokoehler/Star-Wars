@@ -1,5 +1,10 @@
 package de.mkoehler.starwars.sim;
 
+import de.mkoehler.starwars.sim.metadata.ShipSpriteMetadata;
+import de.mkoehler.starwars.sim.metadata.ShipSpriteMetadataLoader;
+
+import java.util.Optional;
+
 /**
  * Per-ship-type tuning values shared between the server (which needs them to
  * build a Box2D body and apply forces) and the client (which needs the same
@@ -19,18 +24,20 @@ public final class ShipStats {
      * in-universe reference, just what played well. Max health is a
      * placeholder pending real weapon-vs-armor balancing.
      */
-    public static final ShipStats XWING = new ShipStats(2f, 200f, 150f, 100f);
+    public static final ShipStats XWING = new ShipStats("xwing", 2f, 200f, 150f, 100f);
 
     private final float radiusMeters;
     private final float thrustForce;
     private final float turnTorque;
     private final float maxHealth;
+    private final Optional<ShipSpriteMetadata> spriteMetadata;
 
-    private ShipStats(float radiusMeters, float thrustForce, float turnTorque, float maxHealth) {
+    private ShipStats(String shipName, float radiusMeters, float thrustForce, float turnTorque, float maxHealth) {
         this.radiusMeters = radiusMeters;
         this.thrustForce = thrustForce;
         this.turnTorque = turnTorque;
         this.maxHealth = maxHealth;
+        this.spriteMetadata = ShipSpriteMetadataLoader.loadFromClasspath("shipdata/" + shipName + ".meta.json");
     }
 
     /**
@@ -67,5 +74,18 @@ public final class ShipStats {
      */
     public float getMaxHealth() {
         return maxHealth;
+    }
+
+    /**
+     * Returns this ship's authored sprite metadata (hitbox polygon and named
+     * attachment points, see design.md 2.4/4.3), if a
+     * {@code shipdata/<name>.meta.json} has been created for it via the
+     * {@code dev-tools} sprite metadata editor.
+     *
+     * @return the metadata, or empty if none has been authored yet — callers
+     * should fall back to the default circular hitbox / fixed spawn offsets
+     */
+    public Optional<ShipSpriteMetadata> getSpriteMetadata() {
+        return spriteMetadata;
     }
 }

@@ -35,6 +35,12 @@
       <artifactId>kryonet</artifactId>
     </dependency>
     <dependency>
+      <!-- See design.md 3.9 - the shared JSON library, first real usage: ship sprite
+           metadata (hitbox polygon, attachment points, see design.md 4.3/2.4). -->
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>

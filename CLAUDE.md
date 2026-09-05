@@ -381,6 +381,77 @@ Read `design.md` in full before continuing further implementation — this
 project moves in explicit milestones the user signs off on one at a time,
 not open-ended feature sprints.
 
+**Polygon hitboxes & sprite attachment points — implemented 2026-09-05.**
+See design.md 2.5 for the full writeup. New `dev-tools` Maven module (a
+plain Swing app, no libGDX — run with `mvn -pl dev-tools compile
+exec:java`, `core` must be `mvn install`ed first same as `server`) for
+visually authoring, per ship sprite, a convex hitbox polygon and named
+attachment points (`PROJECTILE`/`ENGINE`/`LIGHT`/`DAMAGE_SMOKE`), saved as
+`<name>.meta.json` next to the sprite. New `core.sim.metadata` package
+(`PixelPoint`, `ShipSpriteMetadata`, `ShipSpriteMetadataLoader`) is
+Jackson's first real usage in this codebase (design.md 3.9). `ShipStats`
+now loads `assets/shipdata/<name>.meta.json` (classpath) into an
+`Optional<ShipSpriteMetadata>`; `ShipFactory.createBody` builds a
+`PolygonShape` from it (≥3 points) instead of the old `CircleShape`, and
+`WeaponSystem` spawns one projectile per `PROJECTILE` attachment point
+instead of the old single fixed offset — both fall back to the previous
+behavior when no metadata exists, which is every ship as of this writing
+(no `.meta.json` has actually been authored yet, this milestone is
+data-model + wiring only). `server`'s POM gained a `<resources>` block
+bundling `assets/` (it didn't need sprite data before). Verified: full
+`mvn clean verify` across all 4 modules (13 core tests +
+`SpriteCoordinatesTest`'s 4), and a real server+client boot with no
+metadata present — zero exceptions, confirming the fallback path.
+**Editor tried by the user (2026-09-05), works well.** They authored the
+real X-wing hitbox (7-point convex polygon) and all four attachment-point
+types at `assets/shipdata/xwing.meta.json` — filename matched the
+`shipdata/<name>.meta.json` convention exactly, no rename needed. One
+usability piece of feedback applied: the sprite was still too small to
+place points precisely at 2x, so `SpriteCanvas.ZOOM` is now **4x** (was
+2x) — a single constant, nothing else needed to change since every
+paint/pick/mouse calculation already went through it. Re-verified with
+this real metadata in place: `mvn clean verify` green across all 4
+modules, and a real server+client boot — the server now actually builds
+the 7-point `PolygonShape` and the client's local prediction body does
+too, zero exceptions either side. Not yet playtested for feel (does the
+tighter polygon hitbox actually feel different in a real dogfight, do
+the two `PROJECTILE` points fire visibly from both wingtip cannons) —
+that needs the user actually flying/shooting, same as previous combat
+verification steps.
+
+**Real bug found via play-testing the authored X-wing metadata, fixed
+same day: projectiles appeared to spawn translated forward of their
+attachment point.** `GameNetworkServer.tick()` called
+`weaponSystem.update(...)` *before* `physicsSystem.update(...)` — so a
+projectile created this tick got swept forward by however many physics
+steps this tick ran (~2, at 30Hz tick / 60Hz physics step) before its
+position was ever broadcast, ≈1.7m for the 50m/s blaster. Same direction
+as the attachment point, just translated along it — looked exactly like
+a spawn-offset bug, wasn't. **General rule for later, same family as the
+earlier dead-reckoning fix:** anything spawned mid-tick shouldn't be
+stepped/moved *within that same tick* before its first observable
+state (render, broadcast, etc.) — order tick logic so creation happens
+after that tick's simulation stepping, not before. Fixed by swapping
+`weaponSystem.update(...)` to run after `physicsSystem.update(...)` in
+`tick()`. Re-verified: `mvn clean verify` green, real server+client boot
+with the real `xwing.meta.json` metadata, zero exceptions.
+
+**Unrelated flaky-test fix found while verifying this milestone
+(2026-09-05):
+`NetworkServerClientIntegrationTest`'s `findFreePort()`, called twice
+back-to-back (`new ServerSocket(0)` opened then immediately closed each
+time), reliably got handed the *same* port number both times on this
+machine — Windows appears to hand back a just-closed ephemeral port
+immediately on the next bind request. The test then tried to bind both
+TCP and UDP test servers to that one port, and `NetworkServer.start()`'s
+UDP bind failed with `BindException: Address already in use`. 100%
+reproducible, not intermittent. **Fix:** open both `ServerSocket`s before
+closing either (`findTwoFreePorts()`), so the OS can't hand back the same
+number twice. **General rule for later:** never call a
+"reserve-a-free-port via open-then-immediately-close" helper twice in a
+row for two ports that need to be distinct — get both from open sockets
+first, close both after.
+
 **Note:** `design.md` §4 was inserted between the old §3 (Architecture)
 and §4 (UX flow), which renumbered old §4/§5/§6 to §5/§6/§7 — if a
 cross-reference to design.md looks off by one section, that's why.

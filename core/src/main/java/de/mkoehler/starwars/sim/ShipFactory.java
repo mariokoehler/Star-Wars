@@ -2,10 +2,13 @@ package de.mkoehler.starwars.sim;
 
 import com.badlogic.ashley.core.Engine;
 import com.badlogic.ashley.core.Entity;
+import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.CircleShape;
 import com.badlogic.gdx.physics.box2d.FixtureDef;
+import com.badlogic.gdx.physics.box2d.PolygonShape;
+import com.badlogic.gdx.physics.box2d.Shape;
 import com.badlogic.gdx.physics.box2d.World;
 import de.mkoehler.starwars.sim.components.HealthComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
@@ -13,6 +16,9 @@ import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
+import de.mkoehler.starwars.sim.metadata.PixelPoint;
+
+import java.util.List;
 
 /**
  * Builds ship Box2D bodies, and (server-side) full Ashley entities wrapping
@@ -62,11 +68,20 @@ public final class ShipFactory {
      * Creates a ship's Box2D body, with no Ashley entity around it. The
      * fixture is set up to collide with both other ships and projectiles
      * (see {@link CollisionCategories}).
+     * <p>
+     * Uses a convex polygon built from {@link ShipStats#getSpriteMetadata()}'s
+     * hitbox points (design.md 2.4) when at least 3 have been authored via
+     * the {@code dev-tools} sprite metadata editor, for a closer-fitting
+     * collision shape than a circle — most useful for ship-vs-ship
+     * collisions. Falls back to the original {@link CircleShape} (using
+     * {@link ShipStats#getRadiusMeters()}) when no metadata/hitbox has been
+     * authored yet, so ships without a {@code .meta.json} keep working
+     * exactly as before.
      *
      * @param world the Box2D world to create the body in
      * @param x     spawn position, in meters
      * @param y     spawn position, in meters
-     * @param stats the ship type's tuning values (only the radius is used)
+     * @param stats the ship type's tuning values
      * @return the created body
      */
     public static Body createBody(World world, float x, float y, ShipStats stats) {
@@ -77,8 +92,7 @@ public final class ShipFactory {
         bodyDef.angularDamping = 2f;
         Body body = world.createBody(bodyDef);
 
-        CircleShape shape = new CircleShape();
-        shape.setRadius(stats.getRadiusMeters());
+        Shape shape = createHitboxShape(stats);
 
         FixtureDef fixtureDef = new FixtureDef();
         fixtureDef.shape = shape;
@@ -91,5 +105,30 @@ public final class ShipFactory {
 
         shape.dispose();
         return body;
+    }
+
+    private static Shape createHitboxShape(ShipStats stats) {
+        List<PixelPoint> hitboxPolygon = stats.getSpriteMetadata()
+            .map(metadata -> metadata.getHitboxPolygon())
+            .orElse(List.of());
+
+        if (hitboxPolygon.size() >= 3) {
+            // PolygonShape#set computes the convex hull of the given points itself, and requires
+            // at most 8 vertices (a Box2D limit) - the editor already enforces that cap when
+            // authoring points, see SpriteCanvas.MAX_HITBOX_POINTS.
+            Vector2[] vertices = new Vector2[hitboxPolygon.size()];
+            for (int i = 0; i < hitboxPolygon.size(); i++) {
+                PixelPoint point = hitboxPolygon.get(i);
+                vertices[i] = new Vector2(point.getX() / PhysicsConstants.PIXELS_PER_METER,
+                    point.getY() / PhysicsConstants.PIXELS_PER_METER);
+            }
+            PolygonShape polygon = new PolygonShape();
+            polygon.set(vertices);
+            return polygon;
+        }
+
+        CircleShape circle = new CircleShape();
+        circle.setRadius(stats.getRadiusMeters());
+        return circle;
     }
 }

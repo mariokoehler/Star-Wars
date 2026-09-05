@@ -40,8 +40,9 @@ class NetworkServerClientIntegrationTest {
 
     @Test
     void handshakeAndPingPongRoundTripSucceed() throws Exception {
-        int tcpPort = findFreePort();
-        int udpPort = findFreePort();
+        int[] ports = findTwoFreePorts();
+        int tcpPort = ports[0];
+        int udpPort = ports[1];
 
         server = new NetworkServer();
         server.start(tcpPort, udpPort);
@@ -94,13 +95,20 @@ class NetworkServerClientIntegrationTest {
     }
 
     /**
-     * Picks a currently-free TCP port to bind the test server to, so the test
-     * doesn't collide with a real dedicated server that might be running on
-     * this machine's default ports.
+     * Picks two distinct currently-free ports to bind the test server's TCP
+     * and UDP channels to, so the test doesn't collide with a real dedicated
+     * server that might be running on this machine's default ports.
+     *
+     * <p>Both {@link ServerSocket}s are opened before either is closed:
+     * opening and immediately closing them one at a time let the OS (observed
+     * reliably on Windows) hand back the exact same just-freed port number
+     * for the second call, which made the server fail to bind the UDP socket
+     * on top of the still-open TCP one.
      */
-    private static int findFreePort() throws IOException {
-        try (ServerSocket socket = new ServerSocket(0)) {
-            return socket.getLocalPort();
+    private static int[] findTwoFreePorts() throws IOException {
+        try (ServerSocket first = new ServerSocket(0);
+             ServerSocket second = new ServerSocket(0)) {
+            return new int[] {first.getLocalPort(), second.getLocalPort()};
         }
     }
 }

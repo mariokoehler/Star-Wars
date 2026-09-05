@@ -228,6 +228,127 @@ rather than at its exact center (belt-and-suspenders, and just more
 correct — a shot should originate from the nose, not the center of
 mass).
 
+### 2.5 Ship sprite metadata: polygon hitboxes & attachment points (2026-09-05)
+
+Ships previously used a plain circle (`ShipStats.getRadiusMeters()`) as
+their Box2D collision shape, and projectiles always spawned from a single
+fixed offset along the ship's facing direction. Both were flagged as
+placeholders; this milestone replaces them with data authored per-ship, so
+hitboxes can fit each sprite's silhouette (mattering most for ship-vs-ship
+collisions) and future visual effects (engine glow, blinking lights,
+damage smoke) have precise, named attachment points to spawn from, not
+guessed-at coordinates in code.
+
+**Authoring tool: `dev-tools`' sprite metadata editor
+(`SpriteMetadataEditor`/`SpriteCanvas`).** A small Swing app, not shipped
+in the game jar (3.2) — load a ship's PNG, view it at 2x zoom (sprites are
+small enough that precise pixel placement is hard at 1x), left-click to
+add a hitbox polygon point, right-click to remove the last one, ENTER to
+place a named attachment point at the mouse position (prompts for a name
+via an editable combo box pre-populated with the suggested names below),
+DELETE/BACKSPACE to remove the attachment point nearest the mouse. Saves
+alongside the image as `<imagename>.meta.json` (auto-detected/loaded on
+next open of the same image).
+
+**Data model (`de.mkoehler.starwars.sim.metadata`, in `core` so both the
+editor and the game share it):**
+- `PixelPoint` — a single `(x, y)`. **Convention: sprite-local, origin at
+  the image center, Y-up** (matching the game world's convention, not
+  AWT/Swing's Y-down image-pixel-space) — chosen specifically so these
+  coordinates can be used directly as Box2D body-local coordinates with no
+  further axis flip, once divided by `PhysicsConstants.PIXELS_PER_METER`.
+  The editor's `SpriteCoordinates` utility does the image-pixel ↔
+  sprite-local conversion (unit-tested — see below, this exact class of
+  axis-convention bug has bitten this project before, e.g. the parallax
+  scroll direction).
+- `ShipSpriteMetadata` — `hitboxPolygon: List<PixelPoint>` and
+  `attachmentPoints: Map<String, List<PixelPoint>>` (a **list** per name,
+  not a single point — deliberately supports e.g. an X-wing's four
+  cannons all being named `PROJECTILE`). Plain Jackson bean (public
+  no-arg constructor + getters/setters, per 3.9's convention for
+  JSON-serialized classes, as opposed to the immutable-final-field style
+  used for Kryo network messages).
+- **Naming convention for attachment points:** `PROJECTILE` (weapon spawn
+  point(s), consumed by `WeaponSystem`), `ENGINE`, `LIGHT`,
+  `DAMAGE_SMOKE` — the latter three not consumed by any system yet
+  (effects don't exist), reserved names for when they are.
+- `ShipSpriteMetadataLoader` — reads/writes the JSON. Two read paths:
+  `loadFromFile` (plain file, used by the editor) and `loadFromClasspath`
+  (used by the game at runtime, returns `Optional.empty()` — not an
+  error — for a ship with no metadata authored yet, so every consumer has
+  an explicit, safe fallback). Deliberately not built on `Gdx.files`, so
+  it works identically for the editor (no libGDX context at all), the
+  windowed client, and the headless server.
+
+**Runtime asset convention:** `assets/shipdata/<shipname>.meta.json` — a
+single canonical file with no separate `assets-raw` copy, unlike textures,
+since there's no transformation/packing step between what the editor
+writes and what the game reads. `ShipStats` now loads its ship's file via
+`ShipSpriteMetadataLoader.loadFromClasspath` in its constructor, exposing
+it as `Optional<ShipSpriteMetadata> getSpriteMetadata()`. **`server`'s POM
+gained a `<resources>` block bundling `assets/` onto its classpath**
+(mirroring `lwjgl3`'s, 3.2) — it didn't need `assets/` before this, since
+server-side code only used numeric stats, never sprite pixel data.
+
+**Consumers, both server-side, both falling back to the pre-existing
+behavior when no `.meta.json` exists for a ship (so ships without
+authored metadata — i.e. all of them, as of this writing, since no
+`.meta.json` has actually been authored yet — keep working exactly as
+before):**
+- `ShipFactory.createBody` builds a Box2D `PolygonShape` from
+  `hitboxPolygon` (pixel points ÷ `PIXELS_PER_METER`) when at least 3
+  points are present, else the original `CircleShape`. Box2D's
+  `PolygonShape#set(Vector2[])` computes the convex hull of the given
+  points itself and caps at 8 vertices — the editor enforces that same
+  8-point cap while authoring, so a saved polygon is always valid. No
+  concave hitboxes in v1; revisit only if a ship's silhouette really
+  needs one (a Box2D concave shape has to be built from multiple fixture
+  polygons, notably more complex).
+- `WeaponSystem` fires one projectile per `PROJECTILE`-named attachment
+  point (rotating each by the ship's current facing) when present, else
+  the original single fixed-offset-from-center spawn.
+
+**Authored (2026-09-05):** `assets/shipdata/xwing.meta.json` — the
+X-wing's real hitbox (7-point convex polygon) and all four attachment
+point types (two `PROJECTILE` points, one per wingtip cannon; two
+`ENGINE`; two `LIGHT`; one `DAMAGE_SMOKE`), made with the editor.
+**Editor feedback applied:** the sprite was still too small to place
+points precisely at the original 2x zoom, so `SpriteCanvas.ZOOM` is now
+4x.
+
+**Bug found via play-testing the authored X-wing metadata, fixed same
+day: projectiles visually spawned translated forward of their
+attachment point.** Reported symptom: shots were aligned with the
+`PROJECTILE` attachment points (correct direction) but appeared to
+originate from a point noticeably ahead of them, not at them. Root
+cause: `GameNetworkServer.tick()` called `weaponSystem.update(...)`
+*before* `physicsSystem.update(...)`. A tick's `deltaTime` (~1/30s at
+the 30Hz server rate) needs roughly two 1/60s physics steps to catch up,
+and Box2D steps *every* body in the world each step — including one a
+system created moments earlier in the very same tick. So a freshly-
+spawned projectile was already swept forward by up to ~1/30s of travel
+(≈1.7m/≈53px for the 50m/s blaster) before its position was ever
+broadcast in that tick's `WorldSnapshotMessage` — visually identical to
+"spawned too far forward," in a straight line along the correct facing,
+which is exactly what made it look like a spawn-offset bug rather than
+a movement-before-first-render one. **Fixed by reordering:** weapons
+now fire *after* physics stepping each tick, so a projectile's first
+broadcast position is its true, untouched spawn point; it only starts
+advancing from the next tick onward. General shape of bug: the same
+"moved before its first render" root cause as the earlier rendering-lag
+hitbox-size misdiagnosis (2.4's "Second real bug"), but this time on the
+server's own tick ordering rather than client-side interpolation.
+
+**Testing:** `SpriteCoordinatesTest` (4 tests, `dev-tools`) verifies the
+image-pixel ↔ sprite-local conversion, including a full round-trip grid.
+`ShipSpriteMetadataLoaderTest` (2 tests, `core`) verifies a
+save/load round trip preserves multiple points under the same attachment
+name, and that a missing classpath resource comes back empty rather than
+throwing. The Swing UI/mouse/keyboard wiring itself is not unit-tested
+(3.9's convention: test logic-heavy code, not thin UI glue) — verified
+instead by launching the editor and the actual game (server + client)
+with no `.meta.json` present, confirming zero exceptions either way.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -282,6 +403,17 @@ Current repo layout (see root `pom.xml`):
 message/DTO classes live directly in `core`, under `de.mkoehler.starwars.net`
 — simplest option for a handful of classes; revisit only if that package
 grows large enough to justify splitting out.
+
+- `dev-tools` — **new (2026-09-05).** Home for offline authoring tools used
+  during development but never shipped in the game jar itself — starting
+  with the sprite metadata editor (2.5). Depends on `core` (for
+  `ShipSpriteMetadata`/`PixelPoint`/`ShipSpriteMetadataLoader`, shared so
+  the editor and the game read/write the exact same JSON shape) plus plain
+  Swing/AWT — no libGDX dependency, so it has no application lifecycle to
+  bootstrap and starts instantly. Run with `mvn -pl dev-tools compile
+  exec:java` (`core` must already be `mvn install`ed locally first, same
+  gotcha as `server`/`lwjgl3` — see CLAUDE.md). Explicitly expected to
+  grow more tools over time as similar needs come up, not a one-off.
 
 ### 3.3 Simulation stack (already implied by the generated project's deps)
 
@@ -661,6 +793,14 @@ than mixing libGDX's own `Json` class with something else, and Jackson's
 annotation-driven `ObjectMapper` approach maps cleanly onto plain record/
 POJO classes like `PlayerAccount` without needing libGDX-specific
 serialization hooks.
+
+**First real usage (2026-09-05):** `ShipSpriteMetadata`/`PixelPoint` (2.5)
+— none of the systems above (accounts, connection config, keybinds) are
+built yet, so this was Jackson's first actual exercise in the codebase.
+Confirmed the bean-style convention (public no-arg constructor + getters/
+setters, as opposed to the immutable-final-field style used for Kryo
+network message classes) round-trips cleanly, including a `Map<String,
+List<PixelPoint>>` value.
 
 ## 4. Rendering & presentation
 

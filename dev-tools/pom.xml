@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>de.mkoehler.starwars</groupId>
+    <artifactId>starwars-parent</artifactId>
+    <version>1.0.0</version>
+  </parent>
+
+  <artifactId>starwars-dev-tools</artifactId>
+  <packaging>jar</packaging>
+  <name>StarWars-dev-tools</name>
+
+  <!-- Local development tools only (a Swing sprite metadata editor for now - see
+       design.md 2.4/4.3) - never shipped in the game. Depends on core purely to reuse
+       its ShipSpriteMetadata/PixelPoint classes and Jackson (de)serialization, so the
+       editor and the game can never disagree on the data format. Everything else here
+       (Swing, java.awt, javax.imageio) is part of the JDK - no extra UI dependency needed. -->
+  <properties>
+    <mainClass>de.mkoehler.starwars.devtools.SpriteMetadataEditor</mainClass>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>de.mkoehler.starwars</groupId>
+      <artifactId>starwars-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <!-- Run with: mvn -pl dev-tools compile exec:java (core must already be installed
+             locally first - see CLAUDE.md's Build system section for why). -->
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <mainClass>${mainClass}</mainClass>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

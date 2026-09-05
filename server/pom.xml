@@ -53,6 +53,17 @@
 
   <build>
     <finalName>${appName}-Server-${project.version}</finalName>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <!-- The assets/ folder at the repo root is bundled onto the classpath, same as lwjgl3's -
+           the server needs it too now, to read ships' shipdata/*.meta.json (design.md 2.4) at
+           runtime via ShipStats' Optional<ShipSpriteMetadata>. -->
+      <resource>
+        <directory>${project.basedir}/../assets</directory>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <!-- Run the dedicated server directly with: mvn -pl server -am compile exec:java -->

@@ -8,18 +8,24 @@ import com.badlogic.ashley.systems.IteratingSystem;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.World;
+import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.ProjectileFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
+import de.mkoehler.starwars.sim.metadata.PixelPoint;
 
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Fires a projectile for every ship whose fire input is held and whose
- * weapon is off cooldown, resetting that cooldown each time.
+ * weapon is off cooldown, resetting that cooldown each time. A ship with
+ * multiple {@value #PROJECTILE_ATTACHMENT_NAME} attachment points authored
+ * in its sprite metadata (design.md 2.4) fires one projectile per point per
+ * shot instead of a single one from a fixed offset.
  * <p>
  * Runs server-side only, once per tick — unlike {@link ShipControlSystem},
  * firing is a discrete, one-shot event when the cooldown expires, not a
@@ -28,6 +34,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  * {@link ShipControlSystem} needs.
  */
 public class WeaponSystem extends IteratingSystem {
+
+    /**
+     * Attachment point name convention (design.md 2.4) for where projectiles
+     * spawn — a ship can define more than one, e.g. an X-wing's four
+     * cannons, and one projectile is fired per point each time the weapon is
+     * off cooldown.
+     */
+    private static final String PROJECTILE_ATTACHMENT_NAME = "PROJECTILE";
 
     private static final Vector2 SPAWN_OFFSET = new Vector2();
 
@@ -65,22 +79,53 @@ public class WeaponSystem extends IteratingSystem {
         Body body = bodyMapper.get(entity).getBody();
         int ownerPlayerId = playerIdMapper.get(entity).getPlayerId();
 
-        // Spawn just ahead of the ship's own hull, not at its exact center - otherwise the
-        // projectile starts out perfectly overlapping its shooter's own collision circle. Box2D
-        // still generates a physical collision response for that overlap even though the hit is
-        // ignored for damage (see GameNetworkServer's ownerId check) - and with zero separation
-        // between two coincident circles, the push-apart direction is undefined and falls back to
-        // an arbitrary fixed axis, which visibly redirected freshly-fired shots. A ContactFilter
-        // in GameNetworkServer now also prevents this collision from being generated at all; this
-        // offset is belt-and-suspenders (and just more correct - shots should originate from the
-        // nose, not the center of mass).
+        List<PixelPoint> spawnPoints = ShipStats.XWING.getSpriteMetadata()
+            .map(metadata -> metadata.getAttachmentPoints().get(PROJECTILE_ATTACHMENT_NAME))
+            .orElse(null);
+
+        if (spawnPoints == null || spawnPoints.isEmpty()) {
+            fireFromDefaultOffset(body, ownerPlayerId, weapon);
+        } else {
+            for (PixelPoint spawnPoint : spawnPoints) {
+                fireFromAttachmentPoint(body, ownerPlayerId, weapon, spawnPoint);
+            }
+        }
+
+        weapon.resetCooldown();
+    }
+
+    // Spawn just ahead of the ship's own hull, not at its exact center - otherwise the
+    // projectile starts out perfectly overlapping its shooter's own collision circle. Box2D
+    // still generates a physical collision response for that overlap even though the hit is
+    // ignored for damage (see GameNetworkServer's ownerId check) - and with zero separation
+    // between two coincident circles, the push-apart direction is undefined and falls back to
+    // an arbitrary fixed axis, which visibly redirected freshly-fired shots. A ContactFilter
+    // in GameNetworkServer now also prevents this collision from being generated at all; this
+    // offset is belt-and-suspenders (and just more correct - shots should originate from the
+    // nose, not the center of mass).
+    //
+    // Used as a fallback for ships with no authored PROJECTILE attachment points yet (design.md
+    // 2.4) - once a ship's metadata defines them, fireFromAttachmentPoint is used instead.
+    private void fireFromDefaultOffset(Body body, int ownerPlayerId, WeaponComponent weapon) {
         float spawnDistance = ShipStats.XWING.getRadiusMeters() + weapon.getStats().getProjectileRadiusMeters() + 0.1f;
         SPAWN_OFFSET.set(0, 1).rotateRad(body.getAngle()).scl(spawnDistance);
 
         ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
             body.getPosition().x + SPAWN_OFFSET.x, body.getPosition().y + SPAWN_OFFSET.y,
             body.getAngle(), weapon.getStats());
+    }
 
-        weapon.resetCooldown();
+    // The attachment point's sprite-local, center-origin, Y-up coordinates (see PixelPoint's
+    // Javadoc) line up directly with the ship body's local frame - facing "up" (local +Y) is
+    // exactly the direction WeaponSystem's own SPAWN_OFFSET fires along at angle 0 - so a spawn
+    // point only needs converting from pixels to meters, then rotating by the ship's current
+    // angle same as the default offset above.
+    private void fireFromAttachmentPoint(Body body, int ownerPlayerId, WeaponComponent weapon, PixelPoint spawnPoint) {
+        SPAWN_OFFSET.set(spawnPoint.getX() / PhysicsConstants.PIXELS_PER_METER,
+            spawnPoint.getY() / PhysicsConstants.PIXELS_PER_METER).rotateRad(body.getAngle());
+
+        ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
+            body.getPosition().x + SPAWN_OFFSET.x, body.getPosition().y + SPAWN_OFFSET.y,
+            body.getAngle(), weapon.getStats());
     }
 }
