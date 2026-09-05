@@ -30,5 +30,14 @@
       <artifactId>ashley</artifactId>
       <version>${ashleyVersion}</version>
     </dependency>
+    <dependency>
+      <groupId>com.github.crykn</groupId>
+      <artifactId>kryonet</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
   </dependencies>
 </project>

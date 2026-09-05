@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>de.mkoehler.starwars</groupId>
+    <artifactId>starwars-parent</artifactId>
+    <version>1.0.0</version>
+  </parent>
+
+  <artifactId>starwars-server</artifactId>
+  <packaging>jar</packaging>
+  <name>StarWars-server</name>
+
+  <properties>
+    <mainClass>de.mkoehler.starwars.server.ServerLauncher</mainClass>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>de.mkoehler.starwars</groupId>
+      <artifactId>starwars-core</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-backend-headless</artifactId>
+      <version>${gdxVersion}</version>
+    </dependency>
+    <dependency>
+      <!-- libGDX core's native library, needed even in headless mode (e.g. by Gdx.files). -->
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-platform</artifactId>
+      <version>${gdxVersion}</version>
+      <classifier>natives-desktop</classifier>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <finalName>${appName}-Server-${project.version}</finalName>
+    <plugins>
+      <plugin>
+        <!-- Run the dedicated server directly with: mvn -pl server -am compile exec:java -->
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <mainClass>${mainClass}</mainClass>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>${mainClass}</mainClass>
+                </transformer>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

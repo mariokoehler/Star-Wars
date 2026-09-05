@@ -15,30 +15,65 @@ process/gotchas, `design.md` for the game/architecture itself.
 
 - GitHub: https://github.com/mariokoehler/Star-Wars (private)
 
-### Status / where we left off (2026-09-04)
+### Status / where we left off (2026-09-05)
 
-Pure design phase so far — **no implementation has started**, no `server`
-module, no networking code, no gameplay code beyond the Liftoff template's
-placeholder `Client.java`. `design.md` is now reasonably comprehensive:
-concept, core mechanics (power distribution incl. the exact clamping
-algorithm, combat-lock ESC rule), architecture (modules, sim stack,
-networking choice, netcode approach, accounts, client local config), UX
-flow (screens, controls), a component TODO checklist, and a remaining
-open-questions list (client distribution mechanism, ship roster, map/arena
-design, tick/snapshot rate, lag compensation). Read `design.md` in full
-before continuing — don't start implementation without an explicit go-ahead
-from the user, since they've been explicit this is a "no programming yet,
-just designing" phase.
+Design is comprehensive (see below), and **implementation has now started**:
+the first real code is a working network layer (see "Networking layer" below).
+No gameplay code yet beyond the Liftoff template's placeholder `Client.java`
+— no entities/components, no Box2D flight, no accounts, no UI screens.
+`design.md` covers concept, core mechanics (power distribution incl. the
+capacitor sub-mechanic and the exact clamping algorithm, combat-lock ESC
+rule), architecture (modules, sim stack, networking, netcode approach,
+accounts, client local config, Box2D units note, JSON library), rendering/
+presentation (§4: camera zoom+inertia, parallax starfield, ship sprite
+conventions, UI framework choice), UX flow (§5), a component TODO checklist
+(§6), and a remaining open-questions list (§7: client distribution
+mechanism, ship roster, map/arena design, tick/snapshot rate, lag
+compensation).
+
+**Networking layer (first milestone) — implemented 2026-09-05:** a new
+`server` Maven module now exists alongside `core`/`lwjgl3`. `core` gained a
+`de.mkoehler.starwars.net` package (message classes, `MessageRegistry`,
+`NetworkServer`, `NetworkClient` — all libGDX-free and directly unit-
+tested) wrapping the KryoNet fork. Proven end-to-end over real loopback
+sockets: connect/disconnect, a handshake round trip, and a ping/pong round
+trip over both TCP and UDP (`NetworkServerClientIntegrationTest`). The
+dedicated server (`ServerLauncher` → `GameServer`) runs as a headless
+libGDX app on a placeholder 30Hz loop and was manually run as a packaged
+jar to confirm it boots and stays up, not just unit-tested. See design.md
+3.2/3.4/3.5 and §6 for exactly what's done vs. still open (real gameplay
+messages, tick/snapshot rate, client-side prediction, accounts).
+
+Read `design.md` in full before continuing further implementation — this
+project moves in explicit milestones the user signs off on one at a time,
+not open-ended feature sprints.
+
+**Note:** `design.md` §4 was inserted between the old §3 (Architecture)
+and §4 (UX flow), which renumbered old §4/§5/§6 to §5/§6/§7 — if a
+cross-reference to design.md looks off by one section, that's why.
+
+**Art assets:** the user has usable sprite sets from an earlier,
+sourceless version of this same game, currently at `R:\StarWars\sprites`
+(local machine, **not** in the repo). See design.md §4.3 for the full
+inventory/conventions. Needs copying into `assets/` once rendering work
+starts — don't forget this isn't already in the project.
 
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
-2026-09-04). Modules: `core` (shared sim code), `lwjgl3` (desktop client).
-`server` module (gdx-backend-headless) not yet created.
+2026-09-04). Modules: `core` (shared sim/net code), `lwjgl3` (desktop
+client), `server` (`gdx-backend-headless` dedicated server, added
+2026-09-05).
 
 - `mvn clean package` from repo root builds everything; the runnable client
-  jar ends up at `lwjgl3/target/StarWars-<version>.jar`.
+  jar ends up at `lwjgl3/target/StarWars-<version>.jar`, the runnable
+  server jar at `server/target/StarWars-Server-<version>.jar`.
 - `mvn -pl lwjgl3 -am compile exec:exec` runs the client directly.
+- `mvn -pl server -am compile exec:java` runs the dedicated server
+  directly (no `<classpath/>`/exec:exec workaround needed here — headless
+  has no native windowing to fight with, plain `exec:java` is enough).
+- `mvn test` runs the JUnit 5 suite (currently in `core`, covering the
+  network layer).
 - Java 25, targeted via `maven.compiler.release` in the parent `pom.xml`.
 
 ### Maven + libGDX gotchas learned during the migration
@@ -74,6 +109,30 @@ Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
   window, so `core` can be shared unmodified between client and server. Its
   `Gdx.net` supports HTTP + TCP; it does **not** give us UDP or a
   multiplayer protocol — that's what KryoNet is for (see `design.md` §3.4).
+- **`gdx-backend-headless` still needs libGDX's native library.** Running
+  the packaged server jar without it throws
+  `SharedLibraryLoadRuntimeException: Couldn't load ... gdx64.dll` at
+  startup — some core libGDX utilities are backed by native code
+  regardless of backend. Fix: add `gdx-platform` classifier
+  `natives-desktop` to the `server` module too, same dependency `lwjgl3`
+  already has. Only caught by actually running the built jar, not by
+  `mvn package` succeeding or unit tests passing — worth remembering to
+  smoke-test any new runnable module that way, not just compile/test it.
+- **A library only published on JitPack** (like the KryoNet fork) needs
+  `<repositories><repository><url>https://jitpack.io</url>...` added to
+  the parent POM — it won't resolve from Maven Central alone, and the
+  error if you forget is a generic "could not resolve dependency", not
+  something that points at JitPack specifically.
+- **Kryo network compatibility depends on registration order, not class
+  names.** Every class sent over KryoNet must be registered with
+  `Kryo.register(...)` in the *exact same order* on both the client and
+  server, since Kryo identifies types on the wire by a numeric id derived
+  from that order. Keeping this in one shared method
+  (`MessageRegistry.register(Kryo)` in `core`, called by both
+  `NetworkServer` and `NetworkClient`) rather than duplicating
+  registration calls on each end is what actually guarantees this, and is
+  covered by a test (`MessageRegistryTest`) that registers into two
+  independent `Kryo` instances and asserts identical ids.
 
 ## Git / GitHub
 
@@ -86,6 +145,33 @@ Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
   files (gitignored, not pushed). Safe to delete once the Maven setup has
   been trusted for a while — ask before deleting it, it's the user's escape
   hatch back to the old build.
+
+## Code style & testing
+
+- **Javadoc — comprehensive, on every class and every method**, HTML-
+  formatted (standard Javadoc tags/markup, not plain comments). Keep it
+  strictly about **what the code does/is for** — parameters, return
+  values, invariants, preconditions. **Never** put session/debugging
+  narrative in it (e.g. "fixed in session X because of bug Y", "changed
+  this after discovering Z") — that belongs in the commit message, not
+  in code documentation that outlives the context of why it changed.
+- **Unit tests — JUnit 5**, used selectively rather than chasing coverage
+  numbers. Not every class needs a test (game-loop/rendering code
+  especially doesn't lend itself to it), but **core, logic-heavy
+  components should have them** — the user has a backend/server
+  engineering background and values this even though it's less common in
+  game dev. Clear candidates as components get built: the networking
+  layer (message (de)serialization, protocol handling), the power
+  distribution clamping algorithm (2.2 in design.md — a pure function
+  with exact expected behavior, e.g. the 10%-floor/redirect/no-op cases),
+  the combat-lock timer logic, account creation/auth validation. Skip
+  tests for thin glue code or anything that's really just wiring
+  libGDX/Scene2D together.
+- **JSON handling — latest Jackson** (`com.fasterxml.jackson.core`/
+  `jackson-databind`), for every local/server JSON file described in
+  design.md (accounts store, client connection config, client keybinds
+  config) — decided so we don't hand-roll or mix JSON libraries across
+  the codebase. See design.md 3.9 for where this is used.
 
 ## Conventions / preferences
 

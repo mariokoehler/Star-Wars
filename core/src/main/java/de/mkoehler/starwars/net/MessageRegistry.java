@@ -1,0 +1,41 @@
+package de.mkoehler.starwars.net;
+
+import com.esotericsoftware.kryo.Kryo;
+import de.mkoehler.starwars.net.messages.HandshakeRequest;
+import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.TcpPingMessage;
+import de.mkoehler.starwars.net.messages.TcpPongMessage;
+import de.mkoehler.starwars.net.messages.UdpPingMessage;
+import de.mkoehler.starwars.net.messages.UdpPongMessage;
+
+/**
+ * Registers every class sent over the wire with a {@link Kryo} instance, in a
+ * fixed order.
+ * <p>
+ * Kryo assigns each registered class a numeric id based on registration order
+ * and relies on that id, rather than the class name, to identify types on the
+ * wire. Both ends of a connection must therefore register the exact same
+ * classes in the exact same order, or messages will be misread on the
+ * receiving end. This class is the single shared place that order is defined,
+ * used by both {@link NetworkServer} and {@link NetworkClient}.
+ */
+public final class MessageRegistry {
+
+    private MessageRegistry() {
+    }
+
+    /**
+     * Registers all wire message classes with the given {@link Kryo} instance.
+     *
+     * @param kryo the Kryo instance to register classes with, typically obtained
+     *             from an {@code EndPoint}'s {@code getKryo()} method
+     */
+    public static void register(Kryo kryo) {
+        kryo.register(HandshakeRequest.class);
+        kryo.register(HandshakeResponse.class);
+        kryo.register(TcpPingMessage.class);
+        kryo.register(TcpPongMessage.class);
+        kryo.register(UdpPingMessage.class);
+        kryo.register(UdpPongMessage.class);
+    }
+}

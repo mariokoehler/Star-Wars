@@ -15,6 +15,7 @@
   <modules>
     <module>core</module>
     <module>lwjgl3</module>
+    <module>server</module>
   </modules>
 
   <properties>
@@ -25,10 +26,33 @@
     <ashleyVersion>1.7.4</ashleyVersion>
     <!-- Forces LWJGL3 to this version, to avoid warnings on Java 25 and up. -->
     <lwjgl3Version>3.4.3</lwjgl3Version>
+    <!-- Maintained KryoNet fork, see design.md 3.4 -->
+    <kryonetVersion>2.22.9</kryonetVersion>
+    <!-- JUnit 5, see CLAUDE.md "Code style & testing" -->
+    <junitVersion>5.14.4</junitVersion>
   </properties>
+
+  <!-- The KryoNet fork is only published on JitPack, not Maven Central. -->
+  <repositories>
+    <repository>
+      <id>jitpack.io</id>
+      <url>https://jitpack.io</url>
+    </repository>
+  </repositories>
 
   <dependencyManagement>
     <dependencies>
+      <dependency>
+        <groupId>com.github.crykn</groupId>
+        <artifactId>kryonet</artifactId>
+        <version>${kryonetVersion}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter</artifactId>
+        <version>${junitVersion}</version>
+        <scope>test</scope>
+      </dependency>
       <dependency>
         <groupId>org.lwjgl</groupId>
         <artifactId>lwjgl</artifactId>
@@ -321,6 +345,13 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-compiler-plugin</artifactId>
           <version>3.13.0</version>
+        </plugin>
+        <!-- Maven 3.8.4's default lifecycle binding resolves an old surefire
+             that predates JUnit 5 support; pin a modern one. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.2.5</version>
         </plugin>
       </plugins>
     </pluginManagement>

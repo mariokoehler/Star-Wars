@@ -24,7 +24,7 @@ decision-making on top of straightforward dogfighting.
   server browser for v1 — you connect directly to a known address.
 - **Players are international** (playing with friends in the UK, Belgium and
   Norway) — non-US/UK keyboard layouts (e.g. Belgian AZERTY) are a real
-  consideration, not an edge case. See 3.8 / 4.2.
+  consideration, not an edge case. See 3.8 / 5.2.
 - **Fan project note:** this uses Star Wars ships, characters, quotes and
   likenesses purely as a non-commercial personal project. Not for
   distribution/monetization — keep that in mind if that ever changes.
@@ -34,7 +34,7 @@ decision-making on top of straightforward dogfighting.
 ### 2.1 Newtonian flight
 
 Covered in detail once implementation starts (see 3.3 for the Box2D-based
-approach). Default controls are in 4.3.
+approach). Default controls are in 5.3.
 
 ### 2.2 Power distribution
 
@@ -48,12 +48,40 @@ loadout decision:
 - **Engines** — more power = more thrust and better overall agility
   (turn rate).
 
+**Weapon capacitor — decided:** a single shot's energy cost is bigger than
+what the power core can deliver in one frame, so the weapon system needs a
+small energy buffer to fire from — otherwise its power requirement would
+never be met in the instant the player presses fire, and the weapon would
+simply never work. The core continuously trickle-charges a **capacitor**
+(sized for roughly 5-6 shots' worth of energy at full charge) up to its
+max; firing draws that shot's cost from the capacitor instantly, and
+firing again before it's topped back up costs whatever's left stored —
+this is what actually drives the practical rate of fire, on top of any
+weapon-specific cooldown. More power routed to Weapons means faster
+capacitor recharge (and thus a higher sustainable fire rate), not a
+bigger capacitor. Capacitor charge level is server-authoritative
+per-ship state and, like the power split itself, isn't synced to other
+clients — same reasoning as below.
+
+This also opens up natural v2+ hooks without needing a new system: a
+pickup that temporarily raises max capacitor size, or an XP-spent
+permanent per-ship capacitor upgrade. Both are out of scope for v1, but
+worth keeping in mind while building the component so it doesn't need
+reworking later.
+
+**Shields and Engines don't need a capacitor — decided:** both scale
+directly and continuously off the power available *that frame* (shield
+regen rate; engine thrust/torque), with no shot-like instantaneous draw
+to buffer for. Revisit only if a future mechanic wants an instant burst
+from either (e.g. an afterburner or an emergency shield boost button) —
+not planned for v1.
+
 This is a continuous throughput split (percentages of current output), not
 a stored/depletable battery — simple to reason about and to implement.
 
 - **Baseline:** power is split evenly across all three systems (~33.3%
   each) by default.
-- **Adjustment:** three keybinds, one per system (defaults in 4.3).
+- **Adjustment:** three keybinds, one per system (defaults in 5.3).
   Pressing a system's keybind shifts **+5%** to that system and **-2.5%**
   from *each* of the other two (net zero — always sums to 100%).
 - **Reset keybind:** returns the distribution to the even baseline.
@@ -85,7 +113,7 @@ a stored/depletable battery — simple to reason about and to implement.
 ### 2.3 Leaving a match (ESC) and the combat lock
 
 Pressing **ESC** during gameplay returns the player to Ship Selection (see
-4.1). To prevent using ESC as a "safe escape hatch" out of a losing
+5.1). To prevent using ESC as a "safe escape hatch" out of a losing
 dogfight, leaving is only allowed while the player is **not engaged in
 combat**, defined as:
 
@@ -111,7 +139,7 @@ safety-relevant.
 Note this differs from the death-by-combat flow: a self-destruct leave goes
 straight back to Ship Selection, **not** through the Death Screen — the
 Death Screen's "rub it in" quote is specifically for actually losing a
-fight (see 4.1).
+fight (see 5.1).
 
 ## 3. Architecture
 
@@ -130,22 +158,28 @@ last-fired/last-hit timestamps itself, not the client.
 
 Current repo layout (see root `pom.xml`):
 
-- `core` — shared code: entities, components, physics/flight math, game rules.
-  Used by **both** client and server so simulation logic is never duplicated
-  or allowed to drift between them.
+- `core` — shared code: entities, components, physics/flight math, game
+  rules, **and the network layer** (message classes, `NetworkServer`,
+  `NetworkClient` — see 3.4/3.5). Used by **both** client and server so
+  simulation and netcode logic are never duplicated or allowed to drift
+  between them.
 - `lwjgl3` — desktop client (rendering, input, audio, UI).
-
-**To add:**
-
 - `server` — dedicated server module, built on `gdx-backend-headless`
-  (`com.badlogicgames.gdx:gdx-backend-headless`). This runs the standard
+  (`com.badlogicgames.gdx:gdx-backend-headless`). Runs the standard
   libGDX application lifecycle (`create()`/`render()`/`dispose()`,
-  `Gdx.app`, `Gdx.files`, `Gdx.net`) with no window/graphics/audio — exactly
-  what a headless server process needs, while still letting it depend on
-  `core` directly.
-- `network` (tentative — may just live inside `core`) — shared wire message
-  definitions (packet/DTO classes) referenced by both `client` and `server`
-  modules, so the protocol is defined once.
+  `Gdx.app`, `Gdx.files`, `Gdx.net`) with no window/graphics/audio, while
+  depending on `core` directly. **Implemented (2026-09-05):** `GameServer`
+  starts/stops the network layer and its `render()` drives the
+  placeholder simulation-tick cadence (3.5); `ServerLauncher` is the
+  process entry point. Also needs libGDX's native library even though
+  it's headless (`gdx-platform` classifier `natives-desktop`) — some
+  core libGDX utilities (e.g. `Gdx.files`) are backed by native code
+  regardless of backend, this isn't LWJGL/windowing-specific.
+
+**Decided (was tentative): no separate `network` module.** Shared wire
+message/DTO classes live directly in `core`, under `de.mkoehler.starwars.net`
+— simplest option for a handful of classes; revisit only if that package
+grows large enough to justify splitting out.
 
 ### 3.3 Simulation stack (already implied by the generated project's deps)
 
@@ -166,6 +200,18 @@ The Liftoff-generated `core` module already pulls in:
 Both of these are treated as **decided**, not open questions — they're already
 project dependencies and fit the requirements well.
 
+**Box2D units — important implementation note:** Box2D is tuned to work
+well for objects roughly in the 0.1–10 meter range and its stability
+degrades if it's fed raw pixel dimensions as if they were meters (large
+values act like large masses/distances to the solver). We need one fixed
+`PIXELS_PER_METER` conversion constant, applied consistently everywhere a
+Box2D body's position/size is translated to/from screen-space sprite
+coordinates — never mix the two unit systems ad hoc. **Proposed default
+(unconfirmed):** 32 pixels per meter, chosen so ships work out to a
+plausible few-meters "length" in Box2D terms; revisit once real ship
+sprite dimensions (4.3) are actually plugged into a scene, since that's
+what will make an off scale obvious.
+
 ### 3.4 Networking
 
 **Decision: [KryoNet fork](https://github.com/crykn/kryonet) —
@@ -185,7 +231,19 @@ libGDX's own `Gdx.net` is **not** used for game traffic — it only offers HTTP
 and raw TCP sockets, no UDP, and doesn't work on GWT. Not evaluated further
 since there's no browser client planned.
 
-### 3.5 Netcode approach (planned, not yet implemented)
+**Implemented (2026-09-05), pinned to `kryonet` 2.22.9** (which bundles Kryo
+5.5.0). The parent `pom.xml` adds the JitPack repository since this
+dependency isn't on Maven Central. `de.mkoehler.starwars.net.MessageRegistry`
+is the single place both ends register wire message classes with Kryo, in a
+fixed order — required because Kryo identifies classes on the wire by a
+registration-order id, not by name, so client and server must register
+identically. `NetworkServer`/`NetworkClient` (both in `core`, no libGDX
+dependency, so they're directly unit-testable) are thin wrappers around
+KryoNet's `Server`/`Client` handling connection lifecycle, a handshake
+(`HandshakeRequest`/`HandshakeResponse`), and a TCP + UDP ping/pong pair
+proving both channels work end-to-end.
+
+### 3.5 Netcode approach (first milestone implemented 2026-09-05, full approach still planned)
 
 - **Reliable channel (TCP):** login/account handshake, join/leave, ship
   selection, spawn/despawn, death/kill events, chat, match state changes.
@@ -203,8 +261,25 @@ since there's no browser client planned.
   snapshots to smooth over network jitter.
 - Tick rate, snapshot rate, and interpolation buffer sizing: **not yet
   decided** — needs prototyping once basic movement is networked.
+  **Placeholder in place:** the dedicated server's headless application
+  loop (`ServerLauncher`/`GameServer`) runs at a fixed
+  `NetworkConstants.SIMULATION_TICK_RATE_HZ` = 30Hz via libGDX's
+  `HeadlessApplicationConfiguration.updatesPerSecond`, purely so there's a
+  cadence to build against — not a tuned decision.
 - At 8 players, we can likely broadcast full world state to everyone (no
   interest management / area-of-interest filtering needed at this scale).
+- **Server logging — decided:** plain `Gdx.app.log(...)`, available on the
+  headless backend the same as on the client, rather than adding SLF4J/
+  Logback — no need for a separate logging dependency at this scale.
+
+**First implementation milestone (2026-09-05) — done:** connection
+lifecycle (connect/disconnect), a handshake round trip, and a ping/pong
+round trip over *both* the TCP and UDP channels, covered by
+`NetworkServerClientIntegrationTest` (real loopback sockets, not mocked)
+in `core`. Explicitly **not** in scope for this milestone: accounts/auth
+(3.6), any real gameplay state, and the actual tick/snapshot rate — those
+are follow-up milestones layered on this same `NetworkServer`/
+`NetworkClient` pair.
 
 ### 3.6 Accounts & persistence (server-side)
 
@@ -232,7 +307,7 @@ Connecting with a `login` that doesn't exist yet on the server auto-creates
 the account using the supplied password/display name. Connecting with a
 `login` that already exists requires the password to match, otherwise the
 connection is rejected with an error shown on the client's connect dialog
-(see 4.1). This matches the "fill it out once, then it's quick" experience
+(see 5.1). This matches the "fill it out once, then it's quick" experience
 the client-side config (3.7) is also designed around.
 
 Storage shape: a single JSON file (e.g. `server/data/accounts.json`)
@@ -261,7 +336,7 @@ player.
 ### 3.8 Client local config (keybinds)
 
 **Decision:** keybinds are fully player-configurable via a Keybind Setup
-screen (4.2), persisted to a client-local JSON file, separate from the
+screen (5.2), persisted to a client-local JSON file, separate from the
 connection config (3.7) so a player can reset their controls without
 touching saved login info. Driven directly by the "playing with friends in
 the UK, Belgium, and Norway" requirement — WASD is not universally
@@ -279,9 +354,148 @@ a misleading "W"), we need to resolve the physical key to the localized
 character the OS would actually produce, rather than hardcoding the
 US-layout glyph as the label.
 
-## 4. UX flow
+### 3.9 JSON serialization
 
-### 4.1 Screen flow
+**Decision: [Jackson](https://github.com/FasterXML/jackson) (latest
+`jackson-databind`)** for every JSON file this project reads/writes — the
+server-side accounts store (3.6), the client's connection config (3.7),
+and the client's keybinds config (3.8). One library everywhere rather
+than mixing libGDX's own `Json` class with something else, and Jackson's
+annotation-driven `ObjectMapper` approach maps cleanly onto plain record/
+POJO classes like `PlayerAccount` without needing libGDX-specific
+serialization hooks.
+
+## 4. Rendering & presentation
+
+### 4.1 Camera
+
+Two behaviors, both **decided** as goals; exact tuning is deferred until
+there's a flyable ship to tune it against:
+
+- **Speed-linked zoom:** the camera zooms out as the ship's speed
+  increases, and back in as it slows. This is a gameplay-driven choice,
+  not just style — at high speed a player's reaction time isn't enough to
+  react to obstacles only visible at a fixed, close-in zoom, so zooming
+  out trades detail for forward visibility precisely when it's needed
+  most. Implementation is a zoom factor driven by current ship speed,
+  presumably via a smoothed/clamped curve rather than a linear mapping —
+  exact curve is a tuning pass, not a design decision.
+- **Camera inertia:** the camera does **not** rigidly lock the ship to
+  screen center. It instead eases toward the ship's position — tracking
+  closely under normal flight, but visibly lagging behind for a moment
+  during hard maneuvers (sharp turns, sudden thrust changes) before
+  catching back up. Deliberate feel/juice (a dynamic, "weighty" camera
+  reads better than a rigid follow), not a gameplay mechanic. A
+  lerp/spring toward the target position rather than a hard snap is the
+  obvious implementation.
+
+Both are purely client-side presentation — they don't touch simulation
+state and don't need to be networked, unlike the combat-lock timers in
+2.3, which must stay server-authoritative. Every client can run its own
+camera feel independently with no fairness implications.
+
+### 4.2 Parallax starfield background
+
+**Decided:** at least two parallax star layers behind gameplay, each
+moving at a different fraction of camera movement (a distant layer
+slower, a near layer faster) to fake depth cheaply — a simple, well-worn
+effect for this genre/viewpoint that reads well for very little cost. A
+third, near-static "very distant" layer is worth trying too, but two
+layers is the committed v1 minimum. No specific art asset decided yet —
+a small tileable star pattern is enough to start iterating with.
+
+### 4.3 Ship sprites & animation
+
+**Asset source — decided:** reusing the hand-drawn sprite sets from an
+earlier version of this same game concept the user built several years
+ago (source code no longer exists, but the art survived), currently at
+`R:\StarWars\sprites` on the local machine — not yet copied into the
+repo's `assets/` folder; that's a to-do for whenever rendering work
+actually starts (see 6).
+
+Inventory as surveyed on 2026-09-05, one subfolder per ship:
+
+- **`falcon`, `tieinterceptor`** — a 41-frame bank-angle sequence at
+  **two** resolutions each (`*128_####.png` and `*256_####.png`), plus
+  `portrait.png`.
+- **`snowspeeder`, `stardestroyer`, `tiefighter`, `xwing`** — a 41-frame
+  bank-angle sequence at one resolution, plus `portrait.png`.
+- **`turret`** — not a per-ship bank sequence; 8 flat pixel-size variants
+  (`turret32.png` up through the largest), meant to be drawn **on top
+  of** a hull sprite. Historically used on the Falcon and Star Destroyer
+  for an autonomously-firing turret.
+- **`mine`** — a 64-frame self-rotation animation, no bank angles (it's a
+  deployable pickup/weapon, not a ship). Out of scope for v1 — see below.
+
+**Bank-angle sprite convention** (for the ships that have it): all 41
+frames face up/north; frame `20` is neutral bank, frames `0–19` are
+increasing left bank, frames `21–40` are increasing right bank — sprite
+index is a direct function of the ship's current bank/turn state.
+
+**Decision for v1: render only the neutral-bank frame (`..._0020.png`)
+per ship, not the full bank-angle sequence.** The bank sprites look
+noticeably better and give a convincing pseudo-3D feel through turns,
+but based on prior experience building this exact effect, they cause
+real trouble for anything that needs to track a specific point on the
+hull — engine glow particles, weapon muzzle origins, the turret overlay —
+because that attachment point visibly shifts as the bank frame changes.
+That was never fully solved last time (the turret in particular always
+looked wrong mid-bank). Revisit bank-angle rendering post-v1, once
+there's room to solve attachment-point tracking properly (e.g.
+per-frame authored anchor points) instead of alongside everything else
+under time pressure.
+
+**Direct implications of that decision:** turret-equipped ships (Falcon,
+Star Destroyer) still work fine in v1 using their neutral-bank frame plus
+a static turret overlay; deployable mines are **out of scope for v1**
+entirely (revisit alongside other pickup ideas, e.g. the capacitor
+pickup mentioned in 2.2).
+
+**Confirmed constraint:** the game is strictly 2D — every moving visual
+element is a sprite (ships, projectiles, pickups) or a particle effect
+(engine glow, explosions, muzzle flashes). No 3D models anywhere.
+
+### 4.4 UI framework
+
+**Decision: [Scene2D](https://libgdx.com/wiki/graphics/2d/scene2d/scene2d)
+(libGDX's built-in UI/scene-graph module) as the base, with
+[VisUI](https://github.com/kotcrab/vis-ui) layered on top for the
+menu-style screens.**
+
+The UI need actually splits into two different shapes:
+
+- **In-match HUD** — health/shield readouts, a radar/minimap, kill feed,
+  scoreboard. Wants tight integration with the game camera/viewport and
+  world state, is mostly custom-drawn bars/icons rather than standard
+  form widgets, and is exactly what plain Scene2D (`Stage` + `Table` +
+  custom `Actor`s, drawn through the existing `SpriteBatch`) is good at
+  with no extra dependency.
+- **Menu-style screens** — Connect Dialog, Keybind Setup, Ship Selection.
+  Closer to a traditional desktop-app form: text fields, buttons,
+  list/grid selection, validation, error messages. Plain Scene2D can do
+  this too, but means hand-building and hand-skinning every widget.
+
+Given that split, **VisUI is worth adding** for the menu screens: it's
+built directly on Scene2D (same `Stage`/`Actor` model, so it composes
+cleanly with plain Scene2D used elsewhere, e.g. the HUD), ships a
+complete, decent-looking default skin so we're not authoring one from
+scratch, and covers what the menu screens actually need (validated text
+fields for the connect dialog, list/table widgets for ship selection,
+dialogs for error messages) — meaningfully less boilerplate than raw
+Scene2D for that part, with no lock-in away from Scene2D itself. It's
+actively maintained and Apache-2 licensed.
+
+**Considered and not chosen:** raw Scene2D everywhere (fine, but a lot of
+hand-rolled skinning work for the form-heavy screens for no real payoff
+here); Dear ImGui bindings (`gdx-imgui` and similar) — well suited to
+fast internal debug/dev-tool UI, not meant for polished player-facing
+menus, so not a fit here (could still be worth adding later purely as an
+internal debug overlay, e.g. live-tuning Newtonian flight constants —
+not a v1 concern).
+
+## 5. UX flow
+
+### 5.1 Screen flow
 
 ```
  ┌────────────────┐
@@ -316,7 +530,7 @@ US-layout glyph as the label.
   screen the player always returns to (leaving a match via ESC, or after
   dying and pressing ENTER on the death screen). Ships available here are
   gated by the account's current XP. Also the entry point to the Keybind
-  Setup screen (4.2).
+  Setup screen (5.2).
 - **Keybind Setup:** reachable from Ship Selection, lets the player remap
   every control; persisted locally per 3.8.
 - **Gameplay:** the main match scene. Ends for this player either by
@@ -330,7 +544,7 @@ US-layout glyph as the label.
   Ship Selection. This screen is reached **only** by dying in combat, not
   by a voluntary ESC leave.
 
-### 4.2 Keybind Setup screen
+### 5.2 Keybind Setup screen
 
 Lists every remappable action with a "press a key to bind" capture field
 (see 3.8 for why this approach is layout-safe). Actions to cover: thrust
@@ -340,11 +554,11 @@ decided: every keyboard/layout has an ESC key, so there's no
 internationalization reason to expose it here, and it's simpler to keep it
 hardcoded. Changes save immediately to the local keybinds file.
 
-### 4.3 Controls (v1, defaults)
+### 5.3 Controls (v1, defaults)
 
 Keyboard only for now; more keybinds will follow as further features are
 added. All of the below are just the **defaults** — every action is
-remappable via the Keybind Setup screen (4.2).
+remappable via the Keybind Setup screen (5.2).
 
 - **W** — thrust forward
 - **S** — thrust reverse / brake
@@ -362,15 +576,19 @@ This is the classic "Asteroids-style" Newtonian control scheme (rotate +
 thrust along facing direction) — reasonable default, open to tuning once
 it's actually flyable.
 
-## 5. Components / TODOs
+## 6. Components / TODOs
 
 Rough build order — check items off as they land, add detail as sub-bullets
 once a component is actually being worked on.
 
-- [ ] **`server` Maven module** — `gdx-backend-headless`, depends on `core`,
-      runs the authoritative simulation loop.
-- [ ] **Networking layer** — KryoNet fork wired into both `client` and
-      `server`, shared message/packet classes, connect/disconnect handling.
+- [x] **`server` Maven module** — `gdx-backend-headless`, depends on `core`.
+      Runs the placeholder 30Hz loop (3.5); the actual authoritative
+      simulation loop is still to come.
+- [x] **Networking layer (first milestone)** — KryoNet fork wired into
+      `core`, shared message classes, connect/disconnect handling, a
+      handshake round trip, and a TCP+UDP ping/pong round trip, covered by
+      an integration test. Still open: real gameplay messages, tick/
+      snapshot rate (3.5), client-side prediction/reconciliation.
 - [ ] **Account system (server)** — JSON-file-backed `PlayerAccount` store,
       auto-register-or-validate-on-connect flow, salted password hashing.
 - [ ] **Client local config** — load/save connection fields (3.7) and
@@ -388,6 +606,9 @@ once a component is actually being worked on.
       regen rate / weapon fire rate / engine thrust & agility; the
       three-keybind +5/-2.5/-2.5 adjustment with the 10% floor/redirect/
       no-op algorithm (2.2), and reset-to-even logic.
+- [ ] **Weapon capacitor** — per-ship energy buffer (2.2) that trickle-
+      charges from the power core and drains per shot; recharge rate
+      scales with Weapons power allocation.
 - [ ] **Combat-lock ESC logic** — server tracks last-fired/last-hit
       timestamps per player, gates ESC-triggered leave on the 20s rule,
       triggers the self-destruct/explode VFX + blocked-ESC warning
@@ -401,15 +622,25 @@ once a component is actually being worked on.
 - [ ] **Client-side prediction & reconciliation.**
 - [ ] **Match/arena flow** — single continuous deathmatch arena for v1
       (join → spawn → fight → respawn on death); no lobby/matchmaking yet.
+- [ ] **Camera system** — speed-linked zoom and inertia/lag-behind
+      follow behavior (4.1).
+- [ ] **Parallax starfield background** — at least 2 layers (4.2).
+- [ ] **Ship sprite rendering** — import sprite sets from
+      `R:\StarWars\sprites` into `assets/`; render the neutral-bank
+      (`_0020`) frame per ship for v1, plus the static turret overlay
+      for turret-equipped ships (4.3).
+- [ ] **UI framework integration** — add VisUI on top of Scene2D (4.4);
+      build out the Connect Dialog, Keybind Setup, and Ship Selection
+      screens against it.
 - [ ] **HUD** — health, shield, target/radar or minimap, kill feed,
       scoreboard. (No power-distribution readout for *other* players —
       that's intentionally hidden, see 2.2.)
 - [ ] **Death Screen** — random Star Wars quote + matching image; needs a
-      content pool (see 5.1) and ENTER-to-continue handling.
+      content pool (see 6.1) and ENTER-to-continue handling.
 - [ ] **XP & progression** — award XP per match/kill, unlock additional
       ships at XP thresholds (persisted via the account system above).
 
-### 5.1 Content TODO: death screen quotes
+### 6.1 Content TODO: death screen quotes
 
 Need to compile a pool of (quote, matching image) pairs before this screen
 can ship. Starting example:
@@ -420,7 +651,7 @@ can ship. Starting example:
 Add more pairs here as we pick them; keep it to one clear "you just died,
 here's the universe laughing at you" beat per entry.
 
-## 6. Open design questions
+## 7. Open design questions
 
 Track unresolved decisions here so they don't get lost. Move an item into
 the relevant section above once decided.
