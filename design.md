@@ -550,6 +550,26 @@ ship (needs a real dogfight, same as every other combat-adjacent
 milestone this session) — should behave identically to the X-wing since
 every ship currently shares its stats, but hasn't been watched happen.
 
+**Player observation, same day, worth remembering for the eventual
+balancing pass:** even with identical thrust/torque for every ship, they
+already *feel* meaningfully different to fly — the TIE Fighter noticeably
+more agile, the Falcon and Star Destroyer noticeably heavier/slower.
+This is Box2D's own mass/inertia model doing exactly what it should:
+every hitbox fixture uses the same density (1, `ShipFactory.createBody`),
+so a physically larger authored hitbox polygon has more area, hence more
+mass, hence less acceleration from the same force (and less angular
+acceleration from the same torque, since rotational inertia scales with
+size too) — bigger ships are naturally sluggish, smaller ones naturally
+nimble, with no per-ship tuning at all. Realistic and exactly the feel
+wanted, purely as a side effect of the ship-type-config work above.
+**Implication for the future balancing pass:** thrust/torque probably
+don't need much (if any) per-ship adjustment for the *size-driven* part
+of that feel — it's already emergent. A real pass should focus on
+things Box2D's mass model *doesn't* give for free: hull/shield pools,
+weapon loadout/damage, and top speed/turn-rate ceilings if the emergent
+values ever feel wrong at the extremes (e.g. the Star Destroyer becoming
+*too* sluggish to be fun) — not on refighting what already works.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
