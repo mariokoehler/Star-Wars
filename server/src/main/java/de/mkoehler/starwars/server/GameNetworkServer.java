@@ -72,8 +72,14 @@ public class GameNetworkServer extends NetworkServer {
             action.run();
         }
 
-        shipControlSystem.update(deltaTime);
-        physicsSystem.update(deltaTime);
+        // Reapply every ship's current input before each individual physics step, not once
+        // per tick - the server ticks at 30Hz but physics steps at a fixed 60Hz, so most
+        // ticks need two steps, and Box2D clears applied forces after every step. Applying
+        // once per tick silently starved every second step of its force (see
+        // PhysicsSystem#update(float, Runnable) for the full explanation) - found via
+        // play-testing that felt like "flying in slow motion" compared to the unnetworked
+        // prototype, plus knock-on jitter from reconciliation fighting that speed gap.
+        physicsSystem.update(deltaTime, () -> shipControlSystem.update(0f));
 
         broadcastSnapshot();
     }
@@ -137,7 +143,9 @@ public class GameNetworkServer extends NetworkServer {
         int i = 0;
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
             Body body = entry.getValue().getComponent(PhysicsBodyComponent.class).getBody();
-            states[i++] = new ShipState(entry.getKey(), body.getPosition().x, body.getPosition().y, body.getAngle());
+            states[i++] = new ShipState(entry.getKey(),
+                body.getPosition().x, body.getPosition().y, body.getAngle(),
+                body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity());
         }
         sendToAllUDP(new WorldSnapshotMessage(states));
     }

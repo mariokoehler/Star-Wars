@@ -47,8 +47,9 @@ Thumbs.db
 *#*#
 /assets/assets.txt
 
-## LWJGL's native-library extraction cache, created at runtime when running the client:
-/assets/.lwjgl/
+## LWJGL's native-library extraction cache, created at runtime when running the client
+## (wherever the working directory happened to be when it was run):
+.lwjgl/
 
 ## Old Gradle setup, kept around only until the Maven migration is confirmed working:
 /_gradle-legacy-backup/

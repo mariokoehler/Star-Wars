@@ -15,11 +15,14 @@ import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
  * a {@link PlayerControlledComponent} and a {@link NetworkInputComponent},
  * based on that entity's currently held input state.
  * <p>
- * Runs server-side only: the server is the sole simulator of ship physics
- * (design.md 3.5), driven by input received over the network
+ * Runs server-side, driven by input received over the network
  * ({@code PlayerInputMessage}) rather than local {@code Gdx.input} — this
  * class has no libGDX-input/graphics dependency, only Box2D/Ashley, so it
- * works unchanged in the headless server process.
+ * works unchanged in the headless server process. {@link #applyInput} is
+ * exposed statically so the client can call the exact same force/torque math
+ * directly on its local prediction body (design.md 3.5) — predicted and
+ * authoritative physics must apply identical rules, or the client would
+ * constantly need correcting for reasons other than differing input.
  */
 public class ShipControlSystem extends IteratingSystem {
 
@@ -42,18 +45,40 @@ public class ShipControlSystem extends IteratingSystem {
         PlayerControlledComponent control = controlMapper.get(entity);
         NetworkInputComponent input = inputMapper.get(entity);
 
-        if (input.isTurnLeft()) {
-            body.applyTorque(control.getTurnTorque(), true);
+        applyInput(body, control.getThrustForce(), control.getTurnTorque(),
+            input.isThrustForward(), input.isThrustReverse(), input.isTurnLeft(), input.isTurnRight());
+    }
+
+    /**
+     * Applies one frame's worth of thrust/turn forces to a body, given a
+     * held input state. The single place this project's ship control math
+     * lives, called both from {@link #processEntity} (server, via
+     * {@link NetworkInputComponent}) and directly by the client (its own
+     * locally-held {@code Gdx.input} state, for prediction).
+     *
+     * @param body          the body to apply forces to
+     * @param thrustForce   force, in newtons, applied while thrusting
+     * @param turnTorque    torque, in newton-meters, applied while turning
+     * @param thrustForward whether the forward-thrust input is held
+     * @param thrustReverse whether the reverse-thrust input is held
+     * @param turnLeft      whether the turn-left input is held
+     * @param turnRight     whether the turn-right input is held
+     */
+    public static void applyInput(Body body, float thrustForce, float turnTorque,
+                                   boolean thrustForward, boolean thrustReverse,
+                                   boolean turnLeft, boolean turnRight) {
+        if (turnLeft) {
+            body.applyTorque(turnTorque, true);
         }
-        if (input.isTurnRight()) {
-            body.applyTorque(-control.getTurnTorque(), true);
+        if (turnRight) {
+            body.applyTorque(-turnTorque, true);
         }
 
-        if (input.isThrustForward()) {
-            applyThrust(body, control.getThrustForce());
+        if (thrustForward) {
+            applyThrust(body, thrustForce);
         }
-        if (input.isThrustReverse()) {
-            applyThrust(body, -control.getThrustForce());
+        if (thrustReverse) {
+            applyThrust(body, -thrustForce);
         }
     }
 

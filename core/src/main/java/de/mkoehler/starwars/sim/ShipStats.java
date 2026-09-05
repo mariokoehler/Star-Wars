@@ -13,9 +13,12 @@ public final class ShipStats {
 
     /**
      * Stats for the (currently only) X-wing, derived from its 128px atlas
-     * frame at {@link PhysicsConstants#PIXELS_PER_METER}.
+     * frame at {@link PhysicsConstants#PIXELS_PER_METER}. Thrust/torque
+     * tuned by feel (2026-09-05) for an agile handling suited to the
+     * larger 1920x1080 view (design.md 4.1) — not derived from any
+     * in-universe reference, just what played well.
      */
-    public static final ShipStats XWING = new ShipStats(2f, 30f, 22.5f);
+    public static final ShipStats XWING = new ShipStats(2f, 200f, 150f);
 
     private final float radiusMeters;
     private final float thrustForce;

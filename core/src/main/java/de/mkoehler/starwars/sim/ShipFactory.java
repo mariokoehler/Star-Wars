@@ -13,12 +13,14 @@ import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 
 /**
- * Assembles server-side ship entities: a dynamic Box2D body plus the
- * components {@link de.mkoehler.starwars.sim.systems.ShipControlSystem} needs
- * to drive it from network-received input.
+ * Builds ship Box2D bodies, and (server-side) full Ashley entities wrapping
+ * one.
  * <p>
- * Server-only — has no rendering-related components, since the dedicated
- * server never draws anything (design.md 3.2).
+ * {@link #createBody} is also used directly by the client for its local
+ * prediction body (design.md 3.5) — the client doesn't use Ashley at all, it
+ * just needs a body built with the exact same shape/damping the server uses,
+ * so predicted and authoritative physics never diverge for reasons other
+ * than differing input.
  */
 public final class ShipFactory {
 
@@ -26,7 +28,8 @@ public final class ShipFactory {
     }
 
     /**
-     * Creates a player's ship entity and adds it to the given engine.
+     * Creates a player's ship entity (server-side) and adds it to the given
+     * engine.
      *
      * @param engine   the Ashley engine to add the entity to
      * @param world    the Box2D world to create the body in
@@ -37,7 +40,7 @@ public final class ShipFactory {
      * @return the created entity
      */
     public static Entity createShip(Engine engine, World world, int playerId, float x, float y, ShipStats stats) {
-        Body body = createBody(world, x, y, stats.getRadiusMeters());
+        Body body = createBody(world, x, y, stats);
 
         Entity entity = new Entity();
         entity.add(new PlayerIdComponent(playerId));
@@ -48,7 +51,16 @@ public final class ShipFactory {
         return entity;
     }
 
-    private static Body createBody(World world, float x, float y, float radiusMeters) {
+    /**
+     * Creates a ship's Box2D body, with no Ashley entity around it.
+     *
+     * @param world the Box2D world to create the body in
+     * @param x     spawn position, in meters
+     * @param y     spawn position, in meters
+     * @param stats the ship type's tuning values (only the radius is used)
+     * @return the created body
+     */
+    public static Body createBody(World world, float x, float y, ShipStats stats) {
         BodyDef bodyDef = new BodyDef();
         bodyDef.type = BodyDef.BodyType.DynamicBody;
         bodyDef.position.set(x, y);
@@ -57,7 +69,7 @@ public final class ShipFactory {
         Body body = world.createBody(bodyDef);
 
         CircleShape shape = new CircleShape();
-        shape.setRadius(radiusMeters);
+        shape.setRadius(stats.getRadiusMeters());
 
         FixtureDef fixtureDef = new FixtureDef();
         fixtureDef.shape = shape;

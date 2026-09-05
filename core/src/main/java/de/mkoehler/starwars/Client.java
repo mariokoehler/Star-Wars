@@ -10,6 +10,10 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.physics.box2d.Body;
+import com.badlogic.gdx.physics.box2d.Box2D;
+import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.utils.ScreenUtils;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import com.badlogic.gdx.utils.viewport.Viewport;
@@ -23,7 +27,10 @@ import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.sim.PhysicsConstants;
+import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.systems.PhysicsSystem;
+import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -35,29 +42,38 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * {@link com.badlogic.gdx.ApplicationListener} implementation shared by all
  * platforms.
  * <p>
- * First networked milestone: the server is the sole simulator of ship
- * physics (design.md 3.5); this client sends its held input to the server
- * and renders every ship — including its own — purely from broadcast
- * {@link WorldSnapshotMessage}s, easing each ship's drawn position/angle
- * toward the latest received values rather than snapping to them. There is
- * no client-side prediction yet, so input has a visible network round trip
- * before it's reflected on screen; that's a deliberate simplification for
- * this milestone, not an oversight.
+ * Second networked milestone: client-side prediction. The client runs its
+ * own local Box2D body for its own ship, applying held input to it
+ * immediately every frame (via the exact same {@link ShipControlSystem#applyInput}
+ * math the server uses) so movement feels instant, rather than waiting for a
+ * server round trip. Each server {@link WorldSnapshotMessage} then
+ * reconciles that local prediction against the authoritative state — a
+ * small blend toward the server's position/velocity for small errors, a
+ * hard snap for large ones (see {@link #reconcileWithServer}). Other
+ * players' ships are still simple snapshot interpolation, unchanged from the
+ * previous milestone — predicting someone else's ship isn't possible without
+ * knowing their future input.
  * <p>
  * {@link NetworkClient}'s callbacks run on KryoNet's own thread, not the
  * render thread, so incoming messages are queued in {@link #pendingUpdates}
  * and only applied at the start of {@link #render()} — never mutate
- * {@link #ships} directly from a network callback.
+ * {@link #ships}, {@link #myBody} or the local Box2D {@link #localWorld}
+ * directly from a network callback.
  */
 public class Client extends ApplicationAdapter {
 
     private static final String SERVER_HOST = "localhost";
     private static final String DISPLAY_NAME = "Pilot";
 
-    /** How quickly a ship's drawn position eases toward its latest network target each frame. */
+    /** How quickly another player's ship's drawn position eases toward its latest network target each frame. */
     private static final float SHIP_INTERPOLATION_SPEED = 10f;
     /** How quickly the camera eases toward the local ship each frame; not the full model from design.md 4.1. */
     private static final float CAMERA_FOLLOW_SPEED = 3f;
+
+    /** Reconciliation error, in meters, beyond which the local prediction hard-snaps to the server's state instead of blending. */
+    private static final float RECONCILE_SNAP_THRESHOLD_METERS = 3f;
+    /** Fraction of a small reconciliation error corrected per snapshot, rather than all at once. */
+    private static final float RECONCILE_SOFT_BLEND = 0.2f;
 
     private static final Color OTHER_SHIP_TINT = new Color(0.6f, 0.85f, 1f, 1f);
 
@@ -73,8 +89,17 @@ public class Client extends ApplicationAdapter {
     private final Map<Integer, RemoteShip> ships = new HashMap<>();
     private int myPlayerId = -1;
 
+    private World localWorld;
+    private PhysicsSystem localPhysicsSystem;
+    private Body myBody;
+    private float myPreviousX;
+    private float myPreviousY;
+    private float myPreviousAngle;
+
     @Override
     public void create() {
+        Box2D.init();
+
         batch = new SpriteBatch();
         shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
         xwingRegion = shipsAtlas.findRegion("xwing/xwing128", 20);
@@ -97,7 +122,7 @@ public class Client extends ApplicationAdapter {
             @Override
             protected void onReceived(Object object) {
                 // Runs on KryoNet's network thread - only ever enqueue here, never touch
-                // `ships`/`myPlayerId` directly (see class Javadoc).
+                // `ships`/`myBody`/`localWorld` directly (see class Javadoc).
                 if (object instanceof PlayerJoinedMessage joined) {
                     pendingUpdates.add(() -> onPlayerJoined(joined));
                 } else if (object instanceof WorldSnapshotMessage snapshot) {
@@ -120,19 +145,54 @@ public class Client extends ApplicationAdapter {
 
     private void onPlayerJoined(PlayerJoinedMessage joined) {
         myPlayerId = joined.getPlayerId();
-        float x = joined.getSpawnX() * PhysicsConstants.PIXELS_PER_METER;
-        float y = joined.getSpawnY() * PhysicsConstants.PIXELS_PER_METER;
-        ships.put(myPlayerId, new RemoteShip(x, y, 0f));
+
+        localWorld = new World(new Vector2(0, 0), true);
+        localPhysicsSystem = new PhysicsSystem(localWorld);
+        myBody = ShipFactory.createBody(localWorld, joined.getSpawnX(), joined.getSpawnY(), ShipStats.XWING);
+        myPreviousX = myBody.getPosition().x;
+        myPreviousY = myBody.getPosition().y;
+        myPreviousAngle = myBody.getAngle();
     }
 
     private void onWorldSnapshot(WorldSnapshotMessage snapshot) {
         for (ShipState state : snapshot.getShips()) {
+            if (state.getPlayerId() == myPlayerId) {
+                reconcileWithServer(state);
+                continue;
+            }
             RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id ->
                 new RemoteShip(state.getX() * PhysicsConstants.PIXELS_PER_METER,
                     state.getY() * PhysicsConstants.PIXELS_PER_METER, state.getAngle()));
             ship.targetX = state.getX() * PhysicsConstants.PIXELS_PER_METER;
             ship.targetY = state.getY() * PhysicsConstants.PIXELS_PER_METER;
             ship.targetAngle = state.getAngle();
+        }
+    }
+
+    /**
+     * Corrects the local prediction body against the server's authoritative
+     * state for it: a small blend for a small error (smooths out normal
+     * prediction/authority drift without a visible pop), or a hard snap
+     * (including velocity) for a large one, so a bad desync — e.g. from a
+     * burst of dropped packets — can't leave the local prediction
+     * permanently wrong.
+     *
+     * @param state the local player's ship state from the latest snapshot
+     */
+    private void reconcileWithServer(ShipState state) {
+        float dx = state.getX() - myBody.getPosition().x;
+        float dy = state.getY() - myBody.getPosition().y;
+        float errorMeters = (float) Math.sqrt(dx * dx + dy * dy);
+
+        if (errorMeters > RECONCILE_SNAP_THRESHOLD_METERS) {
+            myBody.setTransform(state.getX(), state.getY(), state.getAngle());
+            myBody.setLinearVelocity(state.getVelocityX(), state.getVelocityY());
+            myBody.setAngularVelocity(state.getAngularVelocity());
+        } else {
+            float blendedX = MathUtils.lerp(myBody.getPosition().x, state.getX(), RECONCILE_SOFT_BLEND);
+            float blendedY = MathUtils.lerp(myBody.getPosition().y, state.getY(), RECONCILE_SOFT_BLEND);
+            float blendedAngle = MathUtils.lerpAngle(myBody.getAngle(), state.getAngle(), RECONCILE_SOFT_BLEND);
+            myBody.setTransform(blendedX, blendedY, blendedAngle);
         }
     }
 
@@ -147,29 +207,41 @@ public class Client extends ApplicationAdapter {
             update.run();
         }
 
-        sendInput();
-        interpolateShips(deltaTime);
+        if (myPlayerId >= 0) {
+            boolean thrustForward = Gdx.input.isKeyPressed(Input.Keys.W);
+            boolean thrustReverse = Gdx.input.isKeyPressed(Input.Keys.S);
+            boolean turnLeft = Gdx.input.isKeyPressed(Input.Keys.A);
+            boolean turnRight = Gdx.input.isKeyPressed(Input.Keys.D);
+
+            networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight));
+            predictLocalShip(thrustForward, thrustReverse, turnLeft, turnRight, deltaTime);
+        }
+
+        interpolateRemoteShips(deltaTime);
         updateCamera(deltaTime);
 
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
         background.render(batch, camera);
-        drawShips();
+        drawRemoteShips();
+        drawLocalShip();
         batch.end();
     }
 
-    private void sendInput() {
-        if (myPlayerId < 0) {
-            return;
-        }
-        networkClient.sendUDP(new PlayerInputMessage(
-            Gdx.input.isKeyPressed(Input.Keys.W),
-            Gdx.input.isKeyPressed(Input.Keys.S),
-            Gdx.input.isKeyPressed(Input.Keys.A),
-            Gdx.input.isKeyPressed(Input.Keys.D)));
+    private void predictLocalShip(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, float deltaTime) {
+        myPreviousX = myBody.getPosition().x;
+        myPreviousY = myBody.getPosition().y;
+        myPreviousAngle = myBody.getAngle();
+
+        // Reapply input before every individual physics step (see PhysicsSystem#update(float,
+        // Runnable)), not just once here - a frame hitch can make this need more than one step,
+        // and Box2D clears applied forces/torque after each one.
+        localPhysicsSystem.update(deltaTime, () ->
+            ShipControlSystem.applyInput(myBody, ShipStats.XWING.getThrustForce(), ShipStats.XWING.getTurnTorque(),
+                thrustForward, thrustReverse, turnLeft, turnRight));
     }
 
-    private void interpolateShips(float deltaTime) {
+    private void interpolateRemoteShips(float deltaTime) {
         float lerp = MathUtils.clamp(SHIP_INTERPOLATION_SPEED * deltaTime, 0f, 1f);
         for (RemoteShip ship : ships.values()) {
             ship.renderX += (ship.targetX - ship.renderX) * lerp;
@@ -179,23 +251,25 @@ public class Client extends ApplicationAdapter {
     }
 
     private void updateCamera(float deltaTime) {
-        RemoteShip localShip = ships.get(myPlayerId);
-        if (localShip == null) {
+        if (myBody == null) {
             return;
         }
+        float alpha = localPhysicsSystem.getAlpha();
+        float targetX = MathUtils.lerp(myPreviousX, myBody.getPosition().x, alpha) * PhysicsConstants.PIXELS_PER_METER;
+        float targetY = MathUtils.lerp(myPreviousY, myBody.getPosition().y, alpha) * PhysicsConstants.PIXELS_PER_METER;
+
         float lerp = MathUtils.clamp(CAMERA_FOLLOW_SPEED * deltaTime, 0f, 1f);
-        camera.position.x += (localShip.renderX - camera.position.x) * lerp;
-        camera.position.y += (localShip.renderY - camera.position.y) * lerp;
+        camera.position.x += (targetX - camera.position.x) * lerp;
+        camera.position.y += (targetY - camera.position.y) * lerp;
         camera.update();
     }
 
-    private void drawShips() {
+    private void drawRemoteShips() {
         float widthPixels = ShipStats.XWING.getRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
         float heightPixels = widthPixels;
 
-        for (Map.Entry<Integer, RemoteShip> entry : ships.entrySet()) {
-            RemoteShip ship = entry.getValue();
-            batch.setColor(entry.getKey() == myPlayerId ? Color.WHITE : OTHER_SHIP_TINT);
+        batch.setColor(OTHER_SHIP_TINT);
+        for (RemoteShip ship : ships.values()) {
             // The source art faces up/north when unrotated (design.md 4.3), and the server's
             // ShipControlSystem treats angle 0 as "facing north" too - so the ship's angle
             // maps directly onto the region's rotation with no offset needed.
@@ -207,6 +281,26 @@ public class Client extends ApplicationAdapter {
                 ship.renderAngle * MathUtils.radiansToDegrees);
         }
         batch.setColor(Color.WHITE);
+    }
+
+    private void drawLocalShip() {
+        if (myBody == null) {
+            return;
+        }
+        float alpha = localPhysicsSystem.getAlpha();
+        float x = MathUtils.lerp(myPreviousX, myBody.getPosition().x, alpha) * PhysicsConstants.PIXELS_PER_METER;
+        float y = MathUtils.lerp(myPreviousY, myBody.getPosition().y, alpha) * PhysicsConstants.PIXELS_PER_METER;
+        float angle = MathUtils.lerpAngle(myPreviousAngle, myBody.getAngle(), alpha);
+
+        float widthPixels = ShipStats.XWING.getRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
+        float heightPixels = widthPixels;
+
+        batch.draw(xwingRegion,
+            x - widthPixels / 2f, y - heightPixels / 2f,
+            widthPixels / 2f, heightPixels / 2f,
+            widthPixels, heightPixels,
+            1f, 1f,
+            angle * MathUtils.radiansToDegrees);
     }
 
     @Override
@@ -221,12 +315,15 @@ public class Client extends ApplicationAdapter {
         if (networkClient != null) {
             networkClient.stop();
         }
+        if (localWorld != null) {
+            localWorld.dispose();
+        }
         batch.dispose();
         shipsAtlas.dispose();
         background.dispose();
     }
 
-    /** A ship's drawn state, eased toward the latest network-reported target each frame. */
+    /** Another player's ship, eased toward the latest network-reported target each frame. */
     private static final class RemoteShip {
         float renderX;
         float renderY;

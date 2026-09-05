@@ -2,6 +2,26 @@
 
 A [libGDX](https://libgdx.com/) project, originally generated with [gdx-liftoff](https://github.com/libgdx/gdx-liftoff) and migrated from Gradle to Maven.
 
+## How to run
+
+\# One-time build (from the repo root)
+
+mvn clean package
+
+\# Terminal 1 — the dedicated server
+
+java --enable-native-access=ALL-UNNAMED -jar server/target/StarWars-Server-1.0.0.jar
+
+Wait until it prints [GameServer] Listening on TCP 45625 / UDP 45626, then:
+
+\# Terminal 2 — client 1
+
+java --enable-native-access=ALL-UNNAMED -jar lwjgl3/target/StarWars-1.0.0.jar
+
+\# Terminal 3 — client 2
+
+java --enable-native-access=ALL-UNNAMED -jar lwjgl3/target/StarWars-1.0.0.jar
+
 ## Platforms
 
 - `core`: Shared code — simulation (Ashley/Box2D), the network layer, and the application logic shared by all platforms.

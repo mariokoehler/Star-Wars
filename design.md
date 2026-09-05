@@ -264,14 +264,22 @@ blend factor) that 3.5's "other clients' ships: interpolated/extrapolated
 between received snapshots" will need over the network later — good to
 have already exercised it locally.
 
-**Superseded, kept for reference (2026-09-05, same day):** once ship
+**Superseded, then reinstated the same day (2026-09-05):** once ship
 physics moved server-only (3.5's "networked ship movement" milestone),
 this exact interpolation code was removed from `PhysicsSystem`/
-`PhysicsBodyComponent` — the client no longer steps Box2D locally at
-all, so there's nothing left to interpolate between on that side. Left
-this section intact rather than deleting it, since the same technique
-will likely return (applied to a locally-*predicted* position instead of
-a locally-*stepped* one) once client-side prediction is implemented.
+`PhysicsBodyComponent` — the client no longer stepped Box2D locally at
+all, so there was nothing left to interpolate between on that side. It
+came back, predictably, the moment client-side prediction (3.5) was
+implemented: the client now steps a *local* Box2D body for its own ship
+again, and needs the exact same fixed-timestep-interpolation technique
+to draw that body's position smoothly. The implementation isn't
+identical to the original, though — no `PhysicsBodyComponent`/Ashley
+involved this time, since there's exactly one predicted body to track
+client-side, not an arbitrary entity family; `Client` just keeps a plain
+`myPreviousX/Y/Angle` alongside the body and reads `PhysicsSystem.getAlpha()`
+directly (`PhysicsSystem` itself is unchanged from its server-side form —
+it never needed Ashley/entity awareness even for the original
+single-player version, only a generic "step this Box2D world" role).
 
 ### 3.4 Networking
 
@@ -304,7 +312,7 @@ KryoNet's `Server`/`Client` handling connection lifecycle, a handshake
 (`HandshakeRequest`/`HandshakeResponse`), and a TCP + UDP ping/pong pair
 proving both channels work end-to-end.
 
-### 3.5 Netcode approach (movement now networked 2026-09-05; prediction still planned)
+### 3.5 Netcode approach (movement networked and predicted, 2026-09-05)
 
 - **Reliable channel (TCP):** login/account handshake, join/leave, ship
   selection, spawn/despawn, death/kill events, chat, match state changes.
@@ -315,20 +323,69 @@ proving both channels work end-to-end.
   intentionally hidden from other players, so it never needs to leave the
   owning client/server pair beyond what's needed for the server to apply
   its gameplay effects.
-- **Client-side prediction — still not implemented, deliberately
-  deferred:** each client will eventually simulate its own ship locally on
-  input immediately, then reconcile against the authoritative server
-  snapshot for that ship. For now (2026-09-05 milestone, see below), the
-  client does **not** predict — even the local player's own ship is drawn
-  purely from server snapshots, meaning there's a visible network round
-  trip between pressing a key and seeing the ship react. Accepted
-  simplification for this milestone; implementing prediction is the next
-  one, once the plain server-authoritative path is proven (below).
-- **Other clients' ships — implemented, simplified:** eased toward the
-  latest received snapshot every frame (the same "lerp toward a target"
-  technique already used for camera-follow), not a proper timestamped
-  interpolation-with-delay buffer. Good enough at LAN/loopback latency;
-  revisit if it looks bad at real internet latency.
+- **Client-side prediction — implemented (2026-09-05).** The client runs
+  its own local Box2D body for its own ship, applying held input to it
+  immediately every frame via `ShipControlSystem.applyInput(...)` — the
+  exact same static method the server calls, so predicted and
+  authoritative physics apply identical rules and only ever diverge for
+  reasons the reconciliation step below is meant to catch (packet loss,
+  minor timing drift), not because the two sides disagree on the rules.
+  This is what actually removes the round-trip input lag confirmed
+  "pretty noticeable" in the previous milestone's play-test.
+- **Reconciliation — decided, simplified (not full input-replay):** each
+  `WorldSnapshotMessage` now carries velocity as well as position/angle
+  per ship (`ShipState`). For the local player's own entry, the client
+  compares its predicted position against the server's:
+  - **Small error** (≤ 3m): blend 20% of the way toward the server's
+    position/angle each snapshot — smooths out normal drift without a
+    visible pop.
+  - **Large error** (> 3m): hard-snap position, angle, *and velocity* to
+    the server's exact values — a real desync (e.g. a burst of dropped
+    UDP packets) shouldn't be allowed to leave the local prediction
+    permanently wrong just to avoid a visible correction.
+  **Explicitly not implemented:** sequence-numbered input buffering +
+  exact replay (the "textbook" competitive-shooter approach). Considered
+  and rejected for now as more complexity than this project's actual
+  needs justify — small friend group, not a competitive shooter needing
+  frame-perfect fairness. **Revisit if the simplified blend/snap approach
+  visibly misbehaves** once tested over real (non-loopback) internet
+  latency between the UK/Belgium/Norway players, rather than only LAN/
+  localhost.
+- **Other players' ships — unchanged, simplified:** still pure snapshot
+  interpolation, eased toward the latest received target every frame
+  (the same "lerp toward a target" technique already used for
+  camera-follow), not a proper timestamped interpolation-with-delay
+  buffer, and never predicted — predicting another player's ship would
+  require knowing their future input. Good enough at LAN/loopback
+  latency; revisit if it looks bad at real internet latency.
+- **Critical bug found and fixed (2026-09-05): input force was being
+  halved by the fixed-timestep loop, not a tuning problem.** The
+  server ticks at `NetworkConstants.SIMULATION_TICK_RATE_HZ` = 30Hz,
+  but physics steps at a fixed 60Hz (`PhysicsConstants.TIME_STEP`) — so
+  almost every tick needs **two** physics steps to keep up with real
+  time. Input force/torque was being applied once per tick (before
+  `PhysicsSystem` stepped), but Box2D **clears a body's applied forces
+  after every individual `world.step()` call** — so only the *first* of
+  the two steps that tick actually got the force; the second stepped
+  with none. Net effect: roughly half the intended thrust/turn torque,
+  essentially every tick, which play-tested as "way below the
+  unnetworked prototype, like flying in slow motion" — not a case for
+  retuning `ShipStats.XWING`'s numbers, the numbers were never actually
+  being applied at full strength. This also explained a second reported
+  symptom (local ship visibly jittery while the same ship looked buttery
+  smooth on another player's screen): the client's prediction applied
+  full-strength force, so it was constantly correct-speed, while the
+  server's authoritative ship was moving at roughly half that — every
+  reconciliation was fighting a large, systematic gap instead of
+  smoothing small noise, which is what actually caused the jitter (other
+  players never saw that tug-of-war, just the — slow — authoritative
+  result). **Fix:** `PhysicsSystem.update(float, Runnable)` now takes an
+  optional callback invoked before *every* individual step, not once per
+  outer call; both the server (`GameNetworkServer.tick`) and the
+  client's local prediction (`Client.predictLocalShip`) now reapply
+  their held input via that callback, so it survives every step that
+  actually runs. Fixes both the speed and the jitter — they were the
+  same root cause, not two separate bugs.
 - Tick rate, snapshot rate, and interpolation buffer sizing: **still not
   tuned.** The server broadcasts one `WorldSnapshotMessage` every
   simulation tick (30Hz placeholder, see below) — snapshot rate and sim
@@ -834,11 +891,12 @@ once a component is actually being worked on.
       an integration test.
 - [x] **Networked ship movement (2026-09-05)** — server-authoritative:
       `GameNetworkServer` spawns/simulates/despawns ships and broadcasts
-      `WorldSnapshotMessage`s; clients send `PlayerInputMessage`s and
-      render every ship (including their own) from received snapshots,
-      no local physics. Verified with a real server + two real client
-      processes on one machine. Still open: tick/snapshot rate tuning
-      (3.5), client-side prediction/reconciliation (next milestone).
+      `WorldSnapshotMessage`s; clients send `PlayerInputMessage`s. Other
+      players' ships render from received snapshots (interpolated); the
+      local player's own ship is now client-predicted (see the next
+      item) rather than snapshot-only. Verified with a real server + two
+      real client processes on one machine. Still open: tick/snapshot
+      rate tuning (3.5).
 - [ ] **Account system (server)** — JSON-file-backed `PlayerAccount` store,
       auto-register-or-validate-on-connect flow, salted password hashing.
 - [ ] **Client local config** — load/save connection fields (3.7) and
@@ -867,7 +925,17 @@ once a component is actually being worked on.
       force, turn torque, and linear/angular damping are all placeholder
       `ShipStats.XWING` numbers meant to be tuned by feel — turn torque
       already bumped 15→22.5 N·m (+50%) after the first play-test felt
-      too sluggish.
+      too sluggish, then retuned again (2026-09-05) once the
+      fixed-timestep force-halving bug (3.5) was fixed and the real
+      (correctly-applied) speed/turn rate still felt too slow for the
+      larger 1920×1080 view (4.1) — more world visible at once makes a
+      given absolute speed read as slower. Settled, after some further
+      hands-on tinkering by the user, at **thrust 200N / torque 150 N·m**
+      (`ShipStats.XWING`) for an agile feel — not derived from any
+      formula, just tuned by feel. Box2D's linear damping model means
+      top speed/turn rate scale directly with thrust/torque at fixed
+      damping, which made the earlier "just double it" step predictable,
+      but the final numbers are empirical, not calculated.
 - [ ] **Power distribution system** — server-authoritative allocation
       state per ship (not networked to other clients), feeding shield
       regen rate / weapon fire rate / engine thrust & agility; the
@@ -886,7 +954,10 @@ once a component is actually being worked on.
       points, weapon loadout) per ship, starting with a small roster (2–3
       ships) before expanding.
 - [ ] **Ship Selection screen** — lists ships unlocked by current XP.
-- [ ] **Client-side prediction & reconciliation.**
+- [x] **Client-side prediction & reconciliation (2026-09-05)** — see 3.5
+      for the full writeup (local Box2D body, `ShipControlSystem.applyInput`
+      shared with the server, blend/snap reconciliation against
+      `WorldSnapshotMessage`, no sequence-numbered replay).
 - [ ] **Match/arena flow** — single continuous deathmatch arena for v1
       (join → spawn → fight → respawn on death); no lobby/matchmaking yet.
 - [ ] **Camera system** — speed-linked zoom and inertia/lag-behind

@@ -202,6 +202,79 @@ see design.md 3.5's "Visual distinction" note for the future direction
 (a floating display-name label instead, once accounts/display names
 exist) — not scheduled yet, don't start on it without being asked.
 
+**Client-side prediction — implemented 2026-09-05, same session as the
+lag was confirmed.** `Client` now runs its own local Box2D `World`/`Body`
+for its own ship (`ShipFactory.createBody`, no Ashley involved — just one
+body, doesn't need entity/component machinery), applying held input to
+it immediately via `ShipControlSystem.applyInput(...)` (extracted as a
+public static method specifically so client prediction and server
+authority always run identical force/torque math — any divergence
+between the two would otherwise show up as constant, unnecessary
+reconciliation corrections). Each `WorldSnapshotMessage` now also
+carries velocity per ship (`ShipState` gained `velocityX/Y`,
+`angularVelocity`); for the local player's entry, `reconcileWithServer`
+blends 20% toward the server's state for small errors (≤3m) or hard-
+snaps position+angle+velocity for large ones (>3m). **Deliberately not
+implemented:** sequence-numbered input buffering + exact replay (the
+"proper" competitive-shooter technique) — judged more complexity than
+this project needs; revisit only if the simplified blend/snap approach
+misbehaves once tested over real (non-loopback) internet latency between
+the actual UK/Belgium/Norway players, not just localhost. Other players'
+ships are untouched by this — still pure snapshot interpolation, no
+prediction, since you can't predict someone else's future input.
+
+The old single-player-only fixed-timestep interpolation
+(`PhysicsBodyComponent`/`PhysicsSystem.getAlpha()`) predicted to
+resurface for this exact purpose (see the "Superseded" note added
+earlier the same day) did resurface, just re-homed: `PhysicsSystem` was
+untouched (it never needed Ashley), but interpolation state now lives as
+plain fields directly on `Client` (`myPreviousX/Y/Angle`) rather than on
+`PhysicsBodyComponent`, since there's exactly one predicted body to
+track client-side, not a generic entity family.
+
+Verified end-to-end: ran a real server + two real client processes for
+the client-side-prediction code path specifically (not just the earlier
+milestone's plain sync), continuous input+snapshot+reconciliation
+traffic for the full run, zero exceptions on any side.
+
+**Important Box2D gotcha, found via play-testing (2026-09-05) — remember
+this for any future force-applying system:** Box2D clears a body's
+applied forces/torques after **every** `world.step(...)` call. If your
+update rate is slower than the fixed physics timestep (our
+`NetworkConstants.SIMULATION_TICK_RATE_HZ` = 30Hz server tick vs.
+`PhysicsConstants.TIME_STEP` = 1/60s physics step means almost every
+tick needs *two* steps), applying a continuously-held force/torque
+*once per outer call* only survives into the first of however many
+steps actually run — every further step in that call applies zero
+force, silently and systematically weakening the effect. This is
+exactly what made ship movement feel "like slow motion" compared to the
+unnetworked prototype (not a numbers-tuning problem — `ShipStats.XWING`'s
+thrust/torque were never wrong, they just weren't being fully applied),
+and it's also what caused the local-prediction-vs-server jitter reported
+in the same play-test (prediction ran at full strength, the
+authoritative server didn't, so reconciliation was constantly fighting
+a large systematic gap rather than smoothing small noise — one root
+cause, two symptoms). **Fix, now the standing pattern:** `PhysicsSystem`
+has an `update(float deltaTime, Runnable beforeEachStep)` overload that
+invokes the callback immediately before every individual step; any code
+applying continuous forces/torques (`GameNetworkServer.tick`,
+`Client.predictLocalShip`) must go through that overload, re-applying
+input inside the callback, not call `update(deltaTime)` once and apply
+force separately beforehand. Apply this same pattern to any future
+system that applies continuous (not one-shot/impulse) forces.
+
+**Tuning follow-up (2026-09-05, same session):** with the force-halving
+bug fixed, the user confirmed speed/turn rate now match the original
+unnetworked prototype — then asked to double both anyway for a more
+agile feel, partly because the bigger 1920×1080 view (vs. the original
+640×480) makes the same absolute speed read as slower. After that
+doubling (thrust 30→60N, torque 22.5→45 N·m), the user then hand-tuned
+further themselves (editing `ShipStats.XWING` directly) and settled on
+**thrust 200N / torque 150 N·m** as feeling good. These are empirical,
+by-feel values, not derived from a formula — don't "fix" them toward a
+calculated number if they come up again; ask the user before changing
+them further.
+
 Read `design.md` in full before continuing further implementation — this
 project moves in explicit milestones the user signs off on one at a time,
 not open-ended feature sprints.
