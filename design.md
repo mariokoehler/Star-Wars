@@ -958,6 +958,47 @@ directly (`PhysicsSystem` itself is unchanged from its server-side form —
 it never needed Ashley/entity awareness even for the original
 single-player version, only a generic "step this Box2D world" role).
 
+**A subtler version of the same bug, found via a user report + phone
+photo (2026-09-06) — this project's own "previous" snapshot had never
+actually been taken *per fixed step*, just per render frame, in either
+implementation above (re-read the "found and fixed" paragraph above:
+"taken once per render frame" is exactly the bug).** Taking the
+snapshot once per frame is fine as long as each frame runs exactly one
+step, but a frame occasionally batching two steps together (the
+accumulator carrying over slightly, entirely normal — the same
+condition `PhysicsSystem#update(float, Runnable)`'s `beforeEachStep`
+callback exists for) left `myPrevious*` stale by a whole step-pair for
+that frame; since the leftover interpolation `alpha` right after
+consuming two exact steps is small, the render for that frame snapped
+almost exactly back to the *stale* previous position instead of
+advancing — then forward again next frame. Net effect: the ship visibly
+alternating between two positions a step apart, occasionally
+converging when the batching lined up differently — worse the faster
+the ship moves, imperceptible at low speed, which is exactly why this
+was shrugged off earlier as "didn't eliminate [jitter] completely at
+top speed... could even pass as an intentional near-max-speed
+camera-shake effect" rather than actually root-caused. Also exactly why
+a screenshot never caught it (each one just freezes a single,
+individually-crisp already-composited frame) while the user's phone
+camera did (its shutter caught an actual mid-transition moment). **Real
+fix:** move the snapshot into the *same* per-step `beforeEachStep`
+callback already used for reapplying thrust/turn input in
+`Client.predictLocalShip` — capturing `myPrevious*` immediately before
+*every* individual `world.step()` rather than once before the whole
+batch, the identical "once per call vs. once per step" mistake already
+named and fixed once for force application, just never spotted in the
+interpolation snapshot too. Verified: full `mvn clean verify` green
+(unaffected — this is thin render/interpolation glue with no dedicated
+test, matching this project's usual convention for that kind of code);
+a real server+client boot, holding thrust for several seconds to reach
+speed, zero exceptions. **Not independently re-confirmed visually** —
+the whole reason this bug was hard to catch is that neither a
+screenshot nor (most likely) a casual glance at a code-reviewed fix can
+prove the *absence* of an intermittent, camera/shutter-timing-dependent
+artifact; the fix is a direct, structurally-sound port of an
+already-validated pattern, but real confirmation needs the user
+actually flying it.
+
 ### 3.4 Networking
 
 **Decision: [KryoNet fork](https://github.com/crykn/kryonet) —

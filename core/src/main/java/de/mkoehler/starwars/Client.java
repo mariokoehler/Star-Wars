@@ -554,19 +554,27 @@ public class Client implements Screen {
     }
 
     private void predictLocalShip(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, float deltaTime) {
-        myPreviousX = myBody.getPosition().x;
-        myPreviousY = myBody.getPosition().y;
-        myPreviousAngle = myBody.getAngle();
-
         ShipStats myStats = ShipStats.forType(myShipType);
         float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES);
-        // Reapply input before every individual physics step (see PhysicsSystem#update(float,
-        // Runnable)), not just once here - a frame hitch can make this need more than one step,
-        // and Box2D clears applied forces/torque after each one.
-        localPhysicsSystem.update(deltaTime, () ->
+        // Snapshot the pre-step position/angle, and reapply input, immediately before *each*
+        // individual physics step (see PhysicsSystem#update(float, Runnable)) - not once here
+        // before the whole call. A single render() call can trigger more than one fixed step
+        // whenever the accumulator carries over slightly (completely normal), and capturing
+        // "previous" only once per call left it stale by a whole step-pair whenever that
+        // happened: the leftover interpolation alpha right after consuming steps is small, so
+        // drawLocalShip/updateCamera would render almost exactly at that stale previous position
+        // instead of near the true current one, then snap forward again next frame - a real
+        // double-image/ghosting artifact, worse the faster the ship is moving (found via a user
+        // report + phone photo; a plain screenshot never caught it, since each one just freezes
+        // one already-composited, individually-crisp frame).
+        localPhysicsSystem.update(deltaTime, () -> {
+            myPreviousX = myBody.getPosition().x;
+            myPreviousY = myBody.getPosition().y;
+            myPreviousAngle = myBody.getAngle();
             ShipControlSystem.applyInput(myBody, myStats.getThrustForce() * enginesMultiplier,
                 myStats.getTurnTorque() * enginesMultiplier,
-                thrustForward, thrustReverse, turnLeft, turnRight));
+                thrustForward, thrustReverse, turnLeft, turnRight);
+        });
     }
 
     private void extrapolateRemoteShips(float deltaTime) {

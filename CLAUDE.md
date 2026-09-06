@@ -107,12 +107,25 @@ systems." Flagged in `Client.java`'s class Javadoc as something to
 revisit (e.g. camera-follow and background as their own Ashley systems)
 once there's more than this one entity/pipeline to coordinate.
 
-**Accepted as-is:** interpolation reduced the jitter significantly but
-didn't eliminate it completely at top speed — the user tried it, judged
-the remainder good enough to live with for now (half-joked it could
-even pass as an intentional near-max-speed camera-shake effect), and
-explicitly said not to keep chasing it further. Don't treat the small
-residual as an open bug to keep fixing without being asked.
+**Accepted as-is, at the time:** interpolation reduced the jitter
+significantly but didn't eliminate it completely at top speed — the
+user tried it, judged the remainder good enough to live with for now
+(half-joked it could even pass as an intentional near-max-speed
+camera-shake effect). **Revisited and actually root-caused 2026-09-06**
+once the user reported it again, this time with a phone photo showing a
+clear two-position "ghost" — see design.md 3.3's addendum for the full
+writeup: the "previous position" snapshot for interpolation was being
+taken once per render *frame*, not once per fixed *step*, in both this
+implementation and the original one, so a frame batching two steps
+together (normal accumulator carry-over) rendered a whole step-pair
+stale. Fixed by moving the snapshot into the same per-step
+`beforeEachStep` callback already used for reapplying thrust — the
+identical "once per call vs. once per step" mistake already fixed once
+for force application, just not spotted here too until now. **General
+rule worth remembering:** a user-accepted "good enough" tradeoff is a
+snapshot of their patience at the time, not a permanent waiver — revisit
+it seriously if they bring the same symptom up again, rather than
+reciting the old acceptance back at them.
 
 **Fourth play-test round (2026-09-05) — real bug fixed:** resizing the
 window to a different aspect ratio stretched/distorted both the ship and
