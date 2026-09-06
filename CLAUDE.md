@@ -1040,6 +1040,25 @@ right back in another ship's turret range at point-blank distance,
 producing a rapid kill/respawn loop. Belongs to the still-open "map/arena
 design" open question, not to the turret feature itself.
 
+**Projectile art upgraded from dot to oval — 2026-09-06.** See design.md
+2.4's addendum for the full writeup. User feedback: the circular
+`red_dot`/`blue_dot` sprites were hard to see and didn't convey motion;
+replaced with elongated `red_oval`/`blue_oval` (7×10 vs. the old 7×7,
+same convention as ship art — authored nose-up so it lines up correctly
+under the existing rotation with no new math). **Turned out to already
+be fully supported:** `Client.drawProjectiles()` was already rotating
+each sprite to its broadcast travel angle every frame — invisible on a
+circle, so nothing new to build there. Only real change:
+`batch.draw(...)` previously reused one square `sizePixels` (from the
+physical Box2D hit-radius) for both width and height; switched to a
+separate width (still tied to the physical radius) and a height derived
+from the region's own pixel aspect ratio, so the art alone controls how
+elongated it looks. Old `red_dot.png`/`blue_dot.png` deleted outright
+(fully replaced, not kept side by side — same call as the earlier TIE
+Fighter art swap). Verified live: fired while rotated off-axis and
+confirmed via a zoomed screenshot that the ovals point along the actual
+diagonal travel direction.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

@@ -223,8 +223,8 @@ public class Client implements Screen {
         turretRegionsByType.put(ShipType.FALCON, shipsAtlas.findRegion("turrets/turret40"));
         turretRegionsByType.put(ShipType.STARDESTROYER, shipsAtlas.findRegion("turrets/turret32"));
         projectilesAtlas = new TextureAtlas(Gdx.files.internal("textures/projectiles.atlas"));
-        ownProjectileRegion = projectilesAtlas.findRegion("red_dot");
-        enemyProjectileRegion = projectilesAtlas.findRegion("blue_dot");
+        ownProjectileRegion = projectilesAtlas.findRegion("red_oval");
+        enemyProjectileRegion = projectilesAtlas.findRegion("blue_oval");
 
         background = new ParallaxBackground(
             new ParallaxBackground.Layer(new Texture(
@@ -731,16 +731,23 @@ public class Client implements Screen {
     }
 
     private void drawProjectiles() {
-        float sizePixels = WeaponStats.BLASTER.getProjectileRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
+        // The projectile art is an elongated oval (nose-up, same authoring convention as ship
+        // sprites) rather than a circle, so it visually implies speed/direction - but the actual
+        // Box2D hitbox stays a circle regardless (WeaponStats.BLASTER's radius), same as a ship's
+        // polygon hitbox not needing to match its sprite's bounding box exactly. Width is tied to
+        // that physical diameter; height is derived from the region's own aspect ratio so the art
+        // controls how elongated it looks without a second tuning constant to keep in sync.
+        float widthPixels = WeaponStats.BLASTER.getProjectileRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
 
         for (RemoteProjectile projectile : projectiles.values()) {
             // Own shots draw red, everyone else's draw blue - purely a rendering choice
             // (design.md 3.5), the server treats every projectile identically.
             TextureRegion region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
+            float heightPixels = widthPixels * region.getRegionHeight() / (float) region.getRegionWidth();
             batch.draw(region,
-                projectile.renderX - sizePixels / 2f, projectile.renderY - sizePixels / 2f,
-                sizePixels / 2f, sizePixels / 2f,
-                sizePixels, sizePixels,
+                projectile.renderX - widthPixels / 2f, projectile.renderY - heightPixels / 2f,
+                widthPixels / 2f, heightPixels / 2f,
+                widthPixels, heightPixels,
                 1f, 1f,
                 projectile.angle * MathUtils.radiansToDegrees);
         }

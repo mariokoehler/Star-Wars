@@ -260,11 +260,26 @@ shot visually appears. Deliberate simplification, consistent with how
 ship movement itself started as snapshot-only before prediction was added
 — revisit only if it ever feels laggy in practice.
 - **Visual distinction — decided:** the local player's own shots draw
-  red, every other player's shots draw blue (`red_dot.png`/`blue_dot.png`,
-  provided directly by the user — tiny 7×7 tileable-atlas sprites, no
-  license info attached, presumed original/custom art). Purely a
-  client-side rendering choice — the server treats every projectile
-  identically regardless of owner.
+  red, every other player's shots draw blue. Purely a client-side
+  rendering choice — the server treats every projectile identically
+  regardless of owner. **Art updated 2026-09-06:** the original
+  `red_dot.png`/`blue_dot.png` (7×7, circular) were replaced with
+  `red_oval.png`/`blue_oval.png` (7×10, elongated) — user feedback that
+  a plain dot was hard to see and didn't read as "moving." An oval
+  authored nose-up (long axis vertical in the source image, same
+  authoring convention as ship sprites) needs no new angle math: the
+  renderer already rotated the sprite to `projectile.angle` (the
+  travel direction, broadcast every snapshot, constant for a
+  projectile's whole flight since it doesn't steer) — that rotation was
+  simply invisible on a circle. The only actual code change was drawing
+  a non-square region: width stays tied to the physical Box2D hit-
+  diameter (`WeaponStats.BLASTER`'s radius), height is derived from the
+  region's own pixel aspect ratio, so the art controls how elongated it
+  looks with no second tuning constant to keep in sync — same
+  visual-size-vs-physical-hitbox split already used for ship polygon
+  hitboxes vs. sprites. Verified live: fired while the ship was rotated
+  off-axis and confirmed (via a zoomed screenshot) the ovals point along
+  the actual diagonal travel direction, not just "up."
 - **No destroyed-notification** for projectiles — unlike ships (which get
   an explicit `ShipDestroyedMessage`), a projectile going away is only
   ever inferred by its id no longer appearing in the next snapshot
