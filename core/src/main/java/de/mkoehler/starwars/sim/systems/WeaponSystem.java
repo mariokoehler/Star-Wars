@@ -12,6 +12,7 @@ import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ProjectileFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
@@ -33,7 +34,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * offset, but still draws only one shot's energy cost for the whole volley.
  * Also recharges every ship's capacitor each tick, scaled by its current
  * {@link PowerSystem#WEAPONS} power allocation (design.md 2.2), regardless
- * of whether it's currently firing.
+ * of whether it's currently firing. Firing also marks
+ * {@link CombatTimerComponent#markFired()}, feeding design.md 2.3's
+ * combat-lock rule for leaving a match via ESC.
  * <p>
  * Runs server-side only, once per tick — unlike {@link ShipControlSystem},
  * firing is a discrete, one-shot event when the cooldown expires, not a
@@ -59,6 +62,7 @@ public class WeaponSystem extends IteratingSystem {
     private final ComponentMapper<PlayerIdComponent> playerIdMapper = ComponentMapper.getFor(PlayerIdComponent.class);
     private final ComponentMapper<ShipTypeComponent> shipTypeMapper = ComponentMapper.getFor(ShipTypeComponent.class);
     private final ComponentMapper<PowerDistributionComponent> powerMapper = ComponentMapper.getFor(PowerDistributionComponent.class);
+    private final ComponentMapper<CombatTimerComponent> combatTimerMapper = ComponentMapper.getFor(CombatTimerComponent.class);
 
     private final Engine engine;
     private final World world;
@@ -72,7 +76,8 @@ public class WeaponSystem extends IteratingSystem {
      */
     public WeaponSystem(Engine engine, World world) {
         super(Family.all(PhysicsBodyComponent.class, WeaponComponent.class, NetworkInputComponent.class,
-            PlayerIdComponent.class, ShipTypeComponent.class, PowerDistributionComponent.class).get());
+            PlayerIdComponent.class, ShipTypeComponent.class, PowerDistributionComponent.class,
+            CombatTimerComponent.class).get());
         this.engine = engine;
         this.world = world;
     }
@@ -106,6 +111,7 @@ public class WeaponSystem extends IteratingSystem {
         }
 
         weapon.consumeShot();
+        combatTimerMapper.get(entity).markFired();
     }
 
     // Spawn just ahead of the ship's own hull, not at its exact center - otherwise the

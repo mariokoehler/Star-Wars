@@ -141,6 +141,75 @@ straight back to Ship Selection, **not** through the Death Screen — the
 Death Screen's "rub it in" quote is specifically for actually losing a
 fight (see 5.1).
 
+**Implemented 2026-09-06.** New `CombatTimerComponent` (Ashley,
+server-side) tracks how long it's been since a ship last fired
+(`WeaponSystem` marks it, alongside consuming capacitor charge, 2.8) or
+was last hit (`GameNetworkServer.resolvePendingHits` marks it, alongside
+applying `ShipDamage`); a new `CombatTimerSystem` ticks both every server
+tick, same shape as `ShieldRegenSystem`. `CombatTimerComponent.isInCombat
+(thresholdSeconds)` is the pure "OR" check the 20-second rule above
+describes, unit-tested directly (`CombatTimerComponentTest`) — per
+CLAUDE.md's testing conventions, which called this out by name as a
+candidate once it existed.
+
+**Protocol:** two new payload-free messages, `LeaveMatchRequest` (client →
+server, TCP) and `LeaveMatchDeniedMessage` (server → the requester only,
+TCP) — both reliable/ordered, since either being dropped would be a
+confusing silent no-op for the player, unlike per-tick UDP input.
+`GameNetworkServer.handleLeaveMatchRequest` applies the 20s rule and either
+denies (sends `LeaveMatchDeniedMessage`) or grants — reusing
+`ShipDestroyedMessage`, the *same* message a combat death sends, for the
+"visually indistinguishable" requirement above; there's no VFX for either
+death path yet (a ship just disappears from the next snapshot either way),
+so today that requirement holds trivially, not because of any special
+effort — worth revisiting once a real explosion effect exists. **Granted
+leaves deliberately skip the respawn timer** a combat death schedules —
+`destroyShipEntity` was factored out of `handleShipDestroyed` specifically
+so the new `selfDestructShip` could share the teardown without the respawn
+side effect. No kill credit/XP either way, since no such system exists yet
+to award it through.
+
+**Client side:** reusing the exact same `ShipDestroyedMessage` for both
+paths means the client has to tell them apart itself — `Client` sets
+`leavingMatch` when it sends the request and clears it if
+`LeaveMatchDeniedMessage` arrives; `onShipDestroyed` checks that flag for
+its own player id to decide "combat death, wait for the automatic respawn"
+(unchanged, no Death Screen yet) vs. "my leave was granted, switch back to
+Ship Selection" (new `returnToShipSelection()`). That method disposes the
+gameplay screen right after switching — same pattern, and the same
+disposed-resources-crash risk, as `ShipSelectionScreen.startMatch()`
+(3.5-ish) — hence `render()`'s `transitionedAway` guard, checked
+immediately after draining `pendingUpdates`, before touching `batch`.
+`Client` also needed a `Game` reference for the first time (to call
+`setScreen`), so its constructor gained one, threaded through from
+`ShipSelectionScreen.startMatch()`.
+
+**The warning message is plain programmatic text (libGDX's built-in
+`BitmapFont`, scaled up), not pre-rendered art** — a deliberate, flagged
+placeholder, since every other bit of UI text in this codebase so far
+(Ship Selection's dialog/description images) has been pre-rendered art
+instead; swap in real banner art like the rest of the UI whenever it
+exists. **The "deliberately annoying sound effect" isn't implemented at
+all yet** — this is the project's first audio-anything, no sound
+asset exists and none was supplied for this feature; same "still awaiting
+from the user" status as the earlier star-dot background asset. The
+warning text alone is fully functional without it.
+
+**Verified for real:** full `mvn clean verify` green across every module;
+a real server+client boot; and, via genuine held-key `keybd_event`
+presses (plain `SendKeys` taps are too short to register as
+`isKeyPressed` on any render frame, learned the hard way mid-session — a
+first ESC-after-firing attempt via `SendKeys` was wrongly granted because
+the preceding `SendKeys`-tapped SPACE never actually registered as a
+fire): a fresh spawn's ESC is granted instantly, back to Ship Selection,
+and the underlying connection actually closes and a later Start reconnects
+cleanly with a fresh player id; firing a real shot and then pressing ESC
+is denied, shows the red warning banner, and leaves the ship fully
+flyable. **Not verified:** the 20-second window actually elapsing and
+re-permitting a leave (would need a real 20s wait, not exercised this
+session — trusted to the unit tests plus the identical code path already
+proven for the "denied" case).
+
 ### 2.4 Weapons & combat (first pass, 2026-09-05)
 
 **Weapon:** one type for v1, a simple blaster cannon (`WeaponStats.BLASTER`)
@@ -1707,10 +1776,13 @@ once a component is actually being worked on.
       (2.2) that trickle-charges from the power core and drains per shot;
       recharge rate scales with Weapons power allocation. All untuned
       placeholder numbers pending a real balancing pass.
-- [ ] **Combat-lock ESC logic** — server tracks last-fired/last-hit
-      timestamps per player, gates ESC-triggered leave on the 20s rule,
-      triggers the self-destruct/explode VFX + blocked-ESC warning
-      message/sound on leave attempts.
+- [x] **Combat-lock ESC logic (2026-09-06)** — see 2.3 for the full
+      writeup: server tracks last-fired/last-hit timestamps per player,
+      gates ESC-triggered leave on the 20s rule, self-destructs (no
+      respawn timer) on a granted leave. **Not done:** a real explosion
+      VFX (neither death path has one yet, so "visually indistinguishable"
+      holds trivially for now) and the warning's sound effect (no audio
+      asset exists yet) — the warning text itself works, just silently.
 - [x] **Weapons & projectiles (first pass, 2026-09-05; real capacitor
       added 2026-09-06)** — see 2.4/2.8 for the full writeup: one weapon
       (blaster), server-simulated projectiles (never predicted), Box2D-

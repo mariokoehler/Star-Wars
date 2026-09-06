@@ -16,6 +16,8 @@ import com.esotericsoftware.kryonet.Connection;
 import de.mkoehler.starwars.net.NetworkServer;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
+import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
@@ -29,6 +31,7 @@ import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
+import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
@@ -37,6 +40,7 @@ import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
+import de.mkoehler.starwars.sim.systems.CombatTimerSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
 import de.mkoehler.starwars.sim.systems.ShieldRegenSystem;
@@ -75,6 +79,8 @@ public class GameNetworkServer extends NetworkServer {
 
     /** Fixed delay between a ship being destroyed and it respawning; not a tuned value. */
     private static final float RESPAWN_DELAY_SECONDS = 3f;
+    /** design.md 2.3's combat-lock window: ESC-leave is blocked within this long of firing or being hit. */
+    private static final float COMBAT_LOCK_SECONDS = 20f;
 
     private final World world = new World(new Vector2(0, 0), true);
     private final Engine engine = new Engine();
@@ -83,6 +89,7 @@ public class GameNetworkServer extends NetworkServer {
     private final WeaponSystem weaponSystem = new WeaponSystem(engine, world);
     private final ProjectileLifetimeSystem projectileLifetimeSystem = new ProjectileLifetimeSystem(engine, world);
     private final ShieldRegenSystem shieldRegenSystem = new ShieldRegenSystem();
+    private final CombatTimerSystem combatTimerSystem = new CombatTimerSystem();
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
@@ -101,6 +108,7 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(weaponSystem);
         engine.addSystem(projectileLifetimeSystem);
         engine.addSystem(shieldRegenSystem);
+        engine.addSystem(combatTimerSystem);
 
         // Without this, a freshly-fired projectile would generate a real Box2D collision
         // against its own shooter's ship the instant it spawns (previously spawned exactly at
@@ -149,9 +157,10 @@ public class GameNetworkServer extends NetworkServer {
      * action (spawns, input updates, despawns), steps physics (which is
      * also where projectile-vs-ship contacts are detected), fires weapons,
      * resolves any hits (splitting damage between shield and hull, see
-     * {@link ShipDamage}), regenerates shields, expires old projectiles,
-     * advances respawn timers, and broadcasts the resulting world state to
-     * every connected client.
+     * {@link ShipDamage}), regenerates shields, advances every ship's
+     * combat-lock timers (design.md 2.3), expires old projectiles, advances
+     * respawn timers, and broadcasts the resulting world state to every
+     * connected client.
      *
      * @param deltaTime time since the last tick, in seconds
      */
@@ -182,6 +191,7 @@ public class GameNetworkServer extends NetworkServer {
 
         resolvePendingHits();
         shieldRegenSystem.update(deltaTime);
+        combatTimerSystem.update(deltaTime);
         projectileLifetimeSystem.update(deltaTime);
         tickRespawns(deltaTime);
 
@@ -236,6 +246,7 @@ public class GameNetworkServer extends NetworkServer {
             }
             float damage = hit.projectile.getComponent(ProjectileComponent.class).getDamage();
             ShipDamage.apply(hit.ship.getComponent(ShieldComponent.class), hit.ship.getComponent(HullComponent.class), damage);
+            hit.ship.getComponent(CombatTimerComponent.class).markHit();
             shipsToCheck.add(hit.ship);
         }
         pendingHits.clear();
@@ -252,12 +263,67 @@ public class GameNetworkServer extends NetworkServer {
     }
 
     private void handleShipDestroyed(Entity ship) {
+        int playerId = destroyShipEntity(ship);
+        respawnTimers.put(playerId, RESPAWN_DELAY_SECONDS);
+        sendToAllTCP(new ShipDestroyedMessage(playerId));
+    }
+
+    /**
+     * Grants a leave-match request (design.md 2.3): destroys the ship the
+     * same way a combat death does — including broadcasting the same
+     * {@link ShipDestroyedMessage}, so other clients see an identical
+     * explosion, per design.md 2.3's "visually indistinguishable"
+     * requirement — but deliberately does <strong>not</strong> schedule a
+     * respawn timer, since the player is leaving to Ship Selection (a full
+     * reconnect for their next match), not waiting to respawn into this
+     * one. No kill credit/XP is awarded either way, since no such system
+     * exists yet to award it through.
+     *
+     * @param playerId the leaving player's id
+     */
+    private void selfDestructShip(int playerId) {
+        Entity ship = shipsByPlayerId.get(playerId);
+        destroyShipEntity(ship);
+        sendToAllTCP(new ShipDestroyedMessage(playerId));
+    }
+
+    /**
+     * Tears down a ship's Box2D body and Ashley entity and removes it from
+     * {@link #shipsByPlayerId} — the teardown shared by both a combat death
+     * ({@link #handleShipDestroyed}, which also schedules a respawn) and a
+     * granted leave-match request ({@link #selfDestructShip}, which doesn't).
+     *
+     * @param ship the ship entity to tear down
+     * @return the destroyed ship's owning player id
+     */
+    private int destroyShipEntity(Entity ship) {
         int playerId = ship.getComponent(PlayerIdComponent.class).getPlayerId();
         world.destroyBody(ship.getComponent(PhysicsBodyComponent.class).getBody());
         engine.removeEntity(ship);
         shipsByPlayerId.remove(playerId);
-        respawnTimers.put(playerId, RESPAWN_DELAY_SECONDS);
-        sendToAllTCP(new ShipDestroyedMessage(playerId));
+        return playerId;
+    }
+
+    /**
+     * Applies design.md 2.3's combat-lock rule to a leave-match request:
+     * grants it (self-destructing the ship) if the player hasn't fired or
+     * been hit in the last {@value #COMBAT_LOCK_SECONDS} seconds, otherwise
+     * denies it. Dropped harmlessly if the ship isn't spawned right now.
+     *
+     * @param playerId   the requesting player's id
+     * @param connection that player's connection, to reply to on denial
+     */
+    private void handleLeaveMatchRequest(int playerId, Connection connection) {
+        Entity ship = shipsByPlayerId.get(playerId);
+        if (ship == null) {
+            return;
+        }
+        CombatTimerComponent combatTimer = ship.getComponent(CombatTimerComponent.class);
+        if (combatTimer.isInCombat(COMBAT_LOCK_SECONDS)) {
+            connection.sendTCP(new LeaveMatchDeniedMessage());
+            return;
+        }
+        selfDestructShip(playerId);
     }
 
     private void tickRespawns(float deltaTime) {
@@ -315,6 +381,9 @@ public class GameNetworkServer extends NetworkServer {
         } else if (object instanceof PowerAdjustMessage adjust) {
             int playerId = connection.getID();
             pendingActions.add(() -> applyPowerAdjust(playerId, adjust.getKind(), adjust.getTarget()));
+        } else if (object instanceof LeaveMatchRequest) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> handleLeaveMatchRequest(playerId, connection));
         }
     }
 

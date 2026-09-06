@@ -3,6 +3,8 @@ package de.mkoehler.starwars.net;
 import com.esotericsoftware.kryo.Kryo;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
+import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
@@ -62,5 +64,7 @@ public final class MessageRegistry {
         kryo.register(PowerSystem.class);
         kryo.register(PowerAdjustMessage.class);
         kryo.register(PowerAdjustMessage.Kind.class);
+        kryo.register(LeaveMatchRequest.class);
+        kryo.register(LeaveMatchDeniedMessage.class);
     }
 }

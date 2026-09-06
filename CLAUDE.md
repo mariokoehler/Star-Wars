@@ -828,6 +828,57 @@ actually-held key (it only sends rapid down+up per character) — used
 instead, which did produce a real sustained `isKeyPressed` state and a
 clearly visible (no pixel-measurement needed) result.
 
+**Leaving a match via ESC + the combat lock — implemented 2026-09-06.**
+See design.md 2.3 for the full writeup. New server-side
+`CombatTimerComponent`/`CombatTimerSystem` (same shape as
+`ShieldRegenSystem`) track seconds-since-last-fired/last-hit per ship,
+marked by `WeaponSystem` (on firing) and `GameNetworkServer` (on
+resolving a hit); unit-tested (`CombatTimerComponentTest`) per
+CLAUDE.md's own testing-conventions section, which had named this exact
+logic as a future test candidate. New payload-free, reliable-channel
+messages `LeaveMatchRequest`/`LeaveMatchDeniedMessage`. A granted leave
+reuses the *same* `ShipDestroyedMessage` a combat death sends (no VFX
+exists for either path yet, so "visually indistinguishable" holds
+trivially) but skips the respawn timer — `GameNetworkServer.
+destroyShipEntity` was factored out of `handleShipDestroyed` so the new
+`selfDestructShip` could share the teardown without that side effect.
+
+**Client had no way to switch screens before this** — `Client`'s
+constructor never took a `Game` reference (only `ShipSelectionScreen`
+did), since nothing on the gameplay screen previously needed to leave it
+itself. Gained one, threaded through `ShipSelectionScreen.startMatch()`.
+Since a granted leave and a combat death share one message, `Client`
+tells them apart with a local `leavingMatch` flag (set when the request
+is sent, cleared on denial) rather than a protocol field. Reused the
+exact disposed-screen-crash pattern/fix from `ShipSelectionScreen.
+startMatch()` (a `transitionedAway` guard right after draining
+`pendingUpdates`, before any batch/texture calls) since `Client` now
+also disposes itself mid-frame on a granted leave.
+
+**Two things flagged as deliberately incomplete, not gaps found by
+accident:** the warning banner ("Emergency ejection not available during
+combat operations") is plain programmatic `BitmapFont` text, not
+pre-rendered art — a first for this codebase, whose UI text has
+otherwise always been an image (Ship Selection's dialog/descriptions);
+and the "deliberately annoying sound effect" design.md calls for isn't
+implemented at all — no audio has ever been wired into this project and
+no sound asset exists yet, same "still awaiting from the user" status as
+the earlier star-dot background art. The warning text works fine
+without it.
+
+**Verification gotcha, same family as the power-distribution one above:**
+a first attempt to test the "denied" path — tap SPACE via `SendKeys`,
+then ESC — was wrongly granted, because the tapped SPACE never actually
+registered as a fire (same `SendKeys`-can't-hold-a-key limitation).
+Switched to a genuine `keybd_event` hold for the fire key too, which then
+correctly triggered the denial and the visible warning banner. Verified
+for real: a fresh spawn's ESC is granted instantly (back to Ship
+Selection, connection actually closes, a later Start reconnects cleanly
+with a fresh player id); firing a real shot then pressing ESC is denied,
+shows the warning, leaves the ship fully flyable; zero exceptions on
+either side throughout. Not exercised: the 20-second window actually
+elapsing and re-permitting a leave (would need a real 20s wait).
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

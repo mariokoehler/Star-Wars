@@ -192,7 +192,7 @@ public class ShipSelectionScreen implements Screen {
     }
 
     private void startMatch() {
-        Client next = new Client(SHIP_TYPES[selectedIndex]);
+        Client next = new Client(game, SHIP_TYPES[selectedIndex]);
         game.setScreen(next);
         dispose();
     }

@@ -10,6 +10,7 @@ import com.badlogic.gdx.physics.box2d.FixtureDef;
 import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.Shape;
 import com.badlogic.gdx.physics.box2d.World;
+import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
@@ -65,6 +66,7 @@ public final class ShipFactory {
         entity.add(new ShieldComponent(stats.getShieldMaxCapacity(), stats.getShieldRechargePerSecond()));
         entity.add(new WeaponComponent(WeaponStats.BLASTER));
         entity.add(new PowerDistributionComponent());
+        entity.add(new CombatTimerComponent());
         engine.addEntity(entity);
         body.setUserData(entity);
         return entity;

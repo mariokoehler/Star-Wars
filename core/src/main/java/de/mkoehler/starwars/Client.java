@@ -1,11 +1,14 @@
 package de.mkoehler.starwars;
 
+import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -19,6 +22,8 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import com.badlogic.gdx.utils.viewport.Viewport;
 import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
+import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
+import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
@@ -85,6 +90,23 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * and only applied at the start of {@link #render(float)} — never mutate
  * {@link #ships}, {@link #projectiles}, {@link #myBody} or the local Box2D
  * {@link #localWorld} directly from a network callback.
+ * <p>
+ * Leaving a match (design.md 2.3): pressing ESC sends a
+ * {@code LeaveMatchRequest} and sets {@link #leavingMatch}, then waits for
+ * the server's authoritative answer — a {@link ShipDestroyedMessage} for
+ * this player (granted; {@link #onShipDestroyed} sees {@link #leavingMatch}
+ * set and calls {@link #returnToShipSelection}) or a
+ * {@link LeaveMatchDeniedMessage} (denied; shows the warning banner and
+ * clears {@link #leavingMatch}, leaving the ship untouched). This is also
+ * how a granted leave is told apart from an ordinary combat death, which
+ * reuses the exact same {@code ShipDestroyedMessage} — see design.md 2.3's
+ * "visually indistinguishable" requirement — without needing a protocol
+ * field for it. {@link #returnToShipSelection} disposes this screen
+ * immediately after switching, same pattern as
+ * {@code ShipSelectionScreen.startMatch()}; {@link #render}'s
+ * {@link #transitionedAway} check exists for the identical reason that
+ * fix does — don't touch this screen's just-disposed batch/textures later
+ * in the same frame.
  */
 public class Client implements Screen {
 
@@ -112,6 +134,12 @@ public class Client implements Screen {
     /** How long a power-distribution keybind must be held before it maximizes its system instead of just incrementing it - untuned placeholder. */
     private static final float HOLD_TO_MAXIMIZE_SECONDS = 0.4f;
 
+    /** design.md 2.3's fixed warning shown when ESC is blocked by the combat lock. */
+    private static final String COMBAT_LOCK_WARNING_TEXT = "Emergency ejection not available during combat operations";
+    /** How long the combat-lock warning stays on screen - untuned placeholder. */
+    private static final float WARNING_MESSAGE_DURATION_SECONDS = 2.5f;
+
+    private final Game game;
     private final ShipType selectedShipType;
 
     private SpriteBatch batch;
@@ -123,6 +151,8 @@ public class Client implements Screen {
     private ParallaxBackground background;
     private ShipStatusHud statusHud;
     private PowerDistributionHud powerHud;
+    private BitmapFont warningFont;
+    private final GlyphLayout warningLayout = new GlyphLayout();
     private OrthographicCamera camera;
     private Viewport viewport;
     private OrthographicCamera hudCamera;
@@ -149,14 +179,24 @@ public class Client implements Screen {
     private final PowerKeyHold weaponsHold = new PowerKeyHold();
     private final PowerKeyHold enginesHold = new PowerKeyHold();
 
+    /** Set once an ESC leave request has been sent, until the server grants or denies it (design.md 2.3). */
+    private boolean leavingMatch;
+    /** Set once {@link #returnToShipSelection} disposes this screen - {@link #render} must not touch anything of it afterward, same frame. */
+    private boolean transitionedAway;
+    /** Counts down while the combat-lock warning banner is shown; not showing it at all once it reaches zero. */
+    private float warningMessageSecondsRemaining;
+
     /**
      * Creates the gameplay screen.
      *
-     * @param selectedShipType the ship type chosen on the Ship Selection
-     *                         screen (design.md 5.1), sent to the server at
-     *                         handshake to spawn as
+     * @param game              the game to switch back to {@link ShipSelectionScreen} from,
+     *                          once the player leaves this match (design.md 2.3/5.1)
+     * @param selectedShipType  the ship type chosen on the Ship Selection
+     *                          screen (design.md 5.1), sent to the server at
+     *                          handshake to spawn as
      */
-    public Client(ShipType selectedShipType) {
+    public Client(Game game, ShipType selectedShipType) {
+        this.game = game;
         this.selectedShipType = selectedShipType;
     }
 
@@ -180,6 +220,14 @@ public class Client implements Screen {
         );
         statusHud = new ShipStatusHud();
         powerHud = new PowerDistributionHud();
+
+        // libGDX's built-in default bitmap font - a plain placeholder until real pre-rendered
+        // banner art exists (this codebase's UI text has otherwise always been pre-rendered
+        // images, e.g. ShipSelectionScreen's dialog/description art), scaled up since the
+        // default is quite small.
+        warningFont = new BitmapFont();
+        warningFont.getData().setScale(2f);
+        warningFont.setColor(Color.RED);
 
         camera = new OrthographicCamera();
         viewport = new ScreenViewport(camera);
@@ -227,6 +275,8 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> ships.remove(left.getPlayerId()));
                 } else if (object instanceof ShipDestroyedMessage destroyed) {
                     pendingUpdates.add(() -> onShipDestroyed(destroyed));
+                } else if (object instanceof LeaveMatchDeniedMessage) {
+                    pendingUpdates.add(Client.this::onLeaveMatchDenied);
                 }
             }
         };
@@ -278,9 +328,36 @@ public class Client implements Screen {
                 localWorld.destroyBody(myBody);
                 myBody = null;
             }
+            if (leavingMatch) {
+                // This destruction is the server granting our own leave request (design.md 2.3),
+                // not a combat death - the two share this exact same message (so other clients
+                // see an identical explosion either way), told apart here purely by whether we're
+                // the one who asked to leave. A real combat death instead just waits here for the
+                // server's automatic respawn (no Death Screen yet, design.md 5.1's TODO).
+                returnToShipSelection();
+            }
         } else {
             ships.remove(destroyed.getPlayerId());
         }
+    }
+
+    private void onLeaveMatchDenied() {
+        leavingMatch = false;
+        warningMessageSecondsRemaining = WARNING_MESSAGE_DURATION_SECONDS;
+    }
+
+    /**
+     * Leaves this match and returns to Ship Selection (design.md 2.3/5.1) once
+     * the server has granted an ESC leave request. Disposes this screen's own
+     * resources immediately after switching — same pattern as
+     * {@code ShipSelectionScreen.startMatch()} — so {@link #transitionedAway}
+     * must be checked by {@link #render(float)} before doing anything else
+     * with this screen's now-disposed batch/textures for the rest of this frame.
+     */
+    private void returnToShipSelection() {
+        transitionedAway = true;
+        game.setScreen(new ShipSelectionScreen(game));
+        dispose();
     }
 
     private void onWorldSnapshot(WorldSnapshotMessage snapshot) {
@@ -356,6 +433,16 @@ public class Client implements Screen {
         while ((update = pendingUpdates.poll()) != null) {
             update.run();
         }
+        if (transitionedAway) {
+            // returnToShipSelection() just disposed this screen's own batch/textures (switching
+            // to ShipSelectionScreen) - drawing anything else this frame would use them after
+            // disposal and crash, same class of bug ShipSelectionScreen.startMatch() hit first.
+            return;
+        }
+
+        if (warningMessageSecondsRemaining > 0f) {
+            warningMessageSecondsRemaining = Math.max(0f, warningMessageSecondsRemaining - deltaTime);
+        }
 
         if (myBody != null) {
             boolean thrustForward = Gdx.input.isKeyPressed(Input.Keys.W);
@@ -367,6 +454,11 @@ public class Client implements Screen {
             networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight, firing));
             predictLocalShip(thrustForward, thrustReverse, turnLeft, turnRight, deltaTime);
             handlePowerDistributionInput(deltaTime);
+
+            if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !leavingMatch) {
+                leavingMatch = true;
+                networkClient.sendTCP(new LeaveMatchRequest());
+            }
         }
 
         extrapolateRemoteShips(deltaTime);
@@ -387,7 +479,18 @@ public class Client implements Screen {
         batch.setProjectionMatrix(hudCamera.combined);
         batch.begin();
         drawHud();
+        drawWarningMessage();
         batch.end();
+    }
+
+    private void drawWarningMessage() {
+        if (warningMessageSecondsRemaining <= 0f) {
+            return;
+        }
+        warningLayout.setText(warningFont, COMBAT_LOCK_WARNING_TEXT);
+        float x = (Gdx.graphics.getWidth() - warningLayout.width) / 2f;
+        float y = Gdx.graphics.getHeight() * 0.75f;
+        warningFont.draw(batch, warningLayout, x, y);
     }
 
     private void drawHud() {
@@ -584,6 +687,7 @@ public class Client implements Screen {
         background.dispose();
         statusHud.dispose();
         powerHud.dispose();
+        warningFont.dispose();
     }
 
     /**

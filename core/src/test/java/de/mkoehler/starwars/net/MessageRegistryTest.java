@@ -5,6 +5,8 @@ import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
+import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
@@ -51,7 +53,8 @@ class MessageRegistryTest {
             WorldSnapshotMessage.class, PlayerLeftMessage.class,
             ProjectileState.class, ProjectileState[].class,
             ShipDestroyedMessage.class, ShipType.class,
-            PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class
+            PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class,
+            LeaveMatchRequest.class, LeaveMatchDeniedMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -182,6 +185,18 @@ class MessageRegistryTest {
         PowerAdjustMessage copy = roundTrip(original, PowerAdjustMessage.class);
         assertEquals(PowerAdjustMessage.Kind.RESET, copy.getKind());
         assertNull(copy.getTarget());
+    }
+
+    @Test
+    void leaveMatchRequestSurvivesRoundTrip() {
+        LeaveMatchRequest copy = roundTrip(new LeaveMatchRequest(), LeaveMatchRequest.class);
+        assertEquals(LeaveMatchRequest.class, copy.getClass());
+    }
+
+    @Test
+    void leaveMatchDeniedMessageSurvivesRoundTrip() {
+        LeaveMatchDeniedMessage copy = roundTrip(new LeaveMatchDeniedMessage(), LeaveMatchDeniedMessage.class);
+        assertEquals(LeaveMatchDeniedMessage.class, copy.getClass());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {
