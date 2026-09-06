@@ -6,28 +6,28 @@ filter: Linear, Linear
 repeat: none
 Arrow_Left
   rotate: false
-  xy: 822, 415
+  xy: 1686, 582
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Left_MouseOver
   rotate: false
-  xy: 984, 19
+  xy: 1795, 831
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right
   rotate: false
-  xy: 1686, 582
+  xy: 1879, 919
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right_MouseOver
   rotate: false
-  xy: 1795, 831
+  xy: 1464, 436
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
@@ -48,9 +48,9 @@ Connect_Button_MouseOver
   index: -1
 Connect_Dialog
   rotate: false
-  xy: 822, 455
-  size: 640, 560
-  orig: 640, 560
+  xy: 822, 435
+  size: 640, 580
+  orig: 640, 580
   offset: 0, 0
   index: -1
 Falcon_Description
@@ -104,14 +104,14 @@ TieFighter_Description
   index: -1
 TieInterceptor_Description
   rotate: false
-  xy: 1308, 60
+  xy: 1308, 40
   size: 322, 393
   orig: 322, 393
   offset: 0, 0
   index: -1
 XWing_Description
   rotate: false
-  xy: 984, 59
+  xy: 984, 39
   size: 322, 394
   orig: 322, 394
   offset: 0, 0

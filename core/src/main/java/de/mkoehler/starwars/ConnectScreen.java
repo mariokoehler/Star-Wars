@@ -68,7 +68,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public class ConnectScreen implements Screen {
 
     private static final float DIALOG_WIDTH = 640f;
-    private static final float DIALOG_HEIGHT = 560f;
+    private static final float DIALOG_HEIGHT = 580f;
 
     private static final float FIELD_LEFT = 40f;
     private static final float FIELD_WIDTH = DIALOG_WIDTH - 2 * FIELD_LEFT;
