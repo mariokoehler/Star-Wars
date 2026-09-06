@@ -141,6 +141,13 @@ public class ConnectScreen implements Screen {
         dialogRegion = menuAtlas.findRegion("Connect_Dialog");
 
         if (!VisUI.isLoaded()) {
+            // VisUI 1.5.9 (latest as of this writing) still pins gdx 1.14.1 in its own POM,
+            // one patch version behind ours (1.14.2, design.md's gdxVersion) - VisUI only
+            // touches long-stable Scene2D/Skin APIs, and this exact combination has been
+            // exercised live (this screen's own verification) with zero issues, so the
+            // warning is a false positive worth silencing rather than downgrading our engine
+            // version for. Revisit (drop this line) once a VisUI release targets 1.14.2+.
+            VisUI.setSkipGdxVersionCheck(true);
             VisUI.load();
         }
         stage = new Stage(new ScreenViewport());

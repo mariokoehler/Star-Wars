@@ -51,5 +51,11 @@ Thumbs.db
 ## (wherever the working directory happened to be when it was run):
 .lwjgl/
 
+## Runtime-generated local data (design.md 3.6/3.7) - a real player account store or a
+## saved login (including a plaintext password, see 3.7) could land in any directory a
+## server/client happens to be launched from, not just server/target or lwjgl3/target:
+data/accounts.json
+connection-config.json
+
 ## Old Gradle setup, kept around only until the Maven migration is confirmed working:
 /_gradle-legacy-backup/

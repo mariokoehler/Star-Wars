@@ -1132,6 +1132,33 @@ correctly and that submitting with an empty field shows the client-side
 validation error without attempting a connection at all. Full `mvn
 clean test` (78 tests) green across every module throughout.
 
+**VisUI libGDX-version warning, silenced 2026-09-06.** User noticed
+`[VisUI] Warning, using invalid libGDX version. You are using libGDX
+1.14.2 but you need 1.14.1.` on every launch. Checked Maven Central:
+VisUI 1.5.9 (already what we use, and still the latest release as of
+this writing) is itself pinned to gdx 1.14.1 in its own POM — there's no
+newer VisUI to bump to yet. Downgrading our own `gdxVersion` back to
+1.14.1 just to silence a UI toolkit's warning was judged not worth
+losing whatever 1.14.2 fixed. Used VisUI's own intended escape hatch
+instead: `VisUI.setSkipGdxVersionCheck(true)` before `VisUI.load()` in
+`ConnectScreen` — confirmed via `javap` on VisUI's actual bytecode that
+the flag genuinely short-circuits the whole check (not just the log
+line), and this exact 1.14.1-expected/1.14.2-actual combination had
+already been exercised live via this screen's own verification with
+zero issues. **Gotcha hit fixing this:** the very first rebuild attempt
+(`mvn -q -pl core -am install` then `-pl lwjgl3,server package`) silently
+produced a **stale** jar — decompiling the packaged `ConnectScreen.class`
+with `javap` showed the old bytecode (`isLoaded` → `load`, no
+`setSkipGdxVersionCheck` call in between) despite the source and a
+successful build. A full `mvn clean install`/`clean package` picked up
+the change correctly. **General rule: if a real code change doesn't
+show up in runtime behavior after a supposedly-successful rebuild,
+suspect a stale artifact before suspecting the fix — verify by
+decompiling the actual class inside the built jar (`javap -c` on an
+extracted `.class`) rather than re-reading the source again.** Revisit
+(delete the `setSkipGdxVersionCheck` call) once a VisUI release targets
+gdx 1.14.2 or later.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

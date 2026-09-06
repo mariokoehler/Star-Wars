@@ -1864,6 +1864,15 @@ font — reserving custom-baked text for chrome that never changes, same
 principle as the Ship Selection dialog's own baked "Previous/Next:"
 label. See 5.1 for the full screen writeup.
 
+**Known, deliberately accepted mismatch:** VisUI 1.5.9 (latest on Maven
+Central as of this writing) is itself pinned to gdx 1.14.1 in its own
+POM, one patch version behind ours (1.14.2) — it logs a startup warning
+about this that `ConnectScreen` silences via VisUI's own
+`setSkipGdxVersionCheck(true)` escape hatch, since only long-stable
+Scene2D/Skin APIs are involved and this exact combination has been
+exercised live with zero issues (see CLAUDE.md for the full note).
+Revisit (drop the skip call) once a VisUI release targets 1.14.2+.
+
 ## 5. UX flow
 
 ### 5.1 Screen flow
