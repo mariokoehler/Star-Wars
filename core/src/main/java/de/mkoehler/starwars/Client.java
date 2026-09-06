@@ -20,6 +20,7 @@ import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import com.badlogic.gdx.utils.viewport.Viewport;
 import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
+import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
@@ -29,6 +30,7 @@ import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
+import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
@@ -112,9 +114,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 public class Client implements Screen {
 
-    private static final String SERVER_HOST = "localhost";
-    private static final String DISPLAY_NAME = "Pilot";
-
     /** How quickly the camera eases toward the local ship each frame; not the full model from design.md 4.1. */
     private static final float CAMERA_FOLLOW_SPEED = 3f;
 
@@ -148,6 +147,7 @@ public class Client implements Screen {
 
     private final Game game;
     private final ShipType selectedShipType;
+    private final ConnectionInfo connectionInfo;
 
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
@@ -197,15 +197,22 @@ public class Client implements Screen {
     /**
      * Creates the gameplay screen.
      *
-     * @param game              the game to switch back to {@link ShipSelectionScreen} from,
-     *                          once the player leaves this match (design.md 2.3/5.1)
-     * @param selectedShipType  the ship type chosen on the Ship Selection
-     *                          screen (design.md 5.1), sent to the server at
-     *                          handshake to spawn as
+     * @param game             the game to switch back to {@link ShipSelectionScreen} from,
+     *                         once the player leaves this match (design.md 2.3/5.1)
+     * @param selectedShipType the ship type chosen on the Ship Selection
+     *                         screen (design.md 5.1), sent to the server in
+     *                         a {@link de.mkoehler.starwars.net.messages.SpawnRequest}
+     *                         once (re)handshaking succeeds
+     * @param connectionInfo   the already-validated login this session was
+     *                         established with on the Connect Dialog
+     *                         (design.md 5.1) - re-sent on this screen's own
+     *                         fresh connection (design.md 3.6 - logging in
+     *                         again with the same credentials is harmless)
      */
-    public Client(Game game, ShipType selectedShipType) {
+    public Client(Game game, ShipType selectedShipType, ConnectionInfo connectionInfo) {
         this.game = game;
         this.selectedShipType = selectedShipType;
+        this.connectionInfo = connectionInfo;
     }
 
     @Override
@@ -283,18 +290,33 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> onShipDestroyed(destroyed));
                 } else if (object instanceof LeaveMatchDeniedMessage) {
                     pendingUpdates.add(Client.this::onLeaveMatchDenied);
+                } else if (object instanceof HandshakeResponse response) {
+                    if (response.isAccepted()) {
+                        networkClient.sendTCP(new SpawnRequest(selectedShipType));
+                    } else {
+                        // ConnectScreen already validated these exact credentials moments ago
+                        // (design.md 5.1) - a rejection here would mean the account changed
+                        // (e.g. password edited elsewhere) in that brief window. No error
+                        // screen to fall back to from mid-match-start, so this stays fatal for
+                        // now, same as a connection failure below - thrown from the next
+                        // render() (see the cross-thread rule above) rather than from here, so
+                        // it actually surfaces instead of dying silently on KryoNet's thread.
+                        pendingUpdates.add(() -> {
+                            throw new IllegalStateException("Handshake rejected: " + response.getMessage());
+                        });
+                    }
                 }
             }
         };
         try {
-            networkClient.connect(NetworkConstants.CONNECTION_TIMEOUT_MILLIS, SERVER_HOST,
+            networkClient.connect(NetworkConstants.CONNECTION_TIMEOUT_MILLIS, connectionInfo.serverHost(),
                 NetworkConstants.TCP_PORT, NetworkConstants.UDP_PORT);
         } catch (IOException e) {
-            // No Connect Dialog / error screen yet (design.md 4.1) - a real failure here is
-            // simply fatal for now.
-            throw new IllegalStateException("Failed to connect to " + SERVER_HOST, e);
+            // No error screen to fall back to from mid-match-start (the Connect Dialog already
+            // validated this exact host moments ago) - a real failure here is simply fatal for now.
+            throw new IllegalStateException("Failed to connect to " + connectionInfo.serverHost(), e);
         }
-        networkClient.sendHandshake(DISPLAY_NAME, selectedShipType);
+        networkClient.sendHandshake(connectionInfo.login(), connectionInfo.password(), connectionInfo.displayName());
     }
 
     private void onShipSpawned(ShipSpawnedMessage spawned) {
@@ -363,7 +385,7 @@ public class Client implements Screen {
      */
     private void returnToShipSelection() {
         transitionedAway = true;
-        game.setScreen(new ShipSelectionScreen(game));
+        game.setScreen(new ShipSelectionScreen(game, connectionInfo));
         dispose();
     }
 

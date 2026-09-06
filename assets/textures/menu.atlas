@@ -6,35 +6,56 @@ filter: Linear, Linear
 repeat: none
 Arrow_Left
   rotate: false
-  xy: 1801, 889
+  xy: 822, 415
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Left_MouseOver
   rotate: false
-  xy: 1885, 977
+  xy: 984, 19
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right
   rotate: false
-  xy: 822, 494
+  xy: 1686, 582
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right_MouseOver
   rotate: false
-  xy: 906, 582
+  xy: 1795, 831
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
+Connect_Button
+  rotate: false
+  xy: 1795, 959
+  size: 220, 56
+  orig: 220, 56
+  offset: 0, 0
+  index: -1
+Connect_Button_MouseOver
+  rotate: false
+  xy: 1464, 564
+  size: 220, 56
+  orig: 220, 56
+  offset: 0, 0
+  index: -1
+Connect_Dialog
+  rotate: false
+  xy: 822, 455
+  size: 640, 560
+  orig: 640, 560
+  offset: 0, 0
+  index: -1
 Falcon_Description
   rotate: false
-  xy: 822, 622
+  xy: 1464, 622
   size: 329, 393
   orig: 329, 393
   offset: 0, 0
@@ -62,14 +83,14 @@ StarDestroyer_Description
   index: -1
 Start_Button
   rotate: false
-  xy: 1801, 929
+  xy: 1795, 871
   size: 82, 86
   orig: 82, 86
   offset: 0, 0
   index: -1
 Start_Button_MouseOver
   rotate: false
-  xy: 822, 534
+  xy: 1464, 476
   size: 82, 86
   orig: 82, 86
   offset: 0, 0
@@ -83,14 +104,14 @@ TieFighter_Description
   index: -1
 TieInterceptor_Description
   rotate: false
-  xy: 1153, 622
+  xy: 1308, 60
   size: 322, 393
   orig: 322, 393
   offset: 0, 0
   index: -1
 XWing_Description
   rotate: false
-  xy: 1477, 621
+  xy: 984, 59
   size: 322, 394
   orig: 322, 394
   offset: 0, 0

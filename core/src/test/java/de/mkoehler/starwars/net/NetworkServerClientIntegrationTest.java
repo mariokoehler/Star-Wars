@@ -4,7 +4,6 @@ import com.esotericsoftware.kryonet.Connection;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
-import de.mkoehler.starwars.sim.ShipType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -80,7 +79,7 @@ class NetworkServerClientIntegrationTest {
         client.connect(NetworkConstants.CONNECTION_TIMEOUT_MILLIS, "localhost", tcpPort, udpPort);
         assertTrue(connectedLatch.await(AWAIT_SECONDS, TimeUnit.SECONDS), "client did not connect in time");
 
-        client.sendHandshake("Test Pilot", ShipType.XWING);
+        client.sendHandshake("test_pilot", "password123", "Test Pilot");
         assertTrue(handshakeLatch.await(AWAIT_SECONDS, TimeUnit.SECONDS), "no handshake response received");
         assertTrue(handshakeResponse.get().isAccepted());
 

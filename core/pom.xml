@@ -41,6 +41,14 @@
       <artifactId>jackson-databind</artifactId>
     </dependency>
     <dependency>
+      <!-- See design.md 4.4 - Scene2D UI toolkit for the menu-style screens (Connect Dialog,
+           Keybind Setup); built directly on Scene2D (already part of `gdx`), so it composes
+           cleanly with the plain-Scene2D HUD code without pulling in anything else. -->
+      <groupId>com.kotcrab.vis</groupId>
+      <artifactId>vis-ui</artifactId>
+      <version>${visUiVersion}</version>
+    </dependency>
+    <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>

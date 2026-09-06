@@ -1059,6 +1059,79 @@ Fighter art swap). Verified live: fired while rotated off-axis and
 confirmed via a zoomed screenshot that the ovals point along the actual
 diagonal travel direction.
 
+**Connect Dialog + account system — implemented 2026-09-06.** See
+design.md 3.6/3.7/4.4/5.1 for the full writeup. `StarWarsGame` now
+starts on a new `ConnectScreen` instead of Ship Selection — logging into
+a player account (auto-created on a new login, password-checked on an
+existing one) is the first thing the app does. New server-side
+`server.accounts` package (`PlayerAccount`, `PasswordHasher`,
+`AccountStore` — SHA-256+salt, JSON file at
+`Gdx.files.local("data/accounts.json")`, no libGDX dependency so it's
+plain-JUnit-testable, 15 new tests) wired into `GameNetworkServer.
+handleHandshake`. `HandshakeRequest` dropped its `shipType` field and
+gained `login`/`password`; a new `SpawnRequest` (ship type only) is sent
+separately once Ship Selection's Start is pressed — splitting "log in"
+from "spawn a ship" was necessary because the old combined handshake
+would've spawned a real ship into the world just to validate a password.
+Client-side local config (design.md 3.7) is `net.ConnectionConfig` +
+`ConnectionConfigStore`, saved only after a successful login.
+
+**User asked for hand-made art here too, same as the combat-lock
+banner** — generated via the same Python/Pillow + "SF Distant Galaxy"
+font technique, but themed to match `Select_Ship_Dialog.png`'s navy/gold
+palette (sampled directly from that file with PIL) instead of the
+banner's warning amber, since this is a normal-flow screen, not an
+alert. Scope call, flagged rather than asked: VisUI's *default* skin
+covers labels/error text/the button's own label; only the dialog
+background and the Connect button's two states got custom art — a full
+custom VisUI skin (every widget re-themed) would have been a lot more
+art for not much more payoff, and the default skin was easy to just
+tint-match at the field level.
+
+**Two real bugs found only by actually driving the screen with
+SendKeys, not by reading the code:**
+- **libGDX `TextField.focusTraversal` defaults to `true`** and handles
+  TAB itself (in Stage actor-tree order) via its own listener, which
+  runs *before* a stage-level listener added for the same purpose ever
+  sees the event. Result: one TAB press advanced focus twice (confirmed
+  by watching typed text land two fields ahead of where it should have).
+  Fix: `field.setFocusTraversal(false)` on every field, so only the
+  custom listener drives order. **General rule: any custom Tab/focus
+  handling on a Scene2D `TextField` must disable the built-in
+  `focusTraversal` first**, or the two will fight.
+- **A key's "just pressed" state can bleed into the very next screen's
+  first frame.** ENTER-to-submit-login on `ConnectScreen` occasionally
+  also read as ENTER-to-start-match on `ShipSelectionScreen`'s first
+  `render()` right after the screen switch, skipping ship selection
+  entirely. Fix: `ShipSelectionScreen` now ignores input on its first
+  frame after `show()` — libGDX's "just pressed" flag only ever lives
+  one frame, so absorbing exactly one frame fully closes the gap.
+  **General rule for any future screen transition that reuses a key
+  (ENTER, ESC, etc.) across adjacent screens: don't assume a clean input
+  slate on the new screen's first frame.**
+- Also worth remembering: VisUI's `VisTextField.VisTextFieldStyle` adds
+  its own `backgroundOver` field (hover-only) *on top of* the base
+  `TextField.TextFieldStyle`'s `background`/`focusedBackground` —
+  overriding only the base fields left a light hover box from the
+  default skin showing through on mouse-over, clashing with the dark
+  theme. Found by screenshot, not by reading VisUI's source; fixed by
+  also setting `backgroundOver` to the same transparent drawable.
+
+**Verified live, end-to-end, for real (same PowerShell `SendKeys`/
+window-focus technique as every previous milestone):** typed all four
+fields via TAB navigation alone, submitted with ENTER, confirmed a real
+account written to `accounts.json` with a proper salted hash; retried
+the same login with a wrong password, got the exact server-side
+rejection message on-screen with every field left intact; fixed just
+the password and resubmitted successfully; a fresh launch afterward
+came up with all four fields correctly pre-filled from the saved local
+config; completed the flow through Ship Selection into a real Falcon
+spawn, confirming the second, fresh handshake + `SpawnRequest` path
+works end to end. Also confirmed Shift+TAB wraps focus backward
+correctly and that submitting with an empty field shows the client-side
+validation error without attempting a connection at all. Full `mvn
+clean test` (78 tests) green across every module throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

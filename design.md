@@ -1466,6 +1466,40 @@ revisit only if the server needs concurrent multi-process access or the
 account count grows large enough that rewriting the whole file on every XP
 change becomes a problem.
 
+**Implemented 2026-09-06.** New `server.accounts` package: `PlayerAccount`
+(Jackson bean, exactly the four fields above), `PasswordHasher` (pure/
+static — SHA-256 over password+salt, hex-encoded, `MessageDigest.isEqual`
+for a constant-time compare) and `AccountStore` (the file-backed map
+above — `synchronized` against concurrent logins racing on the same new
+login, since KryoNet's handshake handler runs on the network thread).
+Deliberately has **no libGDX dependency** (plain `java.nio.file.Path`),
+so it's directly unit-tested (`AccountStoreTest`/`PasswordHasherTest`, 15
+cases together, including a real reload-from-disk round trip) without a
+running application; `GameNetworkServer` resolves the actual runtime path
+via `Gdx.files.local("data/accounts.json")` and passes it in.
+
+**One interpretation decision the spec above didn't cover, made and
+flagged here:** what happens if an *existing* login's display name field
+is filled in differently than what's stored? Decided: the account's
+`displayName` is overwritten on every successful login, not fixed at
+creation — a player can rename how they present in-game just by typing a
+different one next time, with no separate "edit profile" flow needed.
+
+**Split from the ship-spawn moment, not part of it.** The original plan
+folded login into the same `HandshakeRequest` that also carried a ship
+type and immediately spawned a ship (design.md 5.1's original Connect
+Dialog sketch implied as much). Building it for real surfaced a problem
+with that: validating a password would spawn a real ship into the world
+just to check it, before the player has even reached Ship Selection.
+Fixed by splitting the two moments into separate messages —
+`HandshakeRequest` (login/password/displayName only, authenticates via
+`AccountStore`, never touches the simulation) and a new `SpawnRequest`
+(ship type only, sent once the player actually presses Start on Ship
+Selection) — with `SpawnRequest` only ever following a `HandshakeResponse`
+that came back accepted. See 5.1 for how this plays out across screens,
+including why it's a *second*, fresh handshake on Client's own
+connection rather than one kept alive from the Connect Dialog.
+
 ### 3.7 Client local config (connection)
 
 **Decision:** the client persists the four connect-dialog fields (server
@@ -1482,6 +1516,16 @@ player.
 - File location/format: implementation detail for later (likely
   `Gdx.files.local("config.json")` or an OS user-config directory) — not a
   design-level decision.
+
+**Implemented 2026-09-06.** `net.ConnectionConfig` (Jackson bean, the
+four fields above) + `net.ConnectionConfigStore` (load/save), landing at
+`Gdx.files.local("connection-config.json")` — the "implementation
+detail for later" above, settled. Saved only after a *successful* login,
+overwriting whatever was there; a failed attempt leaves the last-known-
+good config untouched (so a mistyped password doesn't clobber a working
+saved login). `ConnectScreen` loads it in `show()` to pre-fill the four
+fields, falling back to just `serverHost = "localhost"` on a first
+launch (no saved file yet).
 
 ### 3.8 Client local config (keybinds)
 
@@ -1804,6 +1848,22 @@ menus, so not a fit here (could still be worth adding later purely as an
 internal debug overlay, e.g. live-tuning Newtonian flight constants —
 not a v1 concern).
 
+**First real usage: `ConnectScreen` (2026-09-06).** VisUI 1.5.9 added to
+`core`'s POM. Rather than reskin every widget by hand, only what actually
+needed a custom look got one: a Pillow-generated dialog background
+(baked header text + "well" rectangles, matching `Select_Ship_Dialog`'s
+navy/gold palette) and a two-state Connect button (up/hover, same
+convention as the Start button), with the four `VisTextField`s given a
+**fully transparent** custom style (background, focused background, *and*
+VisUI's own `backgroundOver` — a hover-only field VisUI adds beyond the
+base `TextField.TextFieldStyle`, easy to miss and left at the default
+skin's light box otherwise) so they sit invisibly on top of the baked
+"well" art, contributing only their live cursor/typed/masked text.
+Labels, error text, and the button's own label still use VisUI's default
+font — reserving custom-baked text for chrome that never changes, same
+principle as the Ship Selection dialog's own baked "Previous/Next:"
+label. See 5.1 for the full screen writeup.
+
 ## 5. UX flow
 
 ### 5.1 Screen flow
@@ -1855,11 +1915,66 @@ not a v1 concern).
   Ship Selection. This screen is reached **only** by dying in combat, not
   by a voluntary ESC leave.
 
-**Ship Selection screen — implemented 2026-09-05 (first pass, no Connect
-Dialog yet).** Since accounts/Connect Dialog (3.6/5.1 above) don't exist
-yet, the app currently *starts* on Ship Selection rather than reaching it
-via a successful connect — `StarWarsGame.create()` goes straight there.
-Revisit once the Connect Dialog is built.
+**Connect Dialog — implemented 2026-09-06.** See 3.6 (accounts),
+3.7 (local config) and 4.4 (VisUI) for the pieces this screen wires
+together; this entry is the screen itself. `StarWarsGame.create()` now
+starts on `ConnectScreen`, not Ship Selection — the very first thing
+the app does is log in.
+
+- **Keyboard-only usable, not just mouse-clickable — an explicit
+  requirement, not an accessibility afterthought:** **TAB**/**Shift+TAB**
+  cycle keyboard focus across the four fields (wrapping both ways),
+  **ENTER** submits from any of them, matching the Connect button's own
+  click handler. Needed for this project's own remote-control
+  verification technique (CLAUDE.md) as much as for a mouse-free player.
+  **Real bug found building this:** libGDX's `TextField` defaults
+  `focusTraversal` to `true` — it already handles TAB itself (jumping
+  focus in *Stage actor-tree order*, not the intended field order) via
+  its own internal listener, which fires *before* a stage-level listener
+  ever sees the key event. With both handlers active, one TAB press
+  advanced focus **twice** — confirmed live (typed text landing in the
+  wrong field, two fields ahead of the one just tabbed from). Fixed by
+  calling `setFocusTraversal(false)` on all four fields, leaving exactly
+  one thing driving focus order.
+- **Second bug found the same way: leftover input can bleed into the
+  next screen's first frame.** Pressing ENTER to submit a login
+  occasionally also read as "press ENTER to start a match" on Ship
+  Selection's very next `render()` call, skipping ship selection
+  entirely and launching straight into gameplay flying the default
+  X-wing — caught by an automated end-to-end run that filled the form
+  and watched the actual result rather than assuming success. libGDX's
+  "just pressed" flag lives for exactly one frame, so it can still read
+  true on a screen that's switched to mid-frame. **General rule for any
+  future screen transition that reuses a key across screens:** absorb
+  one frame of input on the new screen after `show()` rather than
+  assuming a clean slate — `ShipSelectionScreen` now ignores input on
+  its first `render()` call specifically for this.
+- **Validation:** all four fields required (client-side, before any
+  network round trip) — empty fields show "All fields are required."
+  immediately, no connection attempt. A rejected handshake (wrong
+  password) shows the server's own message and leaves every field as
+  typed, so fixing just the password doesn't mean retyping everything.
+- **No separate "connecting..." UI state** — `attemptConnect()` runs the
+  connect + handshake round trip synchronously (blocking up to
+  `NetworkConstants.CONNECTION_TIMEOUT_MILLIS` on an unreachable host),
+  same simplification `Client.connectToServer` already accepted for the
+  same reason. Revisit both together if it ever feels bad in practice.
+- **Verified live, end-to-end, for real:** the same PowerShell
+  `SendKeys`/window-focus technique used for every previous milestone —
+  typed all four fields via TAB navigation, submitted with ENTER,
+  confirmed a real account appended to `accounts.json` with a proper
+  salted hash; a wrong-password retry against that same account was
+  rejected with the exact message shown on-screen, fields intact; fixing
+  just the password and resubmitting succeeded; a fresh launch afterward
+  showed all four fields correctly pre-filled from the saved local
+  config; completing the flow through Ship Selection into a real
+  Falcon spawn confirmed the fresh second handshake + `SpawnRequest`
+  path works. Also confirmed Shift+TAB wraps backward correctly and
+  that clearing a field and resubmitting shows the empty-fields error
+  instead of attempting to connect.
+
+**Ship Selection screen — implemented 2026-09-05, now reached from a
+successful login instead of being the app's start screen (2026-09-06).**
 
 - **Architecture shift: the app is now a `Game`, not a single
   `ApplicationAdapter`.** `Client` (gameplay) was, until now, the entire
@@ -2022,12 +2137,20 @@ once a component is actually being worked on.
       item) rather than snapshot-only. Verified with a real server + two
       real client processes on one machine. Still open: tick/snapshot
       rate tuning (3.5).
-- [ ] **Account system (server)** — JSON-file-backed `PlayerAccount` store,
-      auto-register-or-validate-on-connect flow, salted password hashing.
-- [ ] **Client local config** — load/save connection fields (3.7) and
-      keybinds (3.8) to separate local JSON files.
-- [ ] **Connect Dialog screen** — host/display name/login/password fields,
-      prefilled from local config, error display on failed auth.
+- [x] **Account system (server, 2026-09-06)** — see 3.6: JSON-file-backed
+      `PlayerAccount` store, auto-register-or-validate-on-connect flow,
+      salted SHA-256 password hashing, split from ship spawning into a
+      separate `SpawnRequest`. No XP-earning source yet (nothing awards
+      XP) — accounts always start and stay at 0 until a scoring system
+      exists.
+- [x] **Client local config, connection half (2026-09-06)** — see 3.7:
+      load/save the four connect fields to a local JSON file. Keybinds
+      (3.8) remain unbuilt - no Keybind Setup screen yet, so there's
+      nothing to persist there yet.
+- [x] **Connect Dialog screen (2026-09-06)** — see 5.1: host/display
+      name/login/password fields, prefilled from local config, error
+      display on failed auth, full keyboard navigation (TAB/Shift+TAB/
+      ENTER). First real use of VisUI (4.4).
 - [ ] **Keybind Setup screen** — press-to-bind capture, localized key-label
       display (see 3.8 implementation note), persists to local config.
 - [x] **Entity/component model (first pass, server-side)** — Ashley set
@@ -2119,9 +2242,11 @@ once a component is actually being worked on.
       `R:\StarWars\sprites` into `assets/`; render the neutral-bank
       (`_0020`) frame per ship for v1, plus the static turret overlay
       for turret-equipped ships (4.3).
-- [ ] **UI framework integration** — add VisUI on top of Scene2D (4.4);
-      build out the Connect Dialog, Keybind Setup, and Ship Selection
-      screens against it.
+- [x] **UI framework integration, partial (2026-09-06)** — VisUI added
+      on top of Scene2D (4.4), Connect Dialog built against it (5.1).
+      Ship Selection deliberately stays plain `SpriteBatch` (no form
+      widgets needed there, see its own class Javadoc); Keybind Setup
+      isn't built yet.
 - [x] **HUD (hull/shield status widget, first pass, 2026-09-05)** — see
       2.6 for the full writeup: a corner widget showing the local player's
       current hull and shield as clipped "fuel gauge" overlays. Still

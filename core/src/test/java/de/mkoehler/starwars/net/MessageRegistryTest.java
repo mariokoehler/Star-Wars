@@ -14,6 +14,7 @@ import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
+import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
@@ -56,7 +57,7 @@ class MessageRegistryTest {
             ShipDestroyedMessage.class, ShipType.class,
             PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class,
             LeaveMatchRequest.class, LeaveMatchDeniedMessage.class,
-            TurretToggleMessage.class, float[].class
+            TurretToggleMessage.class, float[].class, SpawnRequest.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -69,10 +70,18 @@ class MessageRegistryTest {
 
     @Test
     void handshakeRequestSurvivesRoundTrip() {
-        HandshakeRequest original = new HandshakeRequest("Red Five", ShipType.XWING);
+        HandshakeRequest original = new HandshakeRequest("red_five", "s3cret", "Red Five");
         HandshakeRequest copy = roundTrip(original, HandshakeRequest.class);
+        assertEquals(original.getLogin(), copy.getLogin());
+        assertEquals(original.getPassword(), copy.getPassword());
         assertEquals(original.getDisplayName(), copy.getDisplayName());
-        assertEquals(ShipType.XWING, copy.getShipType());
+    }
+
+    @Test
+    void spawnRequestSurvivesRoundTrip() {
+        SpawnRequest original = new SpawnRequest(ShipType.FALCON);
+        SpawnRequest copy = roundTrip(original, SpawnRequest.class);
+        assertEquals(ShipType.FALCON, copy.getShipType());
     }
 
     @Test

@@ -15,22 +15,25 @@ import de.mkoehler.starwars.render.ScrollingBackground;
 import de.mkoehler.starwars.sim.ShipType;
 
 /**
- * The first screen shown (design.md 5.1) — lets the player cycle through
- * every known {@link ShipType} (Previous/Next, by mouse or the left/right
- * arrow keys) and start a match flying the one currently displayed (Start
- * button or ENTER).
+ * Shown right after a successful login on {@link ConnectScreen} (design.md
+ * 5.1) — lets the player cycle through every known {@link ShipType}
+ * (Previous/Next, by mouse or the left/right arrow keys) and start a match
+ * flying the one currently displayed (Start button or ENTER).
  * <p>
- * The selected ship type is sent to the server at handshake (design.md 5.1)
- * and actually flown/spawned as — every ship type currently uses the same
+ * The selected ship type is sent to the server in a
+ * {@code de.mkoehler.starwars.net.messages.SpawnRequest} once {@link Client}
+ * (re)establishes the connection — every ship type currently uses the same
  * performance numbers (thrust/torque/hull/shield), copied from the X-wing's
- * {@code .stats.json} until each gets its own real balancing pass.
+ * {@code .stats.json} until each gets its own real balancing pass. No XP
+ * gating yet (design.md 3.6) — every ship type is always shown, regardless
+ * of the logged-in account's XP.
  * <p>
  * All rendering uses pre-made dialog art at native pixel size/position (no
  * Scene2D/VisUI, matching this codebase's existing raw-{@link SpriteBatch}
  * style for {@code ShipStatusHud}/{@code ParallaxBackground}) — VisUI
- * (design.md 4.4) remains reserved for a screen that actually needs form
- * widgets (Connect Dialog, Keybind Setup), which this one, being entirely
- * pre-rendered art plus two arrow buttons and a start button, doesn't.
+ * (design.md 4.4) is used by {@link ConnectScreen} instead, which actually
+ * needs form widgets; this screen, being entirely pre-rendered art plus two
+ * arrow buttons and a start button, doesn't.
  */
 public class ShipSelectionScreen implements Screen {
 
@@ -68,6 +71,7 @@ public class ShipSelectionScreen implements Screen {
     private static final float BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND = 15f;
 
     private final Game game;
+    private final ConnectionInfo connectionInfo;
 
     private SpriteBatch batch;
     private OrthographicCamera camera;
@@ -85,15 +89,30 @@ public class ShipSelectionScreen implements Screen {
     private TextureRegion startButtonHoverRegion;
 
     private int selectedIndex;
+    /**
+     * Ignores keyboard input for exactly this screen's first {@link #render}
+     * call - found via live testing: pressing ENTER on {@link ConnectScreen}
+     * to submit login can still read as "just pressed" on the very next
+     * frame, which is this screen's first one, immediately triggering
+     * {@link #startMatch()} and skipping ship selection entirely. libGDX's
+     * "just pressed" flag only ever lives for one frame, so ignoring
+     * input on this screen's first frame fully absorbs the leak without
+     * losing any real player input.
+     */
+    private boolean firstFrame = true;
 
     /**
      * Creates the screen.
      *
-     * @param game the game to switch away to {@link Client} from once the
-     *             player presses Start
+     * @param game           the game to switch away to {@link Client} from once the
+     *                       player presses Start
+     * @param connectionInfo the already-validated login this session was
+     *                       established with on the Connect Dialog
+     *                       (design.md 5.1), passed through to {@link Client}
      */
-    public ShipSelectionScreen(Game game) {
+    public ShipSelectionScreen(Game game, ConnectionInfo connectionInfo) {
         this.game = game;
+        this.connectionInfo = connectionInfo;
     }
 
     @Override
@@ -174,6 +193,11 @@ public class ShipSelectionScreen implements Screen {
      * touch this screen's (now-disposed) batch/textures again this frame
      */
     private boolean handleInput(boolean hoveringLeftArrow, boolean hoveringRightArrow, boolean hoveringStartButton) {
+        if (firstFrame) {
+            firstFrame = false;
+            return false;
+        }
+
         boolean leftClicked = hoveringLeftArrow && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
         boolean rightClicked = hoveringRightArrow && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
 
@@ -192,7 +216,7 @@ public class ShipSelectionScreen implements Screen {
     }
 
     private void startMatch() {
-        Client next = new Client(game, SHIP_TYPES[selectedIndex]);
+        Client next = new Client(game, SHIP_TYPES[selectedIndex], connectionInfo);
         game.setScreen(next);
         dispose();
     }

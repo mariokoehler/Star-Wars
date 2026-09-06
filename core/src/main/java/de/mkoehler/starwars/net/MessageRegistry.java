@@ -12,6 +12,7 @@ import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
+import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
@@ -69,5 +70,6 @@ public final class MessageRegistry {
         kryo.register(LeaveMatchDeniedMessage.class);
         kryo.register(TurretToggleMessage.class);
         kryo.register(float[].class);
+        kryo.register(SpawnRequest.class);
     }
 }

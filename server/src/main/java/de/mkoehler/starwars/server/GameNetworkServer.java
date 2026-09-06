@@ -4,6 +4,7 @@ import com.badlogic.ashley.core.Engine;
 import com.badlogic.ashley.core.Entity;
 import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.utils.ImmutableArray;
+import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.Contact;
@@ -25,8 +26,11 @@ import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
+import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.server.accounts.AccountStore;
+import de.mkoehler.starwars.server.accounts.AuthResult;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
@@ -105,6 +109,11 @@ public class GameNetworkServer extends NetworkServer {
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
+    // Resolved via Gdx.files.local (relative to wherever the server process is launched from,
+    // design.md 3.6) rather than hardcoded, but AccountStore itself has no libGDX dependency -
+    // it's directly unit-tested against a plain java.nio.file.Path.
+    private final AccountStore accountStore =
+        new AccountStore(Gdx.files.local("data/accounts.json").file().toPath());
 
     /**
      * Creates the game server, wiring up the simulation systems and the
@@ -362,7 +371,7 @@ public class GameNetworkServer extends NetworkServer {
         float spawnX = 0f;
         float spawnY = 0f;
         // The player's requested ship type doesn't change across respawns within a match -
-        // recorded once at handshake time (see handleHandshake), just read back here.
+        // recorded once at spawn-request time (see handleSpawnRequest), just read back here.
         ShipType shipType = shipTypeByPlayerId.get(playerId);
         spawnShip(playerId, spawnX, spawnY, shipType);
         Connection connection = connectionsByPlayerId.get(playerId);
@@ -371,20 +380,36 @@ public class GameNetworkServer extends NetworkServer {
         }
     }
 
+    /**
+     * Authenticates (or creates, design.md 3.6) the connecting player's
+     * account via {@link #accountStore}. Deliberately does <b>not</b> spawn
+     * a ship - logging in only proves the account, it happens before the
+     * player has even chosen a ship type on the Ship Selection screen
+     * (design.md 5.1); see {@link #handleSpawnRequest} for the step that
+     * actually joins a match.
+     */
     @Override
     protected HandshakeResponse handleHandshake(Connection connection, HandshakeRequest request) {
         int playerId = connection.getID();
+        AuthResult result = accountStore.login(request.getLogin(), request.getPassword(), request.getDisplayName());
+        if (result.success()) {
+            pendingActions.add(() -> connectionsByPlayerId.put(playerId, connection));
+        }
+        return new HandshakeResponse(result.success(), result.message());
+    }
+
+    /**
+     * Spawns a ship for a player that has already logged in (see
+     * {@link #handleHandshake}) and just chose a ship type on the Ship
+     * Selection screen (design.md 5.1) - the actual "join the match" moment.
+     */
+    private void handleSpawnRequest(int playerId, Connection connection, ShipType shipType) {
         // Fixed spawn point for now - map/arena design (design.md 7) is still an open question.
         float spawnX = 0f;
         float spawnY = 0f;
-        ShipType shipType = request.getShipType();
-        pendingActions.add(() -> {
-            connectionsByPlayerId.put(playerId, connection);
-            shipTypeByPlayerId.put(playerId, shipType);
-            spawnShip(playerId, spawnX, spawnY, shipType);
-        });
+        shipTypeByPlayerId.put(playerId, shipType);
+        spawnShip(playerId, spawnX, spawnY, shipType);
         connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY, shipType));
-        return new HandshakeResponse(true, "Welcome, " + request.getDisplayName() + ".");
     }
 
     @Override
@@ -402,6 +427,9 @@ public class GameNetworkServer extends NetworkServer {
         } else if (object instanceof TurretToggleMessage) {
             int playerId = connection.getID();
             pendingActions.add(() -> applyTurretToggle(playerId));
+        } else if (object instanceof SpawnRequest spawnRequest) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> handleSpawnRequest(playerId, connection, spawnRequest.getShipType()));
         }
     }
 

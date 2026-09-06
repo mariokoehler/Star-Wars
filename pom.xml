@@ -33,6 +33,8 @@
     <junitVersion>5.14.4</junitVersion>
     <!-- JSON handling, see design.md 3.9 -->
     <jacksonVersion>2.22.2</jacksonVersion>
+    <!-- Menu-style screens' UI toolkit, see design.md 4.4 - first real usage: Connect Dialog. -->
+    <visUiVersion>1.5.9</visUiVersion>
   </properties>
 
   <!-- The KryoNet fork is only published on JitPack, not Maven Central. -->

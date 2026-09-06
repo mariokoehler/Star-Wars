@@ -13,11 +13,15 @@ import com.badlogic.gdx.Game;
  * com.badlogic.gdx.Screen} is current; switching screens (and disposing the
  * one being left) is each screen's own responsibility, not this class's —
  * see {@link ShipSelectionScreen}'s Start handling for where that happens.
+ * <p>
+ * Starts on {@link ConnectScreen} (design.md 5.1) — logging into a player
+ * account is the very first thing the game does now that accounts
+ * (design.md 3.6) exist.
  */
 public class StarWarsGame extends Game {
 
     @Override
     public void create() {
-        setScreen(new ShipSelectionScreen(this));
+        setScreen(new ConnectScreen(this));
     }
 }

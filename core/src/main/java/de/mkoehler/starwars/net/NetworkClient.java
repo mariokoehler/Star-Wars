@@ -9,7 +9,6 @@ import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
-import de.mkoehler.starwars.sim.ShipType;
 
 import java.io.IOException;
 
@@ -74,13 +73,15 @@ public class NetworkClient {
     }
 
     /**
-     * Sends a handshake request over the reliable channel.
+     * Sends a handshake request over the reliable channel, logging into (or
+     * creating, design.md 3.6) a player account.
      *
+     * @param login       the account's login name
+     * @param password    the account's password, in plain text
      * @param displayName the name to identify this client with
-     * @param shipType    the ship type selected on the Ship Selection screen
      */
-    public void sendHandshake(String displayName, ShipType shipType) {
-        client.sendTCP(new HandshakeRequest(displayName, shipType));
+    public void sendHandshake(String login, String password, String displayName) {
+        client.sendTCP(new HandshakeRequest(login, password, displayName));
     }
 
     /**
