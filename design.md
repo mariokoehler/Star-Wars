@@ -184,16 +184,45 @@ immediately after draining `pendingUpdates`, before touching `batch`.
 `setScreen`), so its constructor gained one, threaded through from
 `ShipSelectionScreen.startMatch()`.
 
-**The warning message is plain programmatic text (libGDX's built-in
-`BitmapFont`, scaled up), not pre-rendered art** — a deliberate, flagged
-placeholder, since every other bit of UI text in this codebase so far
-(Ship Selection's dialog/description images) has been pre-rendered art
-instead; swap in real banner art like the rest of the UI whenever it
-exists. **The "deliberately annoying sound effect" isn't implemented at
-all yet** — this is the project's first audio-anything, no sound
-asset exists and none was supplied for this feature; same "still awaiting
-from the user" status as the earlier star-dot background asset. The
-warning text alone is fully functional without it.
+**Real banner art, replacing the `BitmapFont` placeholder, added
+2026-09-06 (same day).** The warning was initially plain programmatic
+text — flagged as a placeholder since every other bit of UI text in this
+codebase is pre-rendered art — and got real art the same day: an
+AI-generated (Python/Pillow, not the Design Components tool — see below)
+holographic alert plate, `assets-raw/hud/HUD_Warning_EjectionLocked.png` /
+`assets/textures/hud/hud_warning_ejection_locked.png`, standalone
+`Texture` like the other HUD chrome (not atlas-packed). Reads "EJECTION
+LOCKED / Combat systems engaged" rather than the full sentence — the
+user explicitly OK'd shortening it as long as the intent lands. Styled
+to match the hull/power-distribution HUD's material language (dark glass
+panel, glow, thin metal border) but shifted to warm red/amber for an
+alert instead of a status readout, and set in **SF Distant Galaxy** —
+the same font as "SELECT YOUR SHIP!" and the logo — after the user
+pointed out it was already installed and used elsewhere in the game's
+art; the first draft had used a generic condensed sans and read
+noticeably off-brand by comparison. `Client` draws it at a fixed
+`WARNING_BANNER_WIDTH` (720px, height from the art's aspect ratio),
+horizontally centered, anchored `WARNING_BANNER_TOP_MARGIN` (48px) below
+the top of the screen — **deliberately away from screen-center**, at the
+user's request: the player's own ship sits near screen-center via
+camera-follow, and this warning fires precisely during tense
+combat-adjacent moments, so it must never sit on top of the ship it's
+warning about. Confirmed live, same server+client/SendKeys setup as the
+rest of 2.3's verification: centered, clear of the ship, no exceptions.
+**The "deliberately annoying sound effect" still isn't implemented** —
+this remains the project's first-ever audio feature and no sound asset
+exists yet; same "still awaiting from the user" status as the earlier
+star-dot background asset. The banner alone is fully functional without
+it.
+
+**Aside — the `/design` skill (Claude Design's canvas editor) doesn't
+work in this environment**: it requires Node.js or Bun to assemble its
+canvas payload, and neither is installed on this machine. Tried once,
+failed cleanly (no workaround attempted, per the skill's own
+instructions), and the asset above was produced directly instead
+(Python/Pillow, matched to the existing HUD art by eye/color-sampling).
+Worth remembering if `/design` comes up again for this project — it
+needs Node or Bun installed first.
 
 **Verified for real:** full `mvn clean verify` green across every module;
 a real server+client boot; and, via genuine held-key `keybd_event`
@@ -1779,10 +1808,12 @@ once a component is actually being worked on.
 - [x] **Combat-lock ESC logic (2026-09-06)** — see 2.3 for the full
       writeup: server tracks last-fired/last-hit timestamps per player,
       gates ESC-triggered leave on the 20s rule, self-destructs (no
-      respawn timer) on a granted leave. **Not done:** a real explosion
-      VFX (neither death path has one yet, so "visually indistinguishable"
-      holds trivially for now) and the warning's sound effect (no audio
-      asset exists yet) — the warning text itself works, just silently.
+      respawn timer) on a granted leave, shows a real warning banner
+      (real art, same day) centered near the top of the screen. **Not
+      done:** a real explosion VFX (neither death path has one yet, so
+      "visually indistinguishable" holds trivially for now) and the
+      warning's sound effect (no audio asset exists yet) — the banner
+      itself works, just silently.
 - [x] **Weapons & projectiles (first pass, 2026-09-05; real capacitor
       added 2026-09-06)** — see 2.4/2.8 for the full writeup: one weapon
       (blaster), server-simulated projectiles (never predicted), Box2D-

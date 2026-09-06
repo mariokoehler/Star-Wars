@@ -857,14 +857,14 @@ also disposes itself mid-frame on a granted leave.
 
 **Two things flagged as deliberately incomplete, not gaps found by
 accident:** the warning banner ("Emergency ejection not available during
-combat operations") is plain programmatic `BitmapFont` text, not
-pre-rendered art — a first for this codebase, whose UI text has
-otherwise always been an image (Ship Selection's dialog/descriptions);
-and the "deliberately annoying sound effect" design.md calls for isn't
-implemented at all — no audio has ever been wired into this project and
-no sound asset exists yet, same "still awaiting from the user" status as
-the earlier star-dot background art. The warning text works fine
-without it.
+combat operations") was initially plain programmatic `BitmapFont` text,
+not pre-rendered art — a first for this codebase, whose UI text has
+otherwise always been an image (Ship Selection's dialog/descriptions).
+**Got real art the same day** (see below) — the "deliberately annoying
+sound effect" design.md also calls for is still not implemented at all —
+no audio has ever been wired into this project and no sound asset exists
+yet, same "still awaiting from the user" status as the earlier star-dot
+background art. The banner works fine without it.
 
 **Verification gotcha, same family as the power-distribution one above:**
 a first attempt to test the "denied" path — tap SPACE via `SendKeys`,
@@ -878,6 +878,41 @@ with a fresh player id); firing a real shot then pressing ESC is denied,
 shows the warning, leaves the ship fully flyable; zero exceptions on
 either side throughout. Not exercised: the 20-second window actually
 elapsing and re-permitting a leave (would need a real 20s wait).
+
+**Combat-lock warning banner — real art, implemented 2026-09-06, same
+day.** See design.md 2.3's addendum for the full writeup. **The
+`/design` skill (Claude Design's canvas editor) does not work on this
+machine** — it requires Node.js or Bun to assemble its payload and
+neither is installed; tried once, failed cleanly, no workaround
+attempted (per the skill's own instructions not to hand-edit the
+payload). Fell back to generating the art directly: a Python/Pillow
+script built a holographic alert plate matching the existing HUD art's
+material language (dark glass panel, glow, thin metal border — sampled
+by eye from `hud_status_background.png`) but in warm red/amber for a
+warning instead of the blue/lavender status readouts, reading "EJECTION
+LOCKED / Combat systems engaged" (user explicitly approved shortening
+the full sentence as long as the intent survives). **User caught a
+real miss on the first draft**: it used a generic condensed sans
+(Bahnschrift) for the header, and the user pointed out the game already
+has "SF Distant Galaxy" installed and in use for "SELECT YOUR SHIP!"
+and the logo — swapping to it immediately made the asset look like it
+belonged to the game instead of bolted on. **General rule for future
+generated art in this project: check `C:\Windows\Fonts` /
+`...\AppData\Local\Microsoft\Windows\Fonts` for a font already used in
+the game's existing art before picking a generic substitute** — several
+of this project's title/logo fonts are installed locally, not obviously
+guessable from the rendered art alone.
+
+Shipped as `assets-raw/hud/HUD_Warning_EjectionLocked.png` /
+`assets/textures/hud/hud_warning_ejection_locked.png`, standalone
+`Texture` (not atlas-packed, same as the other HUD chrome). `Client`
+draws it centered horizontally, near the **top** of the screen
+(`WARNING_BANNER_TOP_MARGIN` below the top edge) rather than mid-screen
+— explicit user request: the player's own ship sits near screen-center
+via camera-follow, and this warning is most likely to fire during a
+tense combat moment, so it must stay clear of the ship. Verified live
+(same server+client/SendKeys setup): banner renders centered and clear
+of the ship, no exceptions.
 
 ## Build system
 

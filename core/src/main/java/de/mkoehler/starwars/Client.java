@@ -7,8 +7,6 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
-import com.badlogic.gdx.graphics.g2d.BitmapFont;
-import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -134,10 +132,12 @@ public class Client implements Screen {
     /** How long a power-distribution keybind must be held before it maximizes its system instead of just incrementing it - untuned placeholder. */
     private static final float HOLD_TO_MAXIMIZE_SECONDS = 0.4f;
 
-    /** design.md 2.3's fixed warning shown when ESC is blocked by the combat lock. */
-    private static final String COMBAT_LOCK_WARNING_TEXT = "Emergency ejection not available during combat operations";
-    /** How long the combat-lock warning stays on screen - untuned placeholder. */
+    /** How long the combat-lock warning banner stays on screen - untuned placeholder. */
     private static final float WARNING_MESSAGE_DURATION_SECONDS = 2.5f;
+    /** On-screen width of the combat-lock warning banner - height follows from the source art's aspect ratio. */
+    private static final float WARNING_BANNER_WIDTH = 720f;
+    /** Gap from the top of the screen to the banner's top edge - kept near the top, deliberately away from the player's own ship (which stays near screen-center via camera-follow) since this fires during tense moments. */
+    private static final float WARNING_BANNER_TOP_MARGIN = 48f;
 
     private final Game game;
     private final ShipType selectedShipType;
@@ -151,8 +151,7 @@ public class Client implements Screen {
     private ParallaxBackground background;
     private ShipStatusHud statusHud;
     private PowerDistributionHud powerHud;
-    private BitmapFont warningFont;
-    private final GlyphLayout warningLayout = new GlyphLayout();
+    private Texture warningBannerTexture;
     private OrthographicCamera camera;
     private Viewport viewport;
     private OrthographicCamera hudCamera;
@@ -220,14 +219,7 @@ public class Client implements Screen {
         );
         statusHud = new ShipStatusHud();
         powerHud = new PowerDistributionHud();
-
-        // libGDX's built-in default bitmap font - a plain placeholder until real pre-rendered
-        // banner art exists (this codebase's UI text has otherwise always been pre-rendered
-        // images, e.g. ShipSelectionScreen's dialog/description art), scaled up since the
-        // default is quite small.
-        warningFont = new BitmapFont();
-        warningFont.getData().setScale(2f);
-        warningFont.setColor(Color.RED);
+        warningBannerTexture = new Texture(Gdx.files.internal("textures/hud/hud_warning_ejection_locked.png"));
 
         camera = new OrthographicCamera();
         viewport = new ScreenViewport(camera);
@@ -487,10 +479,10 @@ public class Client implements Screen {
         if (warningMessageSecondsRemaining <= 0f) {
             return;
         }
-        warningLayout.setText(warningFont, COMBAT_LOCK_WARNING_TEXT);
-        float x = (Gdx.graphics.getWidth() - warningLayout.width) / 2f;
-        float y = Gdx.graphics.getHeight() * 0.75f;
-        warningFont.draw(batch, warningLayout, x, y);
+        float height = WARNING_BANNER_WIDTH * warningBannerTexture.getHeight() / warningBannerTexture.getWidth();
+        float x = (Gdx.graphics.getWidth() - WARNING_BANNER_WIDTH) / 2f;
+        float y = Gdx.graphics.getHeight() - WARNING_BANNER_TOP_MARGIN - height;
+        batch.draw(warningBannerTexture, x, y, WARNING_BANNER_WIDTH, height);
     }
 
     private void drawHud() {
@@ -687,7 +679,7 @@ public class Client implements Screen {
         background.dispose();
         statusHud.dispose();
         powerHud.dispose();
-        warningFont.dispose();
+        warningBannerTexture.dispose();
     }
 
     /**
