@@ -22,8 +22,7 @@ package de.mkoehler.starwars.sim;
 public class ShipTypeConfig {
 
     private float radiusMeters;
-    private float spriteWidthMeters;
-    private float spriteHeightMeters;
+    private float pixelsPerMeter;
     private float thrustForce;
     private float turnTorque;
     private float hullMaxHealth;
@@ -51,34 +50,36 @@ public class ShipTypeConfig {
     }
 
     /**
-     * Returns the width to draw this ship's hull sprite at — unlike
-     * {@link #getRadiusMeters()}, this (and {@link #getSpriteHeightMeters()})
-     * drive actual on-screen size and support non-square sprites (e.g. the
-     * Star Destroyer), derived directly from that ship's source sprite's
-     * pixel dimensions at {@link PhysicsConstants#PIXELS_PER_METER}.
+     * Returns this ship type's own pixels-per-meter — the conversion factor
+     * between its authored sprite-space pixel coordinates (the
+     * {@code dev-tools}-authored hitbox polygon and attachment points, in
+     * {@link de.mkoehler.starwars.sim.metadata.PixelPoint}) and Box2D meters,
+     * <strong>and</strong> between its source art's actual pixel resolution
+     * and its real-world size.
+     * <p>
+     * Deliberately per-ship rather than the single global
+     * {@link PhysicsConstants#PIXELS_PER_METER}: two ships drawn at the same
+     * physical size but authored at different source-art resolutions (e.g.
+     * a 128px sprite vs. a 256px one picked purely for crisper art, design.md
+     * 4.3) must convert their hitbox/attachment pixel coordinates at
+     * <em>different</em> rates, or the higher-resolution one ends up with a
+     * literally larger hitbox (and, since Box2D derives mass from a fixture's
+     * area at a uniform density, more mass) purely as an accident of its
+     * source art's resolution — found and fixed 2026-09-06 (design.md 2.7/4.3),
+     * having affected every ship imported at 256px (Falcon, Star Destroyer,
+     * TIE Interceptor). The rendered sprite size is derived the same way,
+     * from the real loaded texture region's pixel dimensions divided by this
+     * value (see {@code Client}) — never separately authored — so the visual
+     * size and the physical hitbox size can't drift apart from each other.
      *
-     * @return the sprite draw width, in meters
+     * @return this ship type's pixels-per-meter
      */
-    public float getSpriteWidthMeters() {
-        return spriteWidthMeters;
+    public float getPixelsPerMeter() {
+        return pixelsPerMeter;
     }
 
-    public void setSpriteWidthMeters(float spriteWidthMeters) {
-        this.spriteWidthMeters = spriteWidthMeters;
-    }
-
-    /**
-     * Returns the height to draw this ship's hull sprite at, see
-     * {@link #getSpriteWidthMeters()}.
-     *
-     * @return the sprite draw height, in meters
-     */
-    public float getSpriteHeightMeters() {
-        return spriteHeightMeters;
-    }
-
-    public void setSpriteHeightMeters(float spriteHeightMeters) {
-        this.spriteHeightMeters = spriteHeightMeters;
+    public void setPixelsPerMeter(float pixelsPerMeter) {
+        this.pixelsPerMeter = pixelsPerMeter;
     }
 
     public float getThrustForce() {

@@ -570,6 +570,107 @@ to force `heightPixels = widthPixels` from a single radius, which would
 have squashed the Star Destroyer into a square; it now draws each ship at
 its own width/height.
 
+**Bug found via play-testing and fixed, 2026-09-06: `spriteWidthMeters`/
+`spriteHeightMeters` derived from source-art pixel dimensions at the
+single global `PIXELS_PER_METER` silently made a ship physically bigger
+— and, since Box2D derives fixture mass from area at a uniform density,
+heavier — purely because its source art happened to be authored at a
+higher resolution.** Falcon, Star Destroyer and TIE Interceptor were all
+imported at their 256px variant "purely a free quality choice" (see the
+entry above this one) rather than the 128px X-wing/Snowspeeder/TIE
+Fighter used; deriving their meters size from that 2x resolution at the
+same 32px/m doubled their linear size (so ~4x the hitbox area/mass) with
+no one having actually decided that. Reported by the user two ways: the
+TIE Interceptor visibly rendering at roughly double an X-wing's size
+when it should read as the same fighter class, and the ship generally
+feeling too heavy/sluggish for its class — both symptoms of the same
+root cause, correctly diagnosed by the user before a fix was even
+proposed. The same bug independently affected `WeaponSystem`'s
+attachment-point offsets (also converted at the global rate), which
+would have desynced from the hull the moment the hitbox size was fixed
+on its own.
+
+**Fix — a per-ship `pixelsPerMeter` (`ShipTypeConfig`), replacing the
+`spriteWidthMeters`/`spriteHeightMeters` fields entirely, not sitting
+alongside them:** the conversion rate between a ship type's own
+sprite-space pixel coordinates (hitbox polygon, attachment points — and
+its source art's actual resolution) and Box2D meters. Used in exactly
+two places, both previously hardcoded to the global
+`PhysicsConstants.PIXELS_PER_METER`: `ShipFactory`'s hitbox polygon
+conversion and `WeaponSystem`'s attachment-point conversion. Rendered
+sprite size is no longer a separately-authored, hand-kept-in-sync value
+at all — `Client` now derives it every frame from the actual loaded
+`TextureRegion`'s real pixel dimensions divided by this same
+`pixelsPerMeter`, so the visual size and the physical hitbox size are
+mathematically tied to one authored number and cannot drift apart from
+each other the way they just did. No density-scaling workaround needed;
+once the hitbox is the physically-intended size, Box2D's existing
+area × density mass calculation is simply correct.
+
+Values: X-wing/Snowspeeder/TIE Fighter (128px source art) keep
+`pixelsPerMeter = 32`, unchanged from the global rate — these were never
+wrong. **TIE Interceptor → 64** (256px source ÷ 64 = 4×4m, explicitly
+requested by the user: "roughly the same size as an X-wing," same
+fighter class). **Falcon → 40** (256px ÷ 40 = 6.4×6.4m) and **Star
+Destroyer → 32, unchanged** (256×432px ÷ 32 = 8×13.5m, same as before) —
+both a judgment call rather than something the user specified a target
+for; flagged as adjustable, chosen so the three non-fighter-class ships
+read as an ascending scale (fighters 4m < Falcon 6.4m < Star Destroyer
+8×13.5m) rather than Falcon and Star Destroyer sharing an identical
+footprint as they did by accident before. `radiusMeters` (the
+still-dormant circle-hitbox/default-spawn-offset fallback, design.md
+2.4/2.7) updated to match each ship's corrected size too, keeping the
+existing "radius = width / 2" convention every ship already followed.
+
+Verified: full `mvn clean verify` green; a real server+client boot
+flying both an X-wing and a TIE Interceptor, screenshotting each at the
+same camera distance and comparing crops side by side — now genuinely
+comparable on-screen size, not the roughly-2x difference from before;
+zero exceptions. **Not independently re-verified:** the actual in-flight
+*feel* (mass/agility) for the three corrected ships, or whether 6.4m
+"feels" right for the Falcon relative to the (unchanged) 8m×13.5m Star
+Destroyer — needs the user actually flying them.
+
+**Follow-up, same day, once the user actually flew the corrected ships:**
+confirmed the fix "feels much more consistent," with one more explicit
+size request — **Snowspeeder scaled to 75% of its size** (it should read
+as the smallest ship, per Star Wars scale intuition, but had been sharing
+the same 128px/32ppm/4×4m as the X-wing and TIE Fighter). New
+`pixelsPerMeter = 42.6667` (32 ÷ 0.75, so 128px source ÷ 42.6667 ≈ 3.0m,
+exactly 75% of 4.0m) and `radiusMeters` scaled the same 0.75× (2.0 → 1.5),
+keeping every ship's existing "radius = width / 2" convention.
+
+**Also replaced the TIE Fighter's source art the same day**, at the
+user's request, with a new custom-made 256×256 texture and matching
+hand-authored `.meta.json` (hitbox polygon + attachment points traced
+against the new canvas) — the original TIE Fighter only ever existed at
+128px in the source sprite library, unlike Falcon/Star Destroyer/TIE
+Interceptor which had a 256px option to begin with. Mechanically simple
+given the `pixelsPerMeter` work above: bump `tiefighter.stats.json`'s
+`pixelsPerMeter` 32→64 (same real-world 4×4m size, just sourced from
+2x the pixels, exactly the TIE Interceptor's own case), replace
+`assets-raw/ships/tiefighter/tie_fighter128_0020.png` with the new
+`tie_fighter256_0020.png` (old one deleted outright, not kept
+alongside — this ship never had both variants the way the others did),
+overwrite `tiefighter.meta.json` with the new hitbox/attachment data,
+repoint `Client.hullRegionName`'s `TIEFIGHTER` case at
+`"tiefighter/tie_fighter256"`, and re-run `AtlasPacker` to repack
+`ships.atlas` with the new source file. No `radiusMeters` change needed —
+its real-world size didn't change, only its source resolution and
+authored hitbox detail did.
+
+**Verified:** full `mvn clean verify` green; a real server+client boot
+flying the new-textured TIE Fighter (renders crisply, no exceptions) and
+the resized Snowspeeder, with a side-by-side pixel-cropped comparison
+against the X-wing confirming it now reads as visibly smaller, not just
+numerically smaller. The two new files
+(`tie_fighter256_0020.png`/`tie_fighter256.meta.json`) had appeared as
+untracked, very-recently-modified files mid-session, before the user
+asked for them by name — evidently authored in the `dev-tools` sprite
+editor in parallel with this same session; flagged to the user rather
+than silently touched, then integrated once they confirmed what they
+were.
+
 **Protocol change: ship type now travels end-to-end.**
 `HandshakeRequest` gained a `ShipType` field (sent from the selected
 Ship Selection screen entry); `ShipSpawnedMessage` and `ShipState` each

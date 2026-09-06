@@ -684,6 +684,65 @@ square-bounding-box rendering limitation flagged in the previous entry:
 `height = width`, so the Star Destroyer (256×432, non-square) renders
 correctly instead of squashed into a square.
 
+**Bug in the above, found by the user and fixed 2026-09-06: deriving
+`spriteWidthMeters`/`spriteHeightMeters` from source-art pixel dimensions
+at one global `PIXELS_PER_METER` meant a ship imported at higher
+resolution rendered — and, since Box2D derives mass from fixture area at
+a uniform density, physically weighed — more, purely as an accident of
+its art asset's resolution, not a deliberate choice.** Falcon/Star
+Destroyer/TIE Interceptor were all imported at 256px "purely a free
+quality choice" vs. the 128px X-wing/Snowspeeder/TIE Fighter — the user
+correctly diagnosed this themselves (reported both the TIE Interceptor
+rendering ~2x an X-wing's size and ships generally feeling too heavy)
+before any fix was discussed. See design.md's addendum to this same
+entry for the full writeup and exact values; short version:
+`spriteWidthMeters`/`spriteHeightMeters` are gone entirely, replaced by
+one per-ship `pixelsPerMeter` on `ShipTypeConfig`, used for
+`ShipFactory`'s hitbox-polygon conversion and `WeaponSystem`'s
+attachment-point conversion (both previously hardcoded to the global
+rate — the same bug, just would have shown up as guns desynced from the
+hull the moment only the hitbox got fixed). Rendered size is no longer
+separately authored at all — `Client` now derives it every frame from
+the real loaded `TextureRegion`'s actual pixel dimensions ÷
+`pixelsPerMeter`, so visual size and physical hitbox size are tied to
+one number and structurally can't drift apart again. **General rule
+worth remembering for any future per-ship pixel-space data (hitbox
+polygons, attachment points, and now this): a value picked "for free"
+during asset import (like choosing a sprite's resolution) can silently
+become gameplay-relevant later if anything downstream assumes a fixed
+global pixels-per-meter — check whether it should be per-ship instead.**
+Verified: full `mvn clean verify` green; real server+client boot flying
+an X-wing and a TIE Interceptor, screenshots compared side by side
+confirming genuinely comparable size now (not ~2x); zero exceptions.
+
+**Follow-up the same day, once the user actually flew the corrected
+ships:** confirmed it "feels much more consistent," plus two more asks.
+(1) **Snowspeeder scaled to 75%** — should read as the smallest ship,
+was sharing the X-wing/TIE Fighter's 4×4m. `pixelsPerMeter` 32→42.6667,
+`radiusMeters` 2.0→1.5 (same 0.75× scale, keeping the
+radius-equals-half-width convention every ship follows). (2) **TIE
+Fighter's source art replaced** with a user-made 256×256 texture +
+hand-authored `.meta.json` — this ship uniquely never had a 256px option
+in the original sprite library the way Falcon/Star Destroyer/TIE
+Interceptor did. Mechanically just the TIE Interceptor's own playbook
+again: `pixelsPerMeter` 32→64 (same 4×4m real size, 2x the source
+pixels), old `tie_fighter128_0020.png` deleted outright (this ship never
+kept both variants side by side), new file dropped in, `tiefighter.
+meta.json` overwritten with the new hitbox/attachment data,
+`Client.hullRegionName`'s `TIEFIGHTER` case repointed to
+`"tiefighter/tie_fighter256"`, atlas repacked via `AtlasPacker`.
+
+**Process note:** the two new TIE Fighter files showed up as untracked,
+very-recently-modified in `git status` *before* the user mentioned them
+— caught mid-session, correctly left completely alone and flagged to the
+user rather than assumed-safe-to-touch, exactly per the "investigate
+before touching unfamiliar files" rule; turned out to be the user
+working in the `dev-tools` sprite editor in parallel with this session.
+Verified: full `mvn clean verify` green; real server+client boot flying
+both the new TIE Fighter (crisp, correctly sized, no exceptions) and the
+resized Snowspeeder, confirmed visibly smaller than the X-wing via a
+side-by-side pixel crop.
+
 **Ship type now flows through the whole stack:** `HandshakeRequest`
 gained a `ShipType` (sent from the Ship Selection screen's pick),
 `ShipSpawnedMessage`/`ShipState` each gained one too (other clients only

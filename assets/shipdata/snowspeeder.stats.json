@@ -1,7 +1,6 @@
 {
-  "radiusMeters": 2.0,
-  "spriteWidthMeters": 4.0,
-  "spriteHeightMeters": 4.0,
+  "radiusMeters": 1.5,
+  "pixelsPerMeter": 42.6667,
   "thrustForce": 200.0,
   "turnTorque": 150.0,
   "hullMaxHealth": 100.0,

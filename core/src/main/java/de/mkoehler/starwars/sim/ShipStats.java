@@ -80,21 +80,13 @@ public final class ShipStats {
     }
 
     /**
-     * Returns the width to draw this ship's hull sprite at.
+     * Returns this ship type's pixels-per-meter — see
+     * {@link ShipTypeConfig#getPixelsPerMeter()} for the full explanation.
      *
-     * @return the sprite draw width, in meters
+     * @return this ship type's pixels-per-meter
      */
-    public float getSpriteWidthMeters() {
-        return config.getSpriteWidthMeters();
-    }
-
-    /**
-     * Returns the height to draw this ship's hull sprite at.
-     *
-     * @return the sprite draw height, in meters
-     */
-    public float getSpriteHeightMeters() {
-        return config.getSpriteHeightMeters();
+    public float getPixelsPerMeter() {
+        return config.getPixelsPerMeter();
     }
 
     /**

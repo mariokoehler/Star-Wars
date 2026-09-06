@@ -124,11 +124,16 @@ public final class ShipFactory {
             // PolygonShape#set computes the convex hull of the given points itself, and requires
             // at most 8 vertices (a Box2D limit) - the editor already enforces that cap when
             // authoring points, see SpriteCanvas.MAX_HITBOX_POINTS.
+            // Each ship type's own pixels-per-meter (ShipTypeConfig#getPixelsPerMeter()), not the
+            // global PhysicsConstants.PIXELS_PER_METER - the polygon's pixel coordinates are in
+            // that ship's own source-art pixel space, which doesn't necessarily match the global
+            // conversion rate (e.g. a ship imported at 2x resolution purely for crisper art still
+            // needs to convert to the same real-world size as one imported at 1x).
+            float pixelsPerMeter = stats.getPixelsPerMeter();
             Vector2[] vertices = new Vector2[hitboxPolygon.size()];
             for (int i = 0; i < hitboxPolygon.size(); i++) {
                 PixelPoint point = hitboxPolygon.get(i);
-                vertices[i] = new Vector2(point.getX() / PhysicsConstants.PIXELS_PER_METER,
-                    point.getY() / PhysicsConstants.PIXELS_PER_METER);
+                vertices[i] = new Vector2(point.getX() / pixelsPerMeter, point.getY() / pixelsPerMeter);
             }
             PolygonShape polygon = new PolygonShape();
             polygon.set(vertices);

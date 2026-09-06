@@ -8,7 +8,6 @@ import com.badlogic.ashley.systems.IteratingSystem;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.World;
-import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ProjectileFactory;
 import de.mkoehler.starwars.sim.ShipStats;
@@ -106,7 +105,7 @@ public class WeaponSystem extends IteratingSystem {
             fireFromDefaultOffset(body, ownerPlayerId, weapon, shipStats);
         } else {
             for (PixelPoint spawnPoint : spawnPoints) {
-                fireFromAttachmentPoint(body, ownerPlayerId, weapon, spawnPoint);
+                fireFromAttachmentPoint(body, ownerPlayerId, weapon, spawnPoint, shipStats.getPixelsPerMeter());
             }
         }
 
@@ -138,11 +137,12 @@ public class WeaponSystem extends IteratingSystem {
     // The attachment point's sprite-local, center-origin, Y-up coordinates (see PixelPoint's
     // Javadoc) line up directly with the ship body's local frame - facing "up" (local +Y) is
     // exactly the direction WeaponSystem's own SPAWN_OFFSET fires along at angle 0 - so a spawn
-    // point only needs converting from pixels to meters, then rotating by the ship's current
-    // angle same as the default offset above.
-    private void fireFromAttachmentPoint(Body body, int ownerPlayerId, WeaponComponent weapon, PixelPoint spawnPoint) {
-        SPAWN_OFFSET.set(spawnPoint.getX() / PhysicsConstants.PIXELS_PER_METER,
-            spawnPoint.getY() / PhysicsConstants.PIXELS_PER_METER).rotateRad(body.getAngle());
+    // point only needs converting from pixels to meters (at this ship type's own pixels-per-meter,
+    // same reasoning as ShipFactory's hitbox polygon conversion - the point is authored in that
+    // ship's own source-art pixel space, not a fixed global rate), then rotating by the ship's
+    // current angle same as the default offset above.
+    private void fireFromAttachmentPoint(Body body, int ownerPlayerId, WeaponComponent weapon, PixelPoint spawnPoint, float pixelsPerMeter) {
+        SPAWN_OFFSET.set(spawnPoint.getX() / pixelsPerMeter, spawnPoint.getY() / pixelsPerMeter).rotateRad(body.getAngle());
 
         ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
             body.getPosition().x + SPAWN_OFFSET.x, body.getPosition().y + SPAWN_OFFSET.y,

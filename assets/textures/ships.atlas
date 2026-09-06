@@ -27,7 +27,7 @@ snowspeeder/portrait
   index: -1
 snowspeeder/snowspeeder
   rotate: false
-  xy: 1544, 1848
+  xy: 260, 306
   size: 128, 128
   orig: 128, 128
   offset: 0, 0
@@ -53,11 +53,11 @@ tiefighter/portrait
   orig: 512, 512
   offset: 0, 0
   index: -1
-tiefighter/tie_fighter128
+tiefighter/tie_fighter256
   rotate: false
-  xy: 260, 306
-  size: 128, 128
-  orig: 128, 128
+  xy: 1544, 1720
+  size: 256, 256
+  orig: 256, 256
   offset: 0, 0
   index: 20
 tieinterceptor/interceptor256

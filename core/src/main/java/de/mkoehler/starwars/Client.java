@@ -238,7 +238,7 @@ public class Client implements Screen {
      * region name — unlike the portrait regions (uniformly
      * {@code <resourceName>/portrait}), hull frame region names don't
      * follow one convention (each ship's source filename varies — e.g.
-     * {@code falcon256_0020.png}, {@code tie_fighter128_0020.png}), so this
+     * {@code falcon256_0020.png}, {@code tie_fighter256_0020.png}), so this
      * is an explicit table, same reasoning as
      * {@code ShipSelectionScreen.descriptionRegionName}.
      */
@@ -248,7 +248,7 @@ public class Client implements Screen {
             case FALCON -> "falcon/falcon256";
             case SNOWSPEEDER -> "snowspeeder/snowspeeder";
             case STARDESTROYER -> "stardestroyer/stardestroyer256";
-            case TIEFIGHTER -> "tiefighter/tie_fighter128";
+            case TIEFIGHTER -> "tiefighter/tie_fighter256";
             case TIEINTERCEPTOR -> "tieinterceptor/interceptor256";
         };
     }
@@ -612,13 +612,15 @@ public class Client implements Screen {
         batch.setColor(OTHER_SHIP_TINT);
         for (RemoteShip ship : ships.values()) {
             ShipStats stats = ShipStats.forType(ship.shipType);
-            float widthPixels = stats.getSpriteWidthMeters() * PhysicsConstants.PIXELS_PER_METER;
-            float heightPixels = stats.getSpriteHeightMeters() * PhysicsConstants.PIXELS_PER_METER;
+            TextureRegion region = shipRegionsByType.get(ship.shipType);
+            float screenScale = PhysicsConstants.PIXELS_PER_METER / stats.getPixelsPerMeter();
+            float widthPixels = region.getRegionWidth() * screenScale;
+            float heightPixels = region.getRegionHeight() * screenScale;
 
             // The source art faces up/north when unrotated (design.md 4.3), and the server's
             // ShipControlSystem treats angle 0 as "facing north" too - so the ship's angle
             // maps directly onto the region's rotation with no offset needed.
-            batch.draw(shipRegionsByType.get(ship.shipType),
+            batch.draw(region,
                 ship.renderX - widthPixels / 2f, ship.renderY - heightPixels / 2f,
                 widthPixels / 2f, heightPixels / 2f,
                 widthPixels, heightPixels,
@@ -638,10 +640,12 @@ public class Client implements Screen {
         float angle = MathUtils.lerpAngle(myPreviousAngle, myBody.getAngle(), alpha);
 
         ShipStats myStats = ShipStats.forType(myShipType);
-        float widthPixels = myStats.getSpriteWidthMeters() * PhysicsConstants.PIXELS_PER_METER;
-        float heightPixels = myStats.getSpriteHeightMeters() * PhysicsConstants.PIXELS_PER_METER;
+        TextureRegion region = shipRegionsByType.get(myShipType);
+        float screenScale = PhysicsConstants.PIXELS_PER_METER / myStats.getPixelsPerMeter();
+        float widthPixels = region.getRegionWidth() * screenScale;
+        float heightPixels = region.getRegionHeight() * screenScale;
 
-        batch.draw(shipRegionsByType.get(myShipType),
+        batch.draw(region,
             x - widthPixels / 2f, y - heightPixels / 2f,
             widthPixels / 2f, heightPixels / 2f,
             widthPixels, heightPixels,
