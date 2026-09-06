@@ -9,11 +9,13 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.World;
 import de.mkoehler.starwars.sim.PhysicsConstants;
+import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ProjectileFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
@@ -23,10 +25,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Fires a projectile for every ship whose fire input is held and whose
- * weapon is off cooldown, resetting that cooldown each time. A ship with
- * multiple {@value #PROJECTILE_ATTACHMENT_NAME} attachment points authored
- * in its sprite metadata (design.md 2.4) fires one projectile per point per
- * shot instead of a single one from a fixed offset.
+ * weapon {@link WeaponComponent#canFire()} — cooldown expired and capacitor
+ * charged enough — drawing that shot's energy cost from the capacitor each
+ * time. A ship with multiple {@value #PROJECTILE_ATTACHMENT_NAME} attachment
+ * points authored in its sprite metadata (design.md 2.4) fires one
+ * projectile per point per shot instead of a single one from a fixed
+ * offset, but still draws only one shot's energy cost for the whole volley.
+ * Also recharges every ship's capacitor each tick, scaled by its current
+ * {@link PowerSystem#WEAPONS} power allocation (design.md 2.2), regardless
+ * of whether it's currently firing.
  * <p>
  * Runs server-side only, once per tick — unlike {@link ShipControlSystem},
  * firing is a discrete, one-shot event when the cooldown expires, not a
@@ -51,6 +58,7 @@ public class WeaponSystem extends IteratingSystem {
     private final ComponentMapper<NetworkInputComponent> inputMapper = ComponentMapper.getFor(NetworkInputComponent.class);
     private final ComponentMapper<PlayerIdComponent> playerIdMapper = ComponentMapper.getFor(PlayerIdComponent.class);
     private final ComponentMapper<ShipTypeComponent> shipTypeMapper = ComponentMapper.getFor(ShipTypeComponent.class);
+    private final ComponentMapper<PowerDistributionComponent> powerMapper = ComponentMapper.getFor(PowerDistributionComponent.class);
 
     private final Engine engine;
     private final World world;
@@ -64,7 +72,7 @@ public class WeaponSystem extends IteratingSystem {
      */
     public WeaponSystem(Engine engine, World world) {
         super(Family.all(PhysicsBodyComponent.class, WeaponComponent.class, NetworkInputComponent.class,
-            PlayerIdComponent.class, ShipTypeComponent.class).get());
+            PlayerIdComponent.class, ShipTypeComponent.class, PowerDistributionComponent.class).get());
         this.engine = engine;
         this.world = world;
     }
@@ -73,9 +81,11 @@ public class WeaponSystem extends IteratingSystem {
     protected void processEntity(Entity entity, float deltaTime) {
         WeaponComponent weapon = weaponMapper.get(entity);
         weapon.tickCooldown(deltaTime);
+        float weaponsMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.WEAPONS);
+        weapon.rechargeCapacitor(deltaTime, weaponsMultiplier);
 
         NetworkInputComponent input = inputMapper.get(entity);
-        if (!input.isFiring() || weapon.getCooldownRemaining() > 0f) {
+        if (!input.isFiring() || !weapon.canFire()) {
             return;
         }
 
@@ -95,7 +105,7 @@ public class WeaponSystem extends IteratingSystem {
             }
         }
 
-        weapon.resetCooldown();
+        weapon.consumeShot();
     }
 
     // Spawn just ahead of the ship's own hull, not at its exact center - otherwise the

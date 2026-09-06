@@ -145,11 +145,10 @@ fight (see 5.1).
 
 **Weapon:** one type for v1, a simple blaster cannon (`WeaponStats.BLASTER`)
 — fires a projectile in the direction the ship is currently facing while
-the fire input (SPACE, 5.3) is held, limited by a fixed cooldown between
-shots (0.25s, i.e. 4 shots/sec). **Explicitly not the real weapon
-capacitor mechanic from 2.2** — that's tied to the power distribution
-system, which doesn't exist yet; this is a plain fixed cooldown standing
-in for it. Revisit once power distribution is built.
+the fire input (SPACE, 5.3) is held, limited by a fixed mechanical
+cooldown between shots (0.25s, i.e. 4 shots/sec hard cap) **and** the
+real weapon capacitor mechanic from 2.2, implemented alongside power
+distribution itself — see 2.8 for the full writeup.
 
 **Projectiles — server-simulated, never predicted:** each shot is a small,
 fast Box2D body (bullet/CCD enabled to avoid tunneling through a ship in
@@ -373,16 +372,16 @@ function, unit-tested (`ShipDamageTest`, 5 cases including the exact 90/10
 example above and the overflow case) — a good instance of this project's
 "logic-heavy code gets tests" convention (3.9/CLAUDE.md).
 
-**Shield regen — flat rate for now:** `ShieldComponent.regenerate(...)`
-adds a fixed points/second rate every tick via a new
-`ShieldRegenSystem`, run after that tick's hits are resolved. Standing in
-for the eventual power-distribution-driven rate (2.2's "Shields"
-allocation) the same way `WeaponStats`' fixed cooldown stands in for the
-capacitor mechanic — revisit once power distribution exists. **No
-regen-delay-after-hit** (a common shooter convention — shields pause
-regenerating for a few seconds after taking damage) — deliberately not
-built until it's asked for; shields currently start regenerating again
-the very next tick after a hit.
+**Shield regen — flat per-second rate, scaled by power allocation.**
+`ShieldComponent.regenerate(...)` adds a fixed points/second rate every
+tick via `ShieldRegenSystem`, run after that tick's hits are resolved.
+Originally a flat rate standing in for the eventual power-distribution-
+driven rate; now that power distribution is implemented (2.8),
+`ShieldRegenSystem` scales it by the ship's current Shields power
+multiplier every tick. **No regen-delay-after-hit** (a common shooter
+convention — shields pause regenerating for a few seconds after taking
+damage) — deliberately not built until it's asked for; shields currently
+start regenerating again the very next tick after a hit.
 
 **`ShipType` enum, introduced ahead of a second ship type actually
 existing.** A single `XWING` value so far, but every ship-type-keyed
@@ -569,6 +568,144 @@ things Box2D's mass model *doesn't* give for free: hull/shield pools,
 weapon loadout/damage, and top speed/turn-rate ceilings if the emergent
 values ever feel wrong at the extremes (e.g. the Star Destroyer becoming
 *too* sluggish to be fun) — not on refighting what already works.
+
+### 2.8 Power distribution, implemented — and the real weapon capacitor (2026-09-06)
+
+Implements 2.2's design in full: the three-keybind adjustment algorithm,
+the reset keybind, server-authoritative per-ship state not synced to other
+clients, and — since it was the natural next step once power distribution
+existed (2.4/2.5 both explicitly deferred to this point) — the real
+weapon capacitor mechanic too, replacing the placeholder fixed cooldown.
+User provided the HUD art (`assets-raw/hud/HUD_Distribution_*.png`: a
+background panel plus three separate vertical glow-bar overlays, Shields/
+Weapons/Engines, each already authored in its own horizontal position on
+one shared 512x512 canvas) and the exact clip range (Y=170 top/100% to
+Y=423 bottom/0%, counted from the top, shared by all three bars and every
+ship type — unlike the hull/shield HUD, there's only one panel design, no
+per-ship variation needed).
+
+**Two open questions resolved before implementing** (see CLAUDE.md for
+the full exchange): (1) build the real capacitor now rather than defer it
+further, since its prerequisite just landed; (2) design.md doesn't specify
+a formula for how a system's power fraction becomes an actual effect
+multiplier — agreed on the simplest option, a linear multiplier relative
+to the even baseline (`multiplier = fraction / (1/3)`), applied
+identically to all three systems. At the baseline this is 1.0x (no
+change from today's numbers); at the 10% floor, 0.3x; at the ~78.3%
+practical ceiling, ~2.35x.
+
+**New pure/testable class, `PowerDistribution`** (`core.sim`, plus a
+`PowerSystem` enum): immutable, three fractions summing to ~1.0,
+`adjust(target)` implementing the exact normal/redirect/no-op clamping
+algorithm from 2.2, `reset()`, `multiplierFor(system)`. Fully unit-tested
+(`PowerDistributionTest`, 7 cases) including the ~78.3% practical ceiling
+example from 2.2's own text (verified by simulating 9 repeated presses of
+the same system from baseline) and a manufactured redirect-case scenario.
+
+**Server-authoritative, but never actually synced — by construction, not
+by filtering it out of a broadcast.** A new `PowerDistributionComponent`
+(Ashley) holds each ship's authoritative split, adjusted by
+`GameNetworkServer` when a new `PowerAdjustMessage` arrives (sent over
+the *reliable* TCP channel, unlike movement/firing input's per-tick UDP —
+this is a discrete one-shot keypress event, not continuously-resent held
+state, so a dropped packet would silently change the resulting split
+rather than being harmlessly superseded next tick). The owning client
+keeps its own local copy in sync purely by applying the identical
+deterministic `PowerDistribution.adjust`/`reset` to every keypress it
+sends — since both ends run the same pure function over the same
+in-order event stream, the two can't actually diverge, so there's no
+reconciliation logic for this the way there is for physics (whose drift
+comes from continuous floating-point/timing sources this discrete state
+doesn't have). This also means opponents' power splits never need
+filtering out of `WorldSnapshotMessage` — they were never going to be in
+it in the first place, satisfying 2.2's "not synced to other clients"
+requirement structurally rather than by remembering to omit a field.
+
+**Where each multiplier actually gets applied:** `ShipControlSystem`
+(server) and `Client.predictLocalShip` (local prediction) both
+pre-multiply thrust/torque by the Engines multiplier before calling the
+shared `applyInput` — kept as a plain static method with no
+component/entity coupling, so the caller supplies already-scaled values;
+`ShieldRegenSystem` scales `ShieldComponent.regenerate`'s rate by the
+Shields multiplier; the new weapon capacitor (below) is scaled by the
+Weapons multiplier.
+
+**The real weapon capacitor**, replacing `WeaponStats`' old fixed-
+cooldown-only placeholder: `WeaponComponent` now also tracks a capacitor
+charge, trickle-recharging every tick (`WeaponSystem`, scaled by the
+Weapons multiplier) up to a max sized for 5.5 shots, and draining one
+shot's energy cost per volley (still just once per volley even when
+multiple `PROJECTILE` attachment points fire together, same as the old
+cooldown reset). The mechanical 0.25s/4-shots-per-second cooldown from
+2.4 stays as a hard cap "on top of" the capacitor, per 2.2's own wording
+— untuned placeholder numbers chosen so the two caps interact
+meaningfully: at the even baseline the capacitor sustains only 2
+shots/sec indefinitely (half the mechanical cap, so bursting above that
+briefly and then throttling is the normal feel), while at the practical
+~78.3% Weapons ceiling the capacitor's sustained rate (~4.7/sec) exceeds
+the mechanical cap entirely, so investing there removes the throttle
+altogether and the cooldown alone governs. No capacitor-charge HUD
+element yet (not asked for, and 2.2 doesn't call for one) — only the
+three-bar allocation gauge described above.
+
+**HUD widget:** new `render.PowerDistributionHud`, structurally identical
+to `ShipStatusHud`'s bottom-anchored "fuel gauge" clipping technique
+(reuses the same package-private `HudGaugeClip` pure-math class) but
+simpler — one shared clip range for all three bars and every ship type,
+so no per-ship config is threaded through it. Each bar's fraction is the
+raw power fraction itself (not renormalized against the ~78.3% ceiling),
+so a bar never reads completely full even at max allocation — flagged in
+the class Javadoc as intentional, not a bug, since the alternative
+(silently renormalizing) would make the gauge lie about the actual
+percentage allocated. Placed directly right of the existing hull/shield
+widget, same bottom margin — an untuned placeholder position, like that
+widget's own margin/size were when first added.
+
+**Verified end-to-end, for real:** full `mvn clean verify` (43 tests, all
+green) across every module; a real server + client boot with zero
+exceptions; and — via the same PowerShell `SendKeys` technique used for
+previous milestones — actually pressing the power-distribution keybinds
+in a live running client and screenshotting the result: repeated presses
+of **L** visibly redirected power into the Engines bar (climbing toward
+the ~78% ceiling) while the Shields/Weapons bars visibly dropped toward
+the floor, and **K** visibly reset all three bars back to equal. **Not
+verified this way:** the actual gameplay feel of scaled thrust/shield-
+regen/fire-rate in a real dogfight (needs the user actually flying with
+power reallocated, not just watching the gauge respond) — the numbers
+above are all untuned placeholders pending that pass, same status as
+every other balance number in this project so far.
+
+**Keybind remap + hold-to-maximize, same day, right after first
+play-testing the above.** Two pieces of feedback: the original I/J/L →
+Shields/Weapons/Engines mapping (5.3) didn't visually line up with the
+HUD's left-to-right Shields/Weapons/Engines bar order, which read as
+confusing; and holding a key should jump straight to that system's
+maximum instead of only ever incrementing by 5% per press. **Remap:**
+`J` = Shields, `I` = Weapons, `L` = Engines — `J`/`L` are adjacent on the
+home row either side of `K` (the reset key), so their physical left-right
+order now matches the bars' left-right order; `I` (the one key not on
+that row, reached by moving the index finger up from `J`) takes the
+remaining middle system, Weapons. **Hold-to-maximize:** a new
+`PowerDistribution.maximize(target)` — unlike `adjust`, an unconditional
+jump to the theoretical extreme (`target` at `1 - 2*FLOOR_FRACTION`
+= 80%, both others at the 10% floor) regardless of the current split, the
+same "always succeeds" character as `reset()`. `Client` tracks each of
+the three keys' continuously-held duration independently
+(`shieldsHold`/`weaponsHold`/`enginesHold`, a small per-key
+heldSeconds+alreadyMaximized pair) and fires `maximize` exactly once per
+hold, `HOLD_TO_MAXIMIZE_SECONDS` = 0.4s after the key goes down —
+untuned, first value that felt reasonable. A tap (released before the
+threshold) still just increments, unchanged. `PowerAdjustMessage` gained
+a `Kind` (`ADJUST`/`MAXIMIZE`/`RESET`) instead of inferring the action
+from a nullable target, since there are now two non-reset actions to
+distinguish. Verified the same way as the initial implementation —
+`SendKeys`-driven taps confirmed via exact pixel measurement (the ~5%
+fraction differences involved are only a few screen pixels tall at this
+widget size, not reliably visible by eye in a screenshot thumbnail), and
+`keybd_event`-driven genuine key-holds (`SendKeys` alone can't simulate
+a held key, only rapid down/up) confirmed visually and unambiguously:
+holding **L** for 700ms snapped Engines to the ~80% ceiling and
+Shields/Weapons to the 10% floor in one jump, no exceptions either side.
 
 ## 3. Architecture
 
@@ -1489,8 +1626,13 @@ remappable via the Keybind Setup screen (5.2).
   see §2.3)
 - **Power distribution (2.2):** **I / J / L**, chosen because they form a
   triangle under the right hand (resting comfortably while the left hand
-  stays on WASD) — confirmed: `I` = Shields, `J` = Weapons, `L` = Engines,
-  with **K** (the natural center of the triangle) as the reset key.
+  stays on WASD), with **K** (the natural center of the triangle) as the
+  reset key. Final mapping: `J` = Shields, `I` = Weapons, `L` = Engines —
+  chosen so the physical left-to-right order of `J`/`L` on the home row
+  matches the HUD's left-to-right Shields/.../Engines bar order (2.8),
+  with `I` (the one key not on that row) taking the remaining middle bar,
+  Weapons. A **tap** shifts the split by one increment; **holding** a key
+  for a moment instead jumps that system straight to its maximum (2.8).
 
 This is the classic "Asteroids-style" Newtonian control scheme (rotate +
 thrust along facing direction) — reasonable default, open to tuning once
@@ -1555,23 +1697,26 @@ once a component is actually being worked on.
       top speed/turn rate scale directly with thrust/torque at fixed
       damping, which made the earlier "just double it" step predictable,
       but the final numbers are empirical, not calculated.
-- [ ] **Power distribution system** — server-authoritative allocation
-      state per ship (not networked to other clients), feeding shield
-      regen rate / weapon fire rate / engine thrust & agility; the
-      three-keybind +5/-2.5/-2.5 adjustment with the 10% floor/redirect/
-      no-op algorithm (2.2), and reset-to-even logic.
-- [ ] **Weapon capacitor** — per-ship energy buffer (2.2) that trickle-
-      charges from the power core and drains per shot; recharge rate
-      scales with Weapons power allocation.
+- [x] **Power distribution system (2026-09-06)** — see 2.8 for the full
+      writeup: server-authoritative allocation state per ship (not
+      networked to other clients, by construction rather than by
+      filtering), feeding shield regen rate / weapon fire rate / engine
+      thrust & agility; the three-keybind +5/-2.5/-2.5 adjustment with the
+      10% floor/redirect/no-op algorithm (2.2), and reset-to-even logic.
+- [x] **Weapon capacitor (2026-09-06)** — see 2.8: per-ship energy buffer
+      (2.2) that trickle-charges from the power core and drains per shot;
+      recharge rate scales with Weapons power allocation. All untuned
+      placeholder numbers pending a real balancing pass.
 - [ ] **Combat-lock ESC logic** — server tracks last-fired/last-hit
       timestamps per player, gates ESC-triggered leave on the 20s rule,
       triggers the self-destruct/explode VFX + blocked-ESC warning
       message/sound on leave attempts.
-- [x] **Weapons & projectiles (first pass, 2026-09-05)** — see 2.4 for
-      the full writeup: one weapon (blaster), server-simulated
-      projectiles (never predicted), Box2D-contact hit detection,
-      health/death/respawn. No kill credit/XP, no capacitor mechanic
-      (2.2) yet, no ship roster/balance pass — a working first cut, not
+- [x] **Weapons & projectiles (first pass, 2026-09-05; real capacitor
+      added 2026-09-06)** — see 2.4/2.8 for the full writeup: one weapon
+      (blaster), server-simulated projectiles (never predicted), Box2D-
+      contact hit detection, health/death/respawn, real weapon capacitor
+      (2.2) gating fire rate alongside the mechanical cooldown. No kill
+      credit/XP, no ship roster/balance pass — a working first cut, not
       a finished combat system.
 - [ ] **Ship roster (data-driven)** — stats (mass, thrust, turn rate, hit
       points, weapon loadout) per ship, starting with a small roster (2–3

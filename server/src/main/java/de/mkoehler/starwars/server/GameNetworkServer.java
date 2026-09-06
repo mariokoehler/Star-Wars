@@ -18,11 +18,13 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
@@ -31,6 +33,7 @@ import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
@@ -309,6 +312,9 @@ public class GameNetworkServer extends NetworkServer {
         if (object instanceof PlayerInputMessage input) {
             int playerId = connection.getID();
             pendingActions.add(() -> applyInput(playerId, input));
+        } else if (object instanceof PowerAdjustMessage adjust) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> applyPowerAdjust(playerId, adjust.getKind(), adjust.getTarget()));
         }
     }
 
@@ -340,6 +346,31 @@ public class GameNetworkServer extends NetworkServer {
         }
         ship.getComponent(NetworkInputComponent.class).set(
             input.isThrustForward(), input.isThrustReverse(), input.isTurnLeft(), input.isTurnRight(), input.isFiring());
+    }
+
+    /**
+     * Applies one power-distribution action to a ship's authoritative power
+     * split (design.md 2.2). Dropped harmlessly if the ship isn't spawned
+     * right now (e.g. the message arrived just before a death or just after
+     * a disconnect) — the client's own local mirror of this state only ever
+     * advances by sending exactly these actions in the first place, so
+     * there's nothing to reconcile even if one is dropped here.
+     *
+     * @param playerId the player whose ship to adjust
+     * @param kind     which action to apply
+     * @param target   the system to act on; unused for {@link PowerAdjustMessage.Kind#RESET}
+     */
+    private void applyPowerAdjust(int playerId, PowerAdjustMessage.Kind kind, PowerSystem target) {
+        Entity ship = shipsByPlayerId.get(playerId);
+        if (ship == null) {
+            return;
+        }
+        PowerDistributionComponent power = ship.getComponent(PowerDistributionComponent.class);
+        switch (kind) {
+            case ADJUST -> power.adjust(target);
+            case MAXIMIZE -> power.maximize(target);
+            case RESET -> power.reset();
+        }
     }
 
     private void despawnShip(int playerId) {

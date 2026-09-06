@@ -737,6 +737,97 @@ with a real server+client boot flying the TIE Fighter and the Falcon
 silhouette in the HUD, not the X-wing fallback. Full `mvn clean verify`
 still green.
 
+**Power distribution + real weapon capacitor — implemented 2026-09-06.**
+See design.md 2.8 for the full writeup. Before implementing, resolved two
+things design.md left open via `AskUserQuestion` (both foundational/
+gameplay-balance-defining, not minor defaults): build the real weapon
+capacitor now (rather than defer it further, since power distribution
+was its stated prerequisite) — "Build full capacitor now"; and the
+power-fraction-to-effect-multiplier formula, since design.md 2.2 doesn't
+specify one — agreed on a linear multiplier relative to the even
+baseline (`fraction / (1/3)`), same formula for all three systems. New
+pure/testable `PowerDistribution` (`core.sim`, + `PowerSystem` enum) —
+immutable, implements the exact normal/redirect/no-op clamping algorithm
+from 2.2, unit-tested including the ~78.3% ceiling example design.md
+itself calls out. **Server-authoritative but never networked to other
+clients by construction, not by filtering:** the owning client keeps its
+own local copy in sync purely by applying the identical deterministic
+`adjust`/`reset` transition to every keypress it also sends to the
+server (over the *reliable* TCP channel — `PowerAdjustMessage` is a
+discrete one-shot event, unlike per-tick UDP movement/fire input where a
+dropped packet is harmless since it's resent next tick). Both sides
+running the same pure function over the same in-order event stream means
+the two copies can't actually diverge — no reconciliation logic needed
+for this state, unlike ship physics.
+
+New `PowerDistributionComponent` (Ashley) added to every ship
+(`ShipFactory`); `ShipControlSystem`/`Client.predictLocalShip` scale
+thrust/torque by the Engines multiplier before calling the shared
+`applyInput`; `ShieldRegenSystem` scales shield regen by the Shields
+multiplier. `WeaponStats`' old fixed-cooldown-only placeholder gained a
+real capacitor (max charge, per-shot cost, base recharge rate);
+`WeaponComponent` tracks current charge and gates firing on
+`canFire()` (cooldown expired **and** capacitor charged enough);
+`WeaponSystem` recharges it every tick scaled by the Weapons multiplier.
+The old mechanical cooldown stays as a hard cap "on top of" the
+capacitor, per 2.2's own wording, rather than being replaced by it.
+
+New `render.PowerDistributionHud`, reusing `ShipStatusHud`'s
+package-private `HudGaugeClip` clipping math — simpler than that widget
+since there's one shared clip range for all three bars/every ship type,
+no per-ship config threaded through. User's HUD art
+(`assets-raw/hud/HUD_Distribution_*.png`) copied to
+`assets/textures/hud/hud_distribution_*.png` (not atlas-packed, same
+convention as the other HUD panel art). Placed directly right of the
+existing hull/shield widget on screen — an untuned placeholder position.
+
+**Verified for real, not just build+tests:** full `mvn clean verify` (43
+tests) green across every module; a real server+client boot with zero
+exceptions; and — via `SendKeys` — actually pressing the power keybinds
+in a live client and screenshotting the result: repeated **L** presses
+visibly redirected power into Engines (toward the ~78% ceiling) while
+Shields/Weapons visibly dropped toward the floor, and **K** visibly reset
+all three back to equal. One screenshot-capture gotcha hit along the way,
+worth remembering: **a separate PowerShell process is not DPI-aware by
+default, so `GetWindowRect`/`CopyFromScreen` return coordinates in a
+different scale than the actual screen**, producing a screenshot that
+silently shows the wrong window/region (looked like a real bug — a
+"reset" keypress appearing to do nothing — until re-captured correctly).
+Fix: call `[User32]::SetProcessDPIAware()` once at the start of *every*
+such PowerShell invocation (it's a per-process setting, doesn't persist
+across separate `powershell.exe` calls) before any `GetWindowRect`/
+`CopyFromScreen` call. **Not verified this way:** actual gameplay feel
+of scaled thrust/shield-regen/fire-rate in a real dogfight — needs the
+user actually flying with power reallocated, not just watching the gauge
+respond.
+
+**Keybind remap + hold-to-maximize — same day, right after first
+play-testing the above.** See design.md 2.8's follow-up note for the
+full writeup. User feedback: I/J/L → Shields/Weapons/Engines didn't line
+up with the HUD's left-to-right bar order (confusing), and wanted holding
+a key to instantly max that system instead of only incrementing.
+**Remap:** `J`=Shields, `I`=Weapons, `L`=Engines (`J`/`L` flank the reset
+key `K` on the home row, matching the bars' left-right order; `I` takes
+the one system left over, Weapons). **New:**
+`PowerDistribution.maximize(target)` — an unconditional jump to
+`target`=80%/others=10%, same "always succeeds" character as `reset()`,
+unlike the incremental, sometimes-no-op `adjust()`. `Client` tracks each
+of the three keys' held duration independently via a small per-key
+`PowerKeyHold` (heldSeconds + already-maximized-this-press), firing
+`maximize` once after 0.4s held (untuned) — a tap still just increments.
+`PowerAdjustMessage` gained a `Kind` enum (`ADJUST`/`MAXIMIZE`/`RESET`)
+rather than inferring the action from a nullable target, now that there
+are two non-reset actions. **Verification gotcha worth remembering:**
+the ~5% fraction differences from a couple of taps are only a few screen
+pixels tall on this widget — not reliably visible by eye in a screenshot
+thumbnail, even though the underlying numbers were correct (confirmed by
+sampling exact pixel colors/rows with Python/PIL instead of eyeballing).
+For the hold-to-maximize test specifically, `SendKeys` can't simulate an
+actually-held key (it only sends rapid down+up per character) — used
+`keybd_event` with an explicit key-down, a real `Sleep`, then key-up
+instead, which did produce a real sustained `isKeyPressed` state and a
+clearly visible (no pixel-measurement needed) result.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

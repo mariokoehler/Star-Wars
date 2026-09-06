@@ -5,6 +5,7 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
@@ -14,6 +15,7 @@ import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipType;
 
 /**
@@ -57,5 +59,8 @@ public final class MessageRegistry {
         kryo.register(ProjectileState[].class);
         kryo.register(ShipDestroyedMessage.class);
         kryo.register(ShipType.class);
+        kryo.register(PowerSystem.class);
+        kryo.register(PowerAdjustMessage.class);
+        kryo.register(PowerAdjustMessage.Kind.class);
     }
 }

@@ -21,6 +21,7 @@ import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
@@ -28,8 +29,11 @@ import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
+import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.sim.PhysicsConstants;
+import de.mkoehler.starwars.sim.PowerDistribution;
+import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
@@ -66,6 +70,16 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * {@link ShipState}. Local ship movement prediction/reconciliation is
  * unchanged from the previous milestone.
  * <p>
+ * Power distribution (design.md 2.2): {@link #myPowerDistribution} is a
+ * locally-mirrored copy of this ship's server-authoritative power split,
+ * kept in sync purely by sending the exact same discrete keypress events
+ * ({@code PowerAdjustMessage}) the local copy applies to itself, over the
+ * reliable/ordered TCP channel — see
+ * {@code PowerDistributionComponent}'s Javadoc for why the two can't
+ * actually diverge. Used both to render {@link #powerHud} and to scale
+ * {@link #predictLocalShip}'s thrust/torque, so local prediction matches
+ * what the server will compute for the same input.
+ * <p>
  * {@link NetworkClient}'s callbacks run on KryoNet's own thread, not the
  * render thread, so incoming messages are queued in {@link #pendingUpdates}
  * and only applied at the start of {@link #render(float)} — never mutate
@@ -91,6 +105,12 @@ public class Client implements Screen {
     private static final float HUD_STATUS_SIZE = 220f;
     /** Screen-pixel margin from the bottom-left corner for the ship status HUD widget. */
     private static final float HUD_STATUS_MARGIN = 24f;
+    /** Size, in screen pixels, of the power-distribution HUD widget - placeholder until tuned by feel. */
+    private static final float HUD_POWER_SIZE = 220f;
+    /** Horizontal gap, in screen pixels, between the ship-status and power-distribution HUD widgets. */
+    private static final float HUD_POWER_GAP = 16f;
+    /** How long a power-distribution keybind must be held before it maximizes its system instead of just incrementing it - untuned placeholder. */
+    private static final float HOLD_TO_MAXIMIZE_SECONDS = 0.4f;
 
     private final ShipType selectedShipType;
 
@@ -102,6 +122,7 @@ public class Client implements Screen {
     private TextureRegion enemyProjectileRegion;
     private ParallaxBackground background;
     private ShipStatusHud statusHud;
+    private PowerDistributionHud powerHud;
     private OrthographicCamera camera;
     private Viewport viewport;
     private OrthographicCamera hudCamera;
@@ -123,6 +144,10 @@ public class Client implements Screen {
     private float myHullMax;
     private float myShieldCurrent;
     private float myShieldMax;
+    private PowerDistribution myPowerDistribution = PowerDistribution.even();
+    private final PowerKeyHold shieldsHold = new PowerKeyHold();
+    private final PowerKeyHold weaponsHold = new PowerKeyHold();
+    private final PowerKeyHold enginesHold = new PowerKeyHold();
 
     /**
      * Creates the gameplay screen.
@@ -154,6 +179,7 @@ public class Client implements Screen {
             new ParallaxBackground.Layer(PlaceholderStarfield.generate(512, 120, 1L), 0.4f)
         );
         statusHud = new ShipStatusHud();
+        powerHud = new PowerDistributionHud();
 
         camera = new OrthographicCamera();
         viewport = new ScreenViewport(camera);
@@ -236,6 +262,14 @@ public class Client implements Screen {
         // would flash empty for a frame or two right after spawning/respawning.
         myHullMax = myHullCurrent = myStats.getMaxHealth();
         myShieldMax = myShieldCurrent = myStats.getShieldMaxCapacity();
+
+        // A fresh ship (spawn or respawn) always gets a fresh PowerDistributionComponent on the
+        // server too (ShipFactory.createShip), so resetting the local mirror here keeps the two in
+        // sync trivially, same reasoning as the hull/shield reset above.
+        myPowerDistribution = PowerDistribution.even();
+        shieldsHold.reset();
+        weaponsHold.reset();
+        enginesHold.reset();
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -332,6 +366,7 @@ public class Client implements Screen {
 
             networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight, firing));
             predictLocalShip(thrustForward, thrustReverse, turnLeft, turnRight, deltaTime);
+            handlePowerDistributionInput(deltaTime);
         }
 
         extrapolateRemoteShips(deltaTime);
@@ -363,6 +398,64 @@ public class Client implements Screen {
         float shieldFraction = myShieldMax > 0f ? myShieldCurrent / myShieldMax : 0f;
         statusHud.render(batch, ShipStats.forType(myShipType), HUD_STATUS_MARGIN, HUD_STATUS_MARGIN, HUD_STATUS_SIZE,
             hullFraction, shieldFraction);
+        powerHud.render(batch, HUD_STATUS_MARGIN + HUD_STATUS_SIZE + HUD_POWER_GAP, HUD_STATUS_MARGIN, HUD_POWER_SIZE,
+            myPowerDistribution);
+    }
+
+    /**
+     * Reads the power-distribution keybinds (design.md 5.3: J/I/L to shift
+     * toward Shields/Weapons/Engines — matching the HUD's left-to-right
+     * Shields/Weapons/Engines bar order, K to reset). A tap shifts the
+     * split by exactly one increment ({@link #adjustPower}); holding a key
+     * for {@link #HOLD_TO_MAXIMIZE_SECONDS} instead jumps that system
+     * straight to its maximum ({@link #maximizePower}) — tracked per key via
+     * {@link #shieldsHold}/{@link #weaponsHold}/{@link #enginesHold} so each
+     * key's held-duration and whether it's already maximized this press are
+     * independent of the others. Updates the local mirror immediately (for
+     * instant HUD feedback and correct engine-thrust prediction this same
+     * frame) and sends the same event to the server over the reliable
+     * channel — see {@code PowerDistributionComponent}'s Javadoc for why the
+     * two never diverge despite each applying this independently.
+     *
+     * @param deltaTime time since the last frame, in seconds — used to
+     *                  accumulate how long a key has been held
+     */
+    private void handlePowerDistributionInput(float deltaTime) {
+        handlePowerKey(Input.Keys.J, PowerSystem.SHIELDS, shieldsHold, deltaTime);
+        handlePowerKey(Input.Keys.I, PowerSystem.WEAPONS, weaponsHold, deltaTime);
+        handlePowerKey(Input.Keys.L, PowerSystem.ENGINES, enginesHold, deltaTime);
+
+        if (Gdx.input.isKeyJustPressed(Input.Keys.K)) {
+            myPowerDistribution = myPowerDistribution.reset();
+            networkClient.sendTCP(new PowerAdjustMessage(PowerAdjustMessage.Kind.RESET, null));
+        }
+    }
+
+    private void handlePowerKey(int keycode, PowerSystem target, PowerKeyHold hold, float deltaTime) {
+        if (Gdx.input.isKeyJustPressed(keycode)) {
+            adjustPower(target);
+        }
+
+        if (Gdx.input.isKeyPressed(keycode)) {
+            hold.heldSeconds += deltaTime;
+            if (!hold.maximized && hold.heldSeconds >= HOLD_TO_MAXIMIZE_SECONDS) {
+                hold.maximized = true;
+                maximizePower(target);
+            }
+        } else {
+            hold.heldSeconds = 0f;
+            hold.maximized = false;
+        }
+    }
+
+    private void adjustPower(PowerSystem target) {
+        myPowerDistribution = myPowerDistribution.adjust(target);
+        networkClient.sendTCP(new PowerAdjustMessage(PowerAdjustMessage.Kind.ADJUST, target));
+    }
+
+    private void maximizePower(PowerSystem target) {
+        myPowerDistribution = myPowerDistribution.maximize(target);
+        networkClient.sendTCP(new PowerAdjustMessage(PowerAdjustMessage.Kind.MAXIMIZE, target));
     }
 
     private void predictLocalShip(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, float deltaTime) {
@@ -371,11 +464,13 @@ public class Client implements Screen {
         myPreviousAngle = myBody.getAngle();
 
         ShipStats myStats = ShipStats.forType(myShipType);
+        float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES);
         // Reapply input before every individual physics step (see PhysicsSystem#update(float,
         // Runnable)), not just once here - a frame hitch can make this need more than one step,
         // and Box2D clears applied forces/torque after each one.
         localPhysicsSystem.update(deltaTime, () ->
-            ShipControlSystem.applyInput(myBody, myStats.getThrustForce(), myStats.getTurnTorque(),
+            ShipControlSystem.applyInput(myBody, myStats.getThrustForce() * enginesMultiplier,
+                myStats.getTurnTorque() * enginesMultiplier,
                 thrustForward, thrustReverse, turnLeft, turnRight));
     }
 
@@ -488,6 +583,7 @@ public class Client implements Screen {
         projectilesAtlas.dispose();
         background.dispose();
         statusHud.dispose();
+        powerHud.dispose();
     }
 
     /**
@@ -597,6 +693,23 @@ public class Client implements Screen {
             DIRECTION.set(0, 1).rotateRad(angle).scl(speedPixels * elapsedSinceUpdate);
             renderX = baseX + DIRECTION.x;
             renderY = baseY + DIRECTION.y;
+        }
+    }
+
+    /**
+     * Tracks how long one power-distribution keybind has been continuously
+     * held, and whether it's already triggered {@link #maximizePower} for
+     * the current hold — so holding past {@link #HOLD_TO_MAXIMIZE_SECONDS}
+     * maximizes exactly once per press, not repeatedly every frame the key
+     * stays down.
+     */
+    private static final class PowerKeyHold {
+        float heldSeconds;
+        boolean maximized;
+
+        void reset() {
+            heldSeconds = 0f;
+            maximized = false;
         }
     }
 }

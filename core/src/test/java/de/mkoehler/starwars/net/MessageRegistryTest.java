@@ -7,6 +7,7 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
@@ -16,12 +17,14 @@ import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipType;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -47,7 +50,8 @@ class MessageRegistryTest {
             ShipState.class, ShipState[].class,
             WorldSnapshotMessage.class, PlayerLeftMessage.class,
             ProjectileState.class, ProjectileState[].class,
-            ShipDestroyedMessage.class, ShipType.class
+            ShipDestroyedMessage.class, ShipType.class,
+            PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -154,6 +158,30 @@ class MessageRegistryTest {
         ShipDestroyedMessage original = new ShipDestroyedMessage(9);
         ShipDestroyedMessage copy = roundTrip(original, ShipDestroyedMessage.class);
         assertEquals(9, copy.getPlayerId());
+    }
+
+    @Test
+    void powerAdjustMessageSurvivesRoundTrip() {
+        PowerAdjustMessage original = new PowerAdjustMessage(PowerAdjustMessage.Kind.ADJUST, PowerSystem.WEAPONS);
+        PowerAdjustMessage copy = roundTrip(original, PowerAdjustMessage.class);
+        assertEquals(PowerAdjustMessage.Kind.ADJUST, copy.getKind());
+        assertEquals(PowerSystem.WEAPONS, copy.getTarget());
+    }
+
+    @Test
+    void powerAdjustMessageMaximizeSurvivesRoundTrip() {
+        PowerAdjustMessage original = new PowerAdjustMessage(PowerAdjustMessage.Kind.MAXIMIZE, PowerSystem.ENGINES);
+        PowerAdjustMessage copy = roundTrip(original, PowerAdjustMessage.class);
+        assertEquals(PowerAdjustMessage.Kind.MAXIMIZE, copy.getKind());
+        assertEquals(PowerSystem.ENGINES, copy.getTarget());
+    }
+
+    @Test
+    void powerAdjustMessageResetSurvivesRoundTripAsANullTarget() {
+        PowerAdjustMessage original = new PowerAdjustMessage(PowerAdjustMessage.Kind.RESET, null);
+        PowerAdjustMessage copy = roundTrip(original, PowerAdjustMessage.class);
+        assertEquals(PowerAdjustMessage.Kind.RESET, copy.getKind());
+        assertNull(copy.getTarget());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

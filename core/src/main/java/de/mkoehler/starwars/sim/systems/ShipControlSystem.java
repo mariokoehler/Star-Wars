@@ -6,14 +6,18 @@ import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.systems.IteratingSystem;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
+import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
+import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 
 /**
  * Applies thrust/turn forces to every entity with a {@link PhysicsBodyComponent},
- * a {@link PlayerControlledComponent} and a {@link NetworkInputComponent},
- * based on that entity's currently held input state.
+ * a {@link PlayerControlledComponent}, a {@link NetworkInputComponent} and a
+ * {@link PowerDistributionComponent}, based on that entity's currently held
+ * input state and its current {@link PowerSystem#ENGINES} power allocation
+ * (design.md 2.2 — more Engines power means more thrust/torque).
  * <p>
  * Runs server-side, driven by input received over the network
  * ({@code PlayerInputMessage}) rather than local {@code Gdx.input} — this
@@ -22,7 +26,10 @@ import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
  * exposed statically so the client can call the exact same force/torque math
  * directly on its local prediction body (design.md 3.5) — predicted and
  * authoritative physics must apply identical rules, or the client would
- * constantly need correcting for reasons other than differing input.
+ * constantly need correcting for reasons other than differing input. The
+ * caller (here and the client) is responsible for pre-multiplying
+ * thrust/torque by the Engines power multiplier before calling it, since a
+ * plain static method has no entity/component to read that from itself.
  */
 public class ShipControlSystem extends IteratingSystem {
 
@@ -31,12 +38,14 @@ public class ShipControlSystem extends IteratingSystem {
     private final ComponentMapper<PhysicsBodyComponent> bodyMapper = ComponentMapper.getFor(PhysicsBodyComponent.class);
     private final ComponentMapper<PlayerControlledComponent> controlMapper = ComponentMapper.getFor(PlayerControlledComponent.class);
     private final ComponentMapper<NetworkInputComponent> inputMapper = ComponentMapper.getFor(NetworkInputComponent.class);
+    private final ComponentMapper<PowerDistributionComponent> powerMapper = ComponentMapper.getFor(PowerDistributionComponent.class);
 
     /**
      * Creates the ship control system.
      */
     public ShipControlSystem() {
-        super(Family.all(PhysicsBodyComponent.class, PlayerControlledComponent.class, NetworkInputComponent.class).get());
+        super(Family.all(PhysicsBodyComponent.class, PlayerControlledComponent.class,
+            NetworkInputComponent.class, PowerDistributionComponent.class).get());
     }
 
     @Override
@@ -44,8 +53,9 @@ public class ShipControlSystem extends IteratingSystem {
         Body body = bodyMapper.get(entity).getBody();
         PlayerControlledComponent control = controlMapper.get(entity);
         NetworkInputComponent input = inputMapper.get(entity);
+        float enginesMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.ENGINES);
 
-        applyInput(body, control.getThrustForce(), control.getTurnTorque(),
+        applyInput(body, control.getThrustForce() * enginesMultiplier, control.getTurnTorque() * enginesMultiplier,
             input.isThrustForward(), input.isThrustReverse(), input.isTurnLeft(), input.isTurnRight());
     }
 

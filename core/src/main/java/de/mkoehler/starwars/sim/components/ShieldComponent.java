@@ -60,11 +60,26 @@ public class ShieldComponent implements Component {
 
     /**
      * Increases current shield strength at this shield's recharge rate, not
-     * above its maximum.
+     * above its maximum. Equivalent to {@link #regenerate(float, float)}
+     * with a multiplier of 1.
      *
      * @param deltaTime time elapsed, in seconds
      */
     public void regenerate(float deltaTime) {
-        current = Math.min(max, current + rechargePerSecond * deltaTime);
+        regenerate(deltaTime, 1f);
+    }
+
+    /**
+     * Increases current shield strength at this shield's recharge rate
+     * scaled by {@code multiplier} (the ship's current
+     * {@link de.mkoehler.starwars.sim.PowerSystem#SHIELDS} power allocation,
+     * see {@link de.mkoehler.starwars.sim.PowerDistribution#multiplierFor}),
+     * not above its maximum.
+     *
+     * @param deltaTime  time elapsed, in seconds
+     * @param multiplier the current Shields power multiplier
+     */
+    public void regenerate(float deltaTime, float multiplier) {
+        current = Math.min(max, current + rechargePerSecond * multiplier * deltaTime);
     }
 }

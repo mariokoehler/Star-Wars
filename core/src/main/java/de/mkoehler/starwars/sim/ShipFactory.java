@@ -15,6 +15,7 @@ import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
@@ -63,6 +64,7 @@ public final class ShipFactory {
         entity.add(new HullComponent(stats.getMaxHealth()));
         entity.add(new ShieldComponent(stats.getShieldMaxCapacity(), stats.getShieldRechargePerSecond()));
         entity.add(new WeaponComponent(WeaponStats.BLASTER));
+        entity.add(new PowerDistributionComponent());
         engine.addEntity(entity);
         body.setUserData(entity);
         return entity;
