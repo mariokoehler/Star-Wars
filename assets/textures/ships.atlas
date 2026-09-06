@@ -4,37 +4,51 @@ size: 2048, 2048
 format: RGBA8888
 filter: Linear, Linear
 repeat: none
-falcon/falcon256
+awing/awing
   rotate: false
-  xy: 516, 734
+  xy: 1030, 1248
   size: 256, 256
   orig: 256, 256
   offset: 0, 0
   index: 20
-falcon/portrait
+awing/portrait
   rotate: false
   xy: 2, 1506
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
-snowspeeder/portrait
+falcon/falcon256
+  rotate: false
+  xy: 1544, 1762
+  size: 256, 256
+  orig: 256, 256
+  offset: 0, 0
+  index: 20
+falcon/portrait
   rotate: false
   xy: 2, 992
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
+snowspeeder/portrait
+  rotate: false
+  xy: 516, 1506
+  size: 512, 512
+  orig: 512, 512
+  offset: 0, 0
+  index: -1
 snowspeeder/snowspeeder
   rotate: false
-  xy: 260, 348
+  xy: 1288, 1376
   size: 128, 128
   orig: 128, 128
   offset: 0, 0
   index: 20
 stardestroyer/portrait
   rotate: false
-  xy: 516, 1506
+  xy: 2, 478
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
@@ -48,35 +62,35 @@ stardestroyer/stardestroyer256
   index: 20
 tiefighter/portrait
   rotate: false
-  xy: 2, 478
+  xy: 516, 992
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 tiefighter/tie_fighter256
   rotate: false
-  xy: 1544, 1762
+  xy: 1030, 990
   size: 256, 256
   orig: 256, 256
   offset: 0, 0
   index: 20
 tieinterceptor/interceptor256
   rotate: false
-  xy: 1030, 1248
+  xy: 260, 220
   size: 256, 256
   orig: 256, 256
   offset: 0, 0
   index: 20
 tieinterceptor/portrait
   rotate: false
-  xy: 516, 992
+  xy: 1030, 1506
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 turrets/turret32
   rotate: false
-  xy: 774, 958
+  xy: 1802, 1986
   size: 32, 32
   orig: 32, 32
   offset: 0, 0
@@ -90,14 +104,14 @@ turrets/turret40
   index: -1
 xwing/portrait
   rotate: false
-  xy: 1030, 1506
+  xy: 516, 478
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 xwing/xwing128
   rotate: false
-  xy: 516, 604
+  xy: 1544, 1632
   size: 128, 128
   orig: 128, 128
   offset: 0, 0

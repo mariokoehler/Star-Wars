@@ -1159,6 +1159,151 @@ extracted `.class`) rather than re-reading the source again.** Revisit
 (delete the `setSkipGdxVersionCheck` call) once a VisUI release targets
 gdx 1.14.2 or later.
 
+**Death Screen — implemented 2026-09-06.** See design.md 5.1/6.1 for the
+full writeup. User provided all 23 finished quote cards
+(`assets-raw/after_death/Quote_1.png`..`Quote_23.png`) plus a shared
+`Dialog_Background.png`, all 818×618. New `render.QuoteDeck` (shuffle-bag,
+4 unit tests) guarantees no repeat until all 23 have shown, per the
+user's explicit ask — session-local only, owned by `StarWarsGame` (not
+`DeathScreen` itself, which is recreated fresh every death and would
+otherwise forget what it had already shown). Every screen constructor
+(`ConnectScreen`, `ShipSelectionScreen`, `Client`) was retyped from
+`Game` to the concrete `StarWarsGame` so they can reach
+`getQuoteDeck()` — there's only one `Game` implementation in this
+project, so nothing was lost. Combat death now disposes and leaves the
+match immediately (same teardown as a voluntary ESC leave) instead of
+silently waiting for the server's old mid-match auto-respawn timer,
+which is now simply never exercised by this client (still harmless
+server-side if a connection somehow outlived it). The delivered art
+also settled a spec ambiguity: each quote image bakes in its own "Press
+'ESC' to continue", so ESC is the real continue key, not the ENTER
+design.md originally sketched before this art existed.
+
+**Real bug, found only by the user actually playing it — a
+multi-second, whole-window freeze between dying and the Death Screen
+appearing.** First version atlas-packed all 23 quote images the same
+way every other art category in this project gets packed
+(`AtlasPacker`) — but only one quote is ever drawn per death, so
+packing forced ~4 full 2048×2048 pages (~67MB decoded) into GPU memory
+synchronously, on the render thread, every single time. The user's own
+instinct nailed the root cause before I'd finished diagnosing it:
+atlases exist to share one texture bind across many sprites drawn
+*together* in the same scene, which never applies here. **General rule
+this project already half-knew but hadn't stated outright: atlas-pack
+art that gets batched together in one draw call (ship frames, HUD
+icons); load-on-demand as plain `Texture`s art where only one of many
+variants is ever shown at once** — this project's tileable backgrounds
+(`blue_nebula.png`, `menu_starfield.png`) already followed this by
+convention, just without it ever being written down as the general
+rule, which is exactly why it got missed here on the first pass. Fixed
+by dropping `after_death` from `AtlasPacker` entirely and copying the
+raw files loose into `assets/textures/after_death/`; `DeathScreen` now
+loads only `Dialog_Background.png` and whichever single `Quote_<n>.png`
+was dealt, as plain `Texture`s. **Not independently re-verified by a
+live automated death this session** (driving a real kill via `SendKeys`
+across two clients proved too fiddly to aim reliably, and the user
+took over testing directly instead) — the user confirmed the freeze was
+real and reproducible before this fix, and is re-testing the fix
+themselves.
+
+**Connect Screen background music — implemented 2026-09-06.** See
+design.md 4.5 for the full writeup. First real audio in this codebase:
+the user's `StarWarsTheme.mp3` plays on `ConnectScreen` via libGDX
+`Music` (streamed, not `Sound`'s load-fully-into-memory model), not
+looped - if it ends before the player leaves, it just stays stopped, no
+special handling needed. Faded out over 1.5s (not cut) when the player
+leaves, handled by a new `StarWarsGame.fadeOutAndDisposeMusic` +
+`StarWarsGame` overriding the top-level `Game#render()` — necessary
+because a fade outlives whichever screen started it (`ConnectScreen` is
+already disposed by the time the fade finishes), the same "outlives
+individual screen instances" shape `QuoteDeck` already needed
+`StarWarsGame` for. **Verified the only way actually possible here: the
+user confirmed by ear that it plays** - screenshots/logs can't confirm
+audio at all, so this one's live-verification note is genuinely just
+"the user listened to it," not a euphemism for something else checked
+instead.
+
+**A-Wing added as a 7th ship type — implemented 2026-09-06.** See
+design.md 7 (ship roster) for the user's "Ship Tree" idea this rounds
+out for later (Rebel branch X-wing → A-Wing → Falcon, mirroring the
+Imperial TIE Fighter → TIE Interceptor → Star Destroyer branch,
+Snowspeeder as the neutral start) - not implemented, just why this ship
+specifically got added now. Mechanically the same playbook as every
+earlier ship import: `ShipType.AWING`, `assets/shipdata/awing.stats.json`
+(same baseline thrust/torque/hull/shield numbers as every other ship,
+per-ship `radiusMeters`/`pixelsPerMeter` derived from its 256px source
+art - same size class as the X-wing/TIE Fighter/TIE Interceptor, 4m
+real-world diameter), new `case AWING` in both of `Client`/
+`ShipSelectionScreen`'s exhaustive switches over `ShipType` (the compiler
+catches a forgotten one - flagged directly in `ShipType`'s own class
+Javadoc now, since this is the second time this exact pair of switches
+needed a synchronized update). **Also already has a real
+`assets/shipdata/awing.meta.json`** — an 8-point hitbox polygon, two
+wingtip `PROJECTILE` points, `ENGINE`/`DAMAGE_SMOKE`/`LIGHT` points, and
+`turretConfig: null` (correctly absent - the A-Wing isn't one of the two
+turret-equipped ships) — found already sitting there mid-session, not
+authored by this session's own work; presumably the user ran the
+dev-tools editor in parallel while this ship was being wired up, the
+same kind of concurrent-authoring this project has seen before (CLAUDE.md
+history, the TIE Fighter art swap). Confirmed loading and taking effect
+correctly (no fallback circle/single-shot needed) via the same live
+flight test below - Ashley/Box2D never complained about it, so unlike
+the region-lookup bug this one just worked.
+
+**Real bug found via live testing, not review: a `NullPointerException`
+crash on spawn, specific to this one ship.** Every hull region lookup
+(`Client.show()`) calls `shipsAtlas.findRegion(hullRegionName(type), 20)`
+— the hardcoded `20` assumes every hull sprite's source filename ends in
+the bank-angle sequence's neutral-frame suffix (e.g. `xwing128_0020.png`),
+which TexturePacker parses into an *indexed* region (retrievable only via
+the two-arg `findRegion(name, index)` overload) rather than a plain named
+one. The user's original `awing.png` had no such suffix, so it packed as
+an unindexed region — `findRegion("awing/awing", 20)` then had nothing
+matching index 20 to return, came back `null`, and `Client.drawLocalShip`
+crashed dereferencing it the instant the ship actually spawned (Ship
+Selection itself never touches this lookup, so the portrait/description
+panel looked completely fine right up until Start was pressed - only
+caught by actually flying it, exactly the kind of gap review alone
+wouldn't have found). Fixed by renaming the source file to
+`awing_0020.png` (matching every other ship's convention exactly) and
+repacking - no Java changes needed once the filename matched the
+convention the shared lookup code already assumed.
+
+**HUD hull art arrived mid-session, after the ship was already flying
+without it.** User added `HUD_Status_Background_AWing.png` once they
+noticed the gap themselves. Copied to `assets/textures/hud/awing_hull.png`
+(the exact `<resourceName>_hull.png` name `ShipStatusHud` looks for, so
+this ship no longer needs the X-wing-fallback path other ships used
+before their own art existed) and its clip pixel range computed the same
+way as every other ship's (alpha-channel bounding box, ≥50/255 threshold)
+— cross-checked the method against the X-wing's own known-correct,
+user-supplied numbers first (178/377 computed vs. 175/377 actual — close
+enough to trust for a ship with no independent source of truth).
+
+**General reminder from this session, worth stating plainly: always
+check every raw-asset folder a user mentions before assuming something
+is missing.** Two separate times this session, art the user had already
+provided went unnoticed until it either rendered unexpectedly (the A-Wing
+description panel, already fully authored and sitting in
+`assets-raw/menu/AWing_Description.png`) or until they pointed it out
+directly (the HUD art above) - both were simple `ls`/`find` checks that
+should have happened before writing a comment claiming an asset "doesn't
+exist yet."
+
+**Verified live, end-to-end:** full `mvn clean test` (82 tests) green
+across every module; a real server + client boot flying the A-Wing to
+confirm the crash fix, screenshotted mid-flight with the correct hull
+sprite rendering; Ship Selection screenshotted showing the real
+description panel and portrait. **Gotcha hit again during this
+session's testing, worth restating since it bit twice:** a client jar
+built against a server that doesn't share the exact same `ShipType`
+enum (e.g. testing a freshly-rebuilt client against the user's
+still-running, older server process) fails at the Kryo deserialization
+boundary the instant a new enum constant crosses the wire — expected,
+not a bug, but easy to misdiagnose as one if the two processes' build
+provenance isn't tracked. Rebuilding and restarting *both* ends
+together is the only fix.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

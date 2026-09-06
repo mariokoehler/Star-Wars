@@ -4,30 +4,37 @@ size: 2048, 1024
 format: RGBA8888
 filter: Linear, Linear
 repeat: none
+AWing_Description
+  rotate: false
+  xy: 661, 3
+  size: 316, 392
+  orig: 316, 392
+  offset: 0, 0
+  index: -1
 Arrow_Left
   rotate: false
-  xy: 1686, 582
+  xy: 1626, 129
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Left_MouseOver
   rotate: false
-  xy: 1795, 831
+  xy: 1848, 187
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right
   rotate: false
-  xy: 1879, 919
+  xy: 1464, 494
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right_MouseOver
   rotate: false
-  xy: 1464, 436
+  xy: 1548, 582
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
@@ -41,7 +48,7 @@ Connect_Button
   index: -1
 Connect_Button_MouseOver
   rotate: false
-  xy: 1464, 564
+  xy: 1626, 169
   size: 220, 56
   orig: 220, 56
   offset: 0, 0
@@ -83,35 +90,35 @@ StarDestroyer_Description
   index: -1
 Start_Button
   rotate: false
-  xy: 1795, 871
+  xy: 1464, 534
   size: 82, 86
   orig: 82, 86
   offset: 0, 0
   index: -1
 Start_Button_MouseOver
   rotate: false
-  xy: 1464, 476
+  xy: 1795, 871
   size: 82, 86
   orig: 82, 86
   offset: 0, 0
   index: -1
 TieFighter_Description
   rotate: false
-  xy: 661, 2
+  xy: 1303, 40
   size: 321, 393
   orig: 321, 393
   offset: 0, 0
   index: -1
 TieInterceptor_Description
   rotate: false
-  xy: 1308, 40
+  xy: 1626, 227
   size: 322, 393
   orig: 322, 393
   offset: 0, 0
   index: -1
 XWing_Description
   rotate: false
-  xy: 984, 39
+  xy: 979, 39
   size: 322, 394
   orig: 322, 394
   offset: 0, 0

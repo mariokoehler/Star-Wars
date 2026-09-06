@@ -1873,6 +1873,28 @@ Scene2D/Skin APIs are involved and this exact combination has been
 exercised live with zero issues (see CLAUDE.md for the full note).
 Revisit (drop the skip call) once a VisUI release targets 1.14.2+.
 
+### 4.5 Audio
+
+**First real audio in this codebase, added 2026-09-06:** the Star Wars
+theme plays on `ConnectScreen` (5.1), for as long as the player
+stays on it. Uses libGDX's `Music` (a streamed track, not `Sound`'s
+fully-loaded-into-memory short-clip model — the right tool once a track
+runs more than a few seconds), `setLooping(false)` since it should just
+end naturally if the player lingers past its runtime, and no separate
+volume/mute setting yet (not asked for).
+
+**Fade-out, not a hard cut, on leaving the screen:** a fade takes real
+time (`StarWarsGame.MUSIC_FADE_OUT_SECONDS`, 1.5s, untuned) that outlives
+whichever screen started it — `ConnectScreen` is already disposed by the
+time a fade finishes. Handled by `StarWarsGame` instead (the one object
+alive for the whole app run, already home to `QuoteDeck` for the same
+"outlives individual screen instances" reason): `ConnectScreen` hands its
+`Music` off to `StarWarsGame#fadeOutAndDisposeMusic` right before
+disposing itself, and `StarWarsGame` overrides the top-level
+`Game#render()` (not any one screen's `render(delta)`) to tick the fade
+down every frame regardless of which screen is now showing, disposing
+the track once it reaches silence.
+
 ## 5. UX flow
 
 ### 5.1 Screen flow
@@ -1920,9 +1942,11 @@ Revisit (drop the skip call) once a VisUI release targets 1.14.2+.
 - **Death Screen:** shows a randomly-selected Star Wars quote paired with a
   matching image, meant to rub in the loss (e.g. Qui-Gon Jinn's "There's
   always a bigger fish!" paired with an image of the Naboo swamp monster
-  chasing the sub in *The Phantom Menace*). Pressing **ENTER** returns to
-  Ship Selection. This screen is reached **only** by dying in combat, not
-  by a voluntary ESC leave.
+  chasing the sub in *The Phantom Menace*). Pressing **ESC** returns to
+  Ship Selection (corrected from this section's original ENTER sketch once
+  the user's delivered art turned out to bake in its own "Press 'ESC' to
+  continue" — see the implementation note below). This screen is reached
+  **only** by dying in combat, not by a voluntary ESC leave.
 
 **Connect Dialog — implemented 2026-09-06.** See 3.6 (accounts),
 3.7 (local config) and 4.4 (VisUI) for the pieces this screen wires
@@ -2088,6 +2112,67 @@ successful login instead of being the app's start screen (2026-09-06).**
   swap) are implemented but not separately screenshotted (a static
   screenshot can't show hover); the user should try moving the mouse over
   the arrows/Start button themselves.
+
+**Death Screen — implemented 2026-09-06.** User provided all the art:
+`Dialog_Background.png` (a plain bordered panel) and 23
+`Quote_<n>.png` variants, all 818×618 - the same dialog size Ship
+Selection uses. Each quote image is a complete "death card" (character
+art + the quote text + its own border) with fully transparent corners,
+so `Dialog_Background` drawn underneath at the same position provides a
+consistent frame around whichever quote is showing. Each quote image
+also has its own baked-in "Press 'ESC' to continue", which is why this
+screen's real continue key is **ESC**, not the ENTER this section
+originally sketched before the art existed - the delivered art wins.
+
+New `render.QuoteDeck`: a pure, unit-tested (`QuoteDeckTest`, 4 cases)
+shuffle-bag over the 23 quote indices - deals every index once before
+any repeat, reshuffling a fresh deck once exhausted, per the user's
+explicit request. Session-local only (in-memory, never persisted, per
+the same request) by construction: it's a plain field, not backed by
+any file. Owned by `StarWarsGame` (the one object that lives for the
+whole app run) rather than by `DeathScreen` itself, since a fresh
+`DeathScreen` instance is created for every death and would otherwise
+forget what had already been shown. This is also why every screen's
+constructor now takes the concrete `StarWarsGame` instead of the
+`Game` interface - `ConnectScreen`, `ShipSelectionScreen`, and `Client`
+all only ever needed `Game` for `setScreen(...)`, and there's only one
+`Game` implementation in this project, so nothing is lost by depending
+on the concrete class where it actually needs to reach
+`getQuoteDeck()`.
+
+**Combat death now really leaves the match**, rather than the
+pre-Death-Screen placeholder behavior of silently waiting for the
+server's automatic mid-match respawn (`RESPAWN_DELAY_SECONDS`, 2.4):
+`Client#onShipDestroyed`'s non-`leavingMatch` branch now disposes and
+switches to `DeathScreen` immediately, the same connection-teardown
+shape as a voluntary ESC leave (2.3). The server-side respawn timer
+itself wasn't touched - it's simply never exercised by this client
+anymore, since it always disconnects well inside the 3-second window,
+and an unclaimed timer for an already-disconnected player is already
+handled harmlessly by `GameNetworkServer#onDisconnected`'s existing
+cleanup.
+
+**Real bug found live, by the user actually playing it, not by
+review: a multi-second, whole-window freeze between dying and the
+Death Screen appearing.** Root cause: the first version of this screen
+atlas-packed all 23 quote images (`AtlasPacker`, same pipeline as every
+other art category) - but they're never drawn together, only one per
+death, so packing them just forced whichever ~4 full 2048×2048 pages
+(~67MB decoded) the atlas split into into GPU memory on every single
+death, synchronously, on the render thread. **General rule this
+confirms rather than newly discovers: atlas-pack art that gets *batched*
+together in the same draw call (many ship frames, many HUD icons);
+load-on-demand as plain `Texture`s art where only one of many variants
+is ever shown at once** - already this project's own convention for
+tileable backgrounds (`blue_nebula.png`, `menu_starfield.png`), just
+not one that had been articulated as a *general* rule before, and
+initially missed when this screen reused the "always atlas-pack new
+art" habit without checking whether it actually applied. Fixed by
+dropping the `after_death` atlas-pack entirely (`AtlasPacker` now just
+documents why it's skipped) and copying the raw files loose into
+`assets/textures/after_death/`; `DeathScreen` loads only
+`Dialog_Background.png` and whichever single `Quote_<n>.png` was dealt,
+as plain `Texture`s - at most ~2MB decoded per death instead of ~67MB.
 
 ### 5.2 Keybind Setup screen
 
@@ -2262,21 +2347,21 @@ once a component is actually being worked on.
       open: target/radar or minimap, kill feed, scoreboard. (No
       power-distribution readout for *other* players — that's
       intentionally hidden, see 2.2.)
-- [ ] **Death Screen** — random Star Wars quote + matching image; needs a
-      content pool (see 6.1) and ENTER-to-continue handling.
+- [x] **Death Screen (2026-09-06)** — see 5.1: 23 user-authored quote
+      images (6.1's content pool, now filled), `QuoteDeck` shuffle-bag so
+      no repeat until all 23 have been shown, ESC-to-continue (the
+      delivered art's own baked-in instruction, superseding this
+      checklist's original ENTER assumption).
 - [ ] **XP & progression** — award XP per match/kill, unlock additional
       ships at XP thresholds (persisted via the account system above).
 
 ### 6.1 Content TODO: death screen quotes
 
-Need to compile a pool of (quote, matching image) pairs before this screen
-can ship. Starting example:
-
-- Qui-Gon Jinn — *"There's always a bigger fish."* — image of the Naboo
-  swamp monster chasing the sub (*The Phantom Menace*).
-
-Add more pairs here as we pick them; keep it to one clear "you just died,
-here's the universe laughing at you" beat per entry.
+**Filled 2026-09-06** — the user authored 23 complete (quote + matching
+image) cards directly as finished art (`assets-raw/after_death/Quote_1.png`
+through `Quote_23.png`), rather than this doc tracking quote text/image
+pairings separately. See 5.1 for the Death Screen implementation that
+consumes them.
 
 ## 7. Open design questions
 
@@ -2287,7 +2372,20 @@ the relevant section above once decided.
   download for now is the likely v1 answer — revisit if that's too much
   friction.
 - **Ship roster**: which specific iconic ships, and their relative
-  stats/balance.
+  stats/balance. **Idea floated 2026-09-06, not implemented:** a "Ship
+  Tree" for XP unlocks (3.6/6) — every account starts with the faction-
+  neutral Snowspeeder, then branches: Imperial side unlocks TIE Fighter →
+  TIE Interceptor → Star Destroyer; Rebel Alliance side unlocks X-wing →
+  A-Wing → Falcon. Symmetric by design (3 ships per branch) — the A-Wing
+  (4.3) was imported specifically to fill the Rebel side's middle slot,
+  since the roster only had 3 Rebel ships (X-wing, Snowspeeder, Falcon)
+  against 3 Imperial ones (TIE Fighter, TIE Interceptor, Star Destroyer)
+  before it. No unlock-threshold values, no enforcement of the tree
+  itself (Ship Selection still shows every ship unconditionally, 5.1),
+  and no decision on what happens to a Snowspeeder pilot who's unlocked
+  ships on *both* branches (allowed simultaneously, or forces a
+  once-only faction pick?) - purely a roster/content idea for whenever
+  XP & progression (6) actually gets built.
 - **Map/arena design**: single arena to start — size, obstacles (asteroid
   fields? capital ship hulls?), boundary handling (do you die if you fly off
   the edge, or is it wrapped/bounded?).

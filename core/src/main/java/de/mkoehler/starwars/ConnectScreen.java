@@ -1,9 +1,9 @@
 package de.mkoehler.starwars;
 
-import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
+import com.badlogic.gdx.audio.Music;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
@@ -64,6 +64,13 @@ import java.util.concurrent.atomic.AtomicReference;
  * once a match actually starts (design.md 3.6 — logging in again is
  * harmless), rather than this screen keeping the connection alive across
  * screens.
+ * <p>
+ * Plays the Star Wars theme once (not looped) for as long as the player
+ * lingers here — first real audio use in this codebase. Left to end on
+ * its own if it's still playing when the player leaves; if they leave
+ * first, {@link StarWarsGame#fadeOutAndDisposeMusic} fades it out over a
+ * second or two rather than cutting it off mid-note the instant this
+ * screen is disposed.
  */
 public class ConnectScreen implements Screen {
 
@@ -97,7 +104,7 @@ public class ConnectScreen implements Screen {
     private static final Color FIELD_FONT_COLOR = new Color(0.92f, 0.95f, 1f, 1f);
     private static final Color BUTTON_FONT_COLOR = new Color(0.94f, 0.87f, 0.66f, 1f);
 
-    private final Game game;
+    private final StarWarsGame game;
 
     private SpriteBatch batch;
     private OrthographicCamera camera;
@@ -105,6 +112,7 @@ public class ConnectScreen implements Screen {
     private Texture logoTexture;
     private TextureAtlas menuAtlas;
     private TextureRegion dialogRegion;
+    private Music music;
 
     private Stage stage;
     private VisTextField hostField;
@@ -123,7 +131,7 @@ public class ConnectScreen implements Screen {
      * @param game the game to switch away to {@link ShipSelectionScreen} from
      *             once login succeeds
      */
-    public ConnectScreen(Game game) {
+    public ConnectScreen(StarWarsGame game) {
         this.game = game;
     }
 
@@ -139,6 +147,13 @@ public class ConnectScreen implements Screen {
 
         menuAtlas = new TextureAtlas(Gdx.files.internal("textures/menu.atlas"));
         dialogRegion = menuAtlas.findRegion("Connect_Dialog");
+
+        // Plays once, not looped, for as long as the player lingers on this screen - if it ends
+        // first, that's fine, nothing loops it back. Faded out (not cut) on a successful login,
+        // see attemptConnect()/StarWarsGame#fadeOutAndDisposeMusic.
+        music = Gdx.audio.newMusic(Gdx.files.internal("audio/StarWarsTheme.mp3"));
+        music.setLooping(false);
+        music.play();
 
         if (!VisUI.isLoaded()) {
             // VisUI 1.5.9 (latest as of this writing) still pins gdx 1.14.1 in its own POM,
@@ -400,6 +415,10 @@ public class ConnectScreen implements Screen {
         client.stop();
         ConnectionConfigStore.save(new ConnectionConfig(host, displayName, login, password));
         Gdx.input.setInputProcessor(null);
+        // Hand off to StarWarsGame before dispose() runs below - a fade takes real time that
+        // outlives this screen, so the music itself must outlive this screen's own dispose().
+        game.fadeOutAndDisposeMusic(music);
+        music = null;
         game.setScreen(new ShipSelectionScreen(game, new ConnectionInfo(host, login, password, displayName)));
         dispose();
     }
@@ -433,5 +452,12 @@ public class ConnectScreen implements Screen {
         logoTexture.dispose();
         menuAtlas.dispose();
         stage.dispose();
+        // Null once ownership has passed to StarWarsGame#fadeOutAndDisposeMusic (the normal,
+        // successful-login exit) - only still non-null here if this screen is being torn down
+        // some other way (e.g. the app closing while still on it), in which case there's no
+        // screen transition to fade gracefully across and a plain dispose is correct.
+        if (music != null) {
+            music.dispose();
+        }
     }
 }

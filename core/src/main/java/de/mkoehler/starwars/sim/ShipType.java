@@ -12,14 +12,12 @@ package de.mkoehler.starwars.sim;
  * find its packed sprite/portrait region (e.g. {@code "falcon/portrait"} in
  * {@code ships.atlas}) and its {@code textures/menu.atlas} description image.
  * <p>
- * **Only {@link #XWING} has a {@code .stats.json} authored yet** — the other
- * five have sprite art imported (2026-09-05) but no balance numbers, and
- * {@link ShipStats#forType} will throw if called for them before one exists.
- * The Ship Selection screen only needs each type's portrait/description
- * art, not its {@code ShipStats}, so this doesn't block it — but it does
- * mean starting a match currently still always flies the X-wing regardless
- * of which ship is shown selected, until per-ship stats (and non-square
- * sprite rendering support, needed for the Star Destroyer) exist.
+ * Every value here needs a matching {@code case} in both
+ * {@code Client.hullRegionName} and
+ * {@code ShipSelectionScreen.descriptionRegionName} — both are exhaustive
+ * switches over this enum specifically so the compiler catches a forgotten
+ * one when a new ship type is added, rather than it silently rendering
+ * nothing.
  */
 public enum ShipType {
 
@@ -28,7 +26,8 @@ public enum ShipType {
     SNOWSPEEDER("snowspeeder"),
     STARDESTROYER("stardestroyer"),
     TIEFIGHTER("tiefighter"),
-    TIEINTERCEPTOR("tieinterceptor");
+    TIEINTERCEPTOR("tieinterceptor"),
+    AWING("awing");
 
     private final String resourceName;
 

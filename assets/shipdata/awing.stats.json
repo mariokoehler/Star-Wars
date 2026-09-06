@@ -1,0 +1,13 @@
+{
+  "radiusMeters" : 2.0,
+  "pixelsPerMeter" : 64.0,
+  "thrustForce" : 200.0,
+  "turnTorque" : 150.0,
+  "hullMaxHealth" : 100.0,
+  "shieldMaxCapacity" : 100.0,
+  "shieldRechargePerSecond" : 5.0,
+  "hudShieldClipTopPixel" : 130.0,
+  "hudShieldClipBottomPixel" : 437.0,
+  "hudHullClipTopPixel" : 172.0,
+  "hudHullClipBottomPixel" : 385.0
+}

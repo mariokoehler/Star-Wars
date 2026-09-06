@@ -1,6 +1,5 @@
 package de.mkoehler.starwars;
 
-import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
@@ -70,7 +69,7 @@ public class ShipSelectionScreen implements Screen {
     private static final float BACKGROUND_DRIFT_DIRECTION_DEGREES = 25f;
     private static final float BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND = 15f;
 
-    private final Game game;
+    private final StarWarsGame game;
     private final ConnectionInfo connectionInfo;
 
     private SpriteBatch batch;
@@ -110,7 +109,7 @@ public class ShipSelectionScreen implements Screen {
      *                       established with on the Connect Dialog
      *                       (design.md 5.1), passed through to {@link Client}
      */
-    public ShipSelectionScreen(Game game, ConnectionInfo connectionInfo) {
+    public ShipSelectionScreen(StarWarsGame game, ConnectionInfo connectionInfo) {
         this.game = game;
         this.connectionInfo = connectionInfo;
     }
@@ -268,6 +267,7 @@ public class ShipSelectionScreen implements Screen {
             case STARDESTROYER -> "StarDestroyer_Description";
             case TIEFIGHTER -> "TieFighter_Description";
             case TIEINTERCEPTOR -> "TieInterceptor_Description";
+            case AWING -> "AWing_Description";
         };
     }
 

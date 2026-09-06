@@ -1,6 +1,5 @@
 package de.mkoehler.starwars;
 
-import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.Input;
@@ -145,7 +144,7 @@ public class Client implements Screen {
     /** Gap from the top of the screen to the banner's top edge - kept near the top, deliberately away from the player's own ship (which stays near screen-center via camera-follow) since this fires during tense moments. */
     private static final float WARNING_BANNER_TOP_MARGIN = 48f;
 
-    private final Game game;
+    private final StarWarsGame game;
     private final ShipType selectedShipType;
     private final ConnectionInfo connectionInfo;
 
@@ -209,7 +208,7 @@ public class Client implements Screen {
      *                         fresh connection (design.md 3.6 - logging in
      *                         again with the same credentials is harmless)
      */
-    public Client(Game game, ShipType selectedShipType, ConnectionInfo connectionInfo) {
+    public Client(StarWarsGame game, ShipType selectedShipType, ConnectionInfo connectionInfo) {
         this.game = game;
         this.selectedShipType = selectedShipType;
         this.connectionInfo = connectionInfo;
@@ -271,6 +270,7 @@ public class Client implements Screen {
             case STARDESTROYER -> "stardestroyer/stardestroyer256";
             case TIEFIGHTER -> "tiefighter/tie_fighter256";
             case TIEINTERCEPTOR -> "tieinterceptor/interceptor256";
+            case AWING -> "awing/awing";
         };
     }
 
@@ -361,9 +361,13 @@ public class Client implements Screen {
                 // This destruction is the server granting our own leave request (design.md 2.3),
                 // not a combat death - the two share this exact same message (so other clients
                 // see an identical explosion either way), told apart here purely by whether we're
-                // the one who asked to leave. A real combat death instead just waits here for the
-                // server's automatic respawn (no Death Screen yet, design.md 5.1's TODO).
+                // the one who asked to leave.
                 returnToShipSelection();
+            } else {
+                // A real combat death (design.md 5.1) - leaves the match immediately rather than
+                // waiting here for the server's automatic mid-match respawn (see DeathScreen's
+                // class Javadoc for why that timer is no longer exercised by this client).
+                goToDeathScreen();
             }
         } else {
             ships.remove(destroyed.getPlayerId());
@@ -386,6 +390,17 @@ public class Client implements Screen {
     private void returnToShipSelection() {
         transitionedAway = true;
         game.setScreen(new ShipSelectionScreen(game, connectionInfo));
+        dispose();
+    }
+
+    /**
+     * Leaves this match and shows {@link DeathScreen} (design.md 5.1) after
+     * a real combat death - same disposal pattern/reasoning as
+     * {@link #returnToShipSelection()}.
+     */
+    private void goToDeathScreen() {
+        transitionedAway = true;
+        game.setScreen(new DeathScreen(game, connectionInfo));
         dispose();
     }
 
