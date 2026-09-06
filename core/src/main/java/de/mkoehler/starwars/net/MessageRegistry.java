@@ -14,6 +14,7 @@ import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
+import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
@@ -66,5 +67,7 @@ public final class MessageRegistry {
         kryo.register(PowerAdjustMessage.Kind.class);
         kryo.register(LeaveMatchRequest.class);
         kryo.register(LeaveMatchDeniedMessage.class);
+        kryo.register(TurretToggleMessage.class);
+        kryo.register(float[].class);
     }
 }

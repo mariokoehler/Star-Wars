@@ -906,6 +906,114 @@ a held key, only rapid down/up) confirmed visually and unambiguously:
 holding **L** for 700ms snapped Engines to the ~80% ceiling and
 Shields/Weapons to the 10% floor in one jump, no exceptions either side.
 
+### 2.9 Turret weapons (Falcon/Star Destroyer only, 2026-09-06)
+
+A second, independently-autonomous weapon system layered on top of 2.4's
+player-aimed main gun: the player toggles it on/off (**T**), but once
+enabled each turret mount scans for, tracks, leads, and fires at targets
+entirely on its own — no aiming input from the player at all. Only the
+Falcon (1 mount) and Star Destroyer (4 mounts) have any; every other ship
+type is unaffected (no `TurretComponent`, no rendering cost).
+
+**Server-authoritative, same category as projectiles/physics** — all
+scanning/tracking/firing logic runs exclusively in a new `TurretSystem`
+(server), never predicted client-side. The client only ever renders
+whatever aim angle the last snapshot reported.
+
+**Per-mount independence, shared config.** A ship's turret mounts come
+from its `"TURRET"` attachment points (authored via the `dev-tools`
+sprite editor, same convention as `PROJECTILE`/`ENGINE`/etc.) — the
+Star Destroyer's 4 turrets each track their own target completely
+independently, but all read the same ship-type-level tuning, a new
+`TurretConfig` (`sim.metadata`, sibling to `ShipSpriteMetadata`, parsed
+from a `"turretConfig"` object in each ship's `.meta.json`): scan range
+(30m, the user's explicit spec), cooldown (rate of fire), and turn rate
+(degrees/second). Falcon and Star Destroyer currently share identical
+values (0.6s cooldown, 90°/s turn) — untuned placeholders, only the
+30m scan range came from the user directly; flagged for a balance pass
+once the user actually flies with it.
+
+**Behavior loop, per mount, per tick:** if disabled, do nothing. If
+enabled: drop the current target if it's no longer a live ship (queried
+against a fresh `Family` result each tick, not a stale
+`getComponent()` check — Ashley's plain, non-pooled
+`Engine.removeEntity()` does **not** clear a removed entity's
+components, so nullness alone can't detect "destroyed") or has left scan
+range; if there's still no target, scan for the closest live enemy ship
+within range; if still no target, idle. Otherwise, compute a lead angle,
+rotate the mount's aim toward it at the configured turn rate, and fire
+once aligned (within a small tolerance) and off cooldown — draining the
+**same shared capacitor** as the main gun (`WeaponComponent`, 2.8):
+"shares power with the normal weapon system" was read as literally one
+capacitor pool, drained by whichever system fires, recharged only once
+per tick by `WeaponSystem` (not duplicated in `TurretSystem`, which would
+double the recharge rate for any ship with both). A shared
+`AtomicInteger` projectile-id counter, threaded into both systems'
+constructors from `GameNetworkServer`, keeps the two systems'
+independently-fired projectiles from colliding on id.
+
+**Shot leading (`sim.TurretAiming`, new, pure/static, no Ashley/Box2D
+dependency):** classic firing-solution intercept — solve
+`|relativePosition + relativeVelocity·t| = projectileSpeed·t` for the
+smallest positive `t` (a quadratic, falling back to the linear case when
+the target's speed is degenerate, and to "aim straight at the target's
+current position" when no positive-time intercept exists at all, e.g. a
+target outrunning the projectile), then aim at
+`relativePosition + relativeVelocity·t` — i.e., where the target *will
+be*, assuming it holds its current velocity, not where it *is*. Verified
+by `TurretAimingTest` (9 cases) including a full independent geometric
+reconstruction (computing intercept time a second, different way and
+confirming the aimed angle actually lands on the target's projected
+position), not just isolated formula checks — this project's angle
+convention (0 rad = facing "north"/+Y, counter-clockwise positive,
+matching `Vector2(0,1).rotateRad(angle)`) required deriving the
+direction→angle inverse (`MathUtils.atan2(-dx, dy)`) fresh, so the cross-
+check mattered.
+
+**Wire/rendering:** `ShipState` gained `turretAimAngles` (a `float[]`,
+one entry per mount in authored order, empty for turret-less ships) —
+broadcast every snapshot like every other ship field, never predicted.
+Toggling is a new one-shot reliable message, `TurretToggleMessage` (TCP,
+empty payload, mirrors `LeaveMatchRequest`'s shape), applied server-side
+via the same queued-action pattern as every other network-callback-
+originated mutation. `Client` draws each mount's turret sprite at its
+attachment point rotated to the *absolute* broadcast angle (not
+combined with hull rotation — a turret keeps aiming at its target
+regardless of which way the hull points), sized via that ship type's own
+`pixelsPerMeter` fix (3.x) so the sprite lands at a consistent real-world
+size regardless of its own source resolution.
+
+**Turret art:** `R:\StarWars\sprites\turret`'s 40px variant for the
+Falcon, 32px for the Star Destroyer (matching each ship's own
+`pixelsPerMeter` — read as deliberate on the user's part). Imported the
+same way as ship art (`assets-raw/ships/turrets/` → packed into the
+existing `ships.atlas`, no `AtlasPacker` code changes needed —
+`combineSubdirectories` already covers a new subfolder).
+
+**Verified end-to-end, for real:** full `mvn clean verify` (62 tests,
+all green) across every module; a real server + two real client
+processes (Falcon and Star Destroyer, via the same PowerShell `SendKeys`/
+`keybd_event` + window-focus technique used for every previous
+milestone) — confirmed via server-side debug logging (since removed)
+that both ships' `TurretComponent`s are created with the correct mount
+counts (1 and 4) and that `TurretToggleMessage` correctly flips
+`enabled`; confirmed the whole scan→track→lead→fire→hit→kill loop is
+actually lethal by observing repeated, real kills/respawns once both
+turrets were enabled, including at a real, deliberately-created distance
+(thrusted the Falcon away first) rather than only at point-blank range;
+zero server exceptions across the whole session. **Found, not fixed
+(pre-existing, out of scope):** because respawn still always uses the
+same fixed origin point (2.4's already-documented spawn-position
+simplification), an enabled turret makes that limitation considerably
+more consequential than it was for the player-aimed gun — the two ships
+spawn overlapping, so a turret with any target in range gets an
+immediate, unavoidable hit, which can spiral into a rapid re-spawn-and-
+re-kill loop. Belongs to the still-open "map/arena design" question
+(§7), not to this feature. **Not verified:** actual turn-rate/cooldown
+*feel* in a real multi-ship dogfight at varied ranges (needs the user
+actually flying against a turret-equipped ship, not just automated
+toggling) — same status as every other untuned balance number so far.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -1556,9 +1664,10 @@ under time pressure.
 
 **Direct implications of that decision:** turret-equipped ships (Falcon,
 Star Destroyer) still work fine in v1 using their neutral-bank frame plus
-a static turret overlay; deployable mines are **out of scope for v1**
-entirely (revisit alongside other pickup ideas, e.g. the capacitor
-pickup mentioned in 2.2).
+a turret overlay rotated independently of the hull (built 2.9 — not
+static after all, once the turret weapon system itself existed);
+deployable mines are **out of scope for v1** entirely (revisit alongside
+other pickup ideas, e.g. the capacitor pickup mentioned in 2.2).
 
 **Confirmed constraint:** the game is strictly 2D — every moving visual
 element is a sprite (ships, projectiles, pickups) or a particle effect
@@ -1963,6 +2072,11 @@ once a component is actually being worked on.
       (2.2) gating fire rate alongside the mechanical cooldown. No kill
       credit/XP, no ship roster/balance pass — a working first cut, not
       a finished combat system.
+- [x] **Turret weapons (Falcon/Star Destroyer only, 2026-09-06)** — see
+      2.9 for the full writeup: player-toggled (**T**) autonomous
+      per-mount scan/track/lead/fire AI, server-authoritative, sharing
+      the main gun's capacitor. All untuned placeholder numbers (except
+      the user-specified 30m scan range) pending a real balancing pass.
 - [ ] **Ship roster (data-driven)** — stats (mass, thrust, turn rate, hit
       points, weapon loadout) per ship, starting with a small roster (2–3
       ships) before expanding. **Groundwork laid 2026-09-05, all six ship

@@ -65,20 +65,24 @@ public class WeaponSystem extends IteratingSystem {
 
     private final Engine engine;
     private final World world;
-    private final AtomicInteger nextProjectileId = new AtomicInteger();
+    private final AtomicInteger nextProjectileId;
 
     /**
      * Creates the weapon system.
      *
-     * @param engine the Ashley engine to add fired projectiles to
-     * @param world  the Box2D world to create fired projectiles' bodies in
+     * @param engine           the Ashley engine to add fired projectiles to
+     * @param world            the Box2D world to create fired projectiles' bodies in
+     * @param nextProjectileId a counter shared with {@code TurretSystem} — both fire real
+     *                         projectiles into the same world, so they must draw ids from the
+     *                         same source or two live projectiles could collide on one id
      */
-    public WeaponSystem(Engine engine, World world) {
+    public WeaponSystem(Engine engine, World world, AtomicInteger nextProjectileId) {
         super(Family.all(PhysicsBodyComponent.class, WeaponComponent.class, NetworkInputComponent.class,
             PlayerIdComponent.class, ShipTypeComponent.class, PowerDistributionComponent.class,
             CombatTimerComponent.class).get());
         this.engine = engine;
         this.world = world;
+        this.nextProjectileId = nextProjectileId;
     }
 
     @Override

@@ -25,6 +25,7 @@ import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
+import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
@@ -40,11 +41,13 @@ import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
+import de.mkoehler.starwars.sim.components.TurretComponent;
 import de.mkoehler.starwars.sim.systems.CombatTimerSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
 import de.mkoehler.starwars.sim.systems.ShieldRegenSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
+import de.mkoehler.starwars.sim.systems.TurretSystem;
 import de.mkoehler.starwars.sim.systems.WeaponSystem;
 
 import java.util.ArrayList;
@@ -56,6 +59,7 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * The authoritative game simulation: owns the Box2D {@link World} and Ashley
@@ -84,9 +88,13 @@ public class GameNetworkServer extends NetworkServer {
 
     private final World world = new World(new Vector2(0, 0), true);
     private final Engine engine = new Engine();
+    // Shared between WeaponSystem and TurretSystem - both fire real projectiles into the same
+    // world, so they must draw ids from the same counter or two live projectiles could collide.
+    private final AtomicInteger nextProjectileId = new AtomicInteger();
     private final ShipControlSystem shipControlSystem = new ShipControlSystem();
     private final PhysicsSystem physicsSystem = new PhysicsSystem(world);
-    private final WeaponSystem weaponSystem = new WeaponSystem(engine, world);
+    private final WeaponSystem weaponSystem = new WeaponSystem(engine, world, nextProjectileId);
+    private final TurretSystem turretSystem = new TurretSystem(engine, world, nextProjectileId);
     private final ProjectileLifetimeSystem projectileLifetimeSystem = new ProjectileLifetimeSystem(engine, world);
     private final ShieldRegenSystem shieldRegenSystem = new ShieldRegenSystem();
     private final CombatTimerSystem combatTimerSystem = new CombatTimerSystem();
@@ -106,6 +114,7 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(shipControlSystem);
         engine.addSystem(physicsSystem);
         engine.addSystem(weaponSystem);
+        engine.addSystem(turretSystem);
         engine.addSystem(projectileLifetimeSystem);
         engine.addSystem(shieldRegenSystem);
         engine.addSystem(combatTimerSystem);
@@ -156,11 +165,13 @@ public class GameNetworkServer extends NetworkServer {
      * Advances the simulation by one tick: applies every queued network
      * action (spawns, input updates, despawns), steps physics (which is
      * also where projectile-vs-ship contacts are detected), fires weapons,
-     * resolves any hits (splitting damage between shield and hull, see
-     * {@link ShipDamage}), regenerates shields, advances every ship's
-     * combat-lock timers (design.md 2.3), expires old projectiles, advances
-     * respawn timers, and broadcasts the resulting world state to every
-     * connected client.
+     * runs every enabled turret's autonomous scan/track/fire behavior
+     * (design.md — turret weapons, sharing each ship's weapon capacitor with
+     * its main gun), resolves any hits (splitting damage between shield and
+     * hull, see {@link ShipDamage}), regenerates shields, advances every
+     * ship's combat-lock timers (design.md 2.3), expires old projectiles,
+     * advances respawn timers, and broadcasts the resulting world state to
+     * every connected client.
      *
      * @param deltaTime time since the last tick, in seconds
      */
@@ -188,6 +199,10 @@ public class GameNetworkServer extends NetworkServer {
         // attachment point, in a straight line along the correct facing, which pointed at "it
         // moved before its first render" rather than a spawn-position bug.
         weaponSystem.update(deltaTime);
+        // After the main gun, not before - both draw from the same shared capacitor (see
+        // TurretSystem's Javadoc), so the player's own held-fire input gets first claim on it
+        // each tick over the autonomous turret.
+        turretSystem.update(deltaTime);
 
         resolvePendingHits();
         shieldRegenSystem.update(deltaTime);
@@ -384,6 +399,9 @@ public class GameNetworkServer extends NetworkServer {
         } else if (object instanceof LeaveMatchRequest) {
             int playerId = connection.getID();
             pendingActions.add(() -> handleLeaveMatchRequest(playerId, connection));
+        } else if (object instanceof TurretToggleMessage) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> applyTurretToggle(playerId));
         }
     }
 
@@ -442,6 +460,24 @@ public class GameNetworkServer extends NetworkServer {
         }
     }
 
+    /**
+     * Toggles a ship's turret(s) on/off (design.md — turret weapons).
+     * Dropped harmlessly if the ship isn't spawned right now, or its ship
+     * type has no {@link TurretComponent} at all (most don't).
+     *
+     * @param playerId the player whose ship to toggle
+     */
+    private void applyTurretToggle(int playerId) {
+        Entity ship = shipsByPlayerId.get(playerId);
+        if (ship == null) {
+            return;
+        }
+        TurretComponent turrets = ship.getComponent(TurretComponent.class);
+        if (turrets != null) {
+            turrets.toggle();
+        }
+    }
+
     private void despawnShip(int playerId) {
         Entity ship = shipsByPlayerId.remove(playerId);
         if (ship == null) {
@@ -463,7 +499,8 @@ public class GameNetworkServer extends NetworkServer {
             shipStates[i++] = new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
-                hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType);
+                hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType,
+                turretAimAngles(ship));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(
@@ -478,6 +515,29 @@ public class GameNetworkServer extends NetworkServer {
         }
 
         sendToAllUDP(new WorldSnapshotMessage(shipStates, projectileStates));
+    }
+
+    private static final float[] NO_TURRETS = new float[0];
+
+    /**
+     * Returns a ship's turrets' current aim angles, one per mount in
+     * authored order, for broadcasting in its {@link ShipState} — empty for
+     * a ship type with no {@link TurretComponent} at all.
+     *
+     * @param ship the ship entity
+     * @return the aim angles, in radians
+     */
+    private static float[] turretAimAngles(Entity ship) {
+        TurretComponent turrets = ship.getComponent(TurretComponent.class);
+        if (turrets == null) {
+            return NO_TURRETS;
+        }
+        List<TurretComponent.TurretMount> mounts = turrets.getMounts();
+        float[] angles = new float[mounts.size()];
+        for (int i = 0; i < mounts.size(); i++) {
+            angles[i] = mounts.get(i).getAimAngleRadians();
+        }
+        return angles;
     }
 
     /**

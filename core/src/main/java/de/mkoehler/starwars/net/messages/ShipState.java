@@ -22,6 +22,14 @@ import de.mkoehler.starwars.sim.ShipType;
  * with the correct sprite/size (design.md 5.1) — other clients only ever
  * learn a ship's type from here, since {@link ShipSpawnedMessage} (which
  * also carries it) is only ever sent to the owning player.
+ * <p>
+ * {@link #getTurretAimAngles()} carries the current world-space aim angle
+ * of every turret this ship has (design.md — turret weapons), in the same
+ * order as that ship type's {@code "TURRET"} attachment points — empty for
+ * a ship type with no turrets. Turret aim/targeting is entirely
+ * server-simulated, never predicted (like projectiles), so this is the only
+ * way any client, including the turret's own owner, learns where it's
+ * currently pointed.
  */
 public class ShipState {
 
@@ -37,6 +45,7 @@ public class ShipState {
     private float shieldCurrent;
     private float shieldMax;
     private ShipType shipType;
+    private float[] turretAimAngles;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -59,11 +68,13 @@ public class ShipState {
      * @param shieldCurrent   the ship's current shield strength
      * @param shieldMax       the ship's maximum shield capacity
      * @param shipType        the ship's type
+     * @param turretAimAngles this ship's turrets' current aim angles, in radians, one per
+     *                        {@code "TURRET"} attachment point in authored order; empty if none
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
                       float hullCurrent, float hullMax, float shieldCurrent, float shieldMax,
-                      ShipType shipType) {
+                      ShipType shipType, float[] turretAimAngles) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -76,6 +87,7 @@ public class ShipState {
         this.shieldCurrent = shieldCurrent;
         this.shieldMax = shieldMax;
         this.shipType = shipType;
+        this.turretAimAngles = turretAimAngles;
     }
 
     /**
@@ -184,5 +196,15 @@ public class ShipState {
      */
     public ShipType getShipType() {
         return shipType;
+    }
+
+    /**
+     * Returns this ship's turrets' current aim angles.
+     *
+     * @return the aim angles, in radians, one per {@code "TURRET"} attachment
+     * point in authored order; empty for a ship type with no turrets
+     */
+    public float[] getTurretAimAngles() {
+        return turretAimAngles;
     }
 }

@@ -986,6 +986,60 @@ tense combat moment, so it must stay clear of the ship. Verified live
 (same server+client/SendKeys setup): banner renders centered and clear
 of the ship, no exceptions.
 
+**Turret weapons (Falcon/Star Destroyer only) — implemented
+2026-09-06.** See design.md 2.9 for the full writeup. Player-toggled
+(**T**) autonomous weapon system, fully server-side: each `"TURRET"`
+attachment point becomes an independently-tracking mount that scans for
+the closest live enemy within its ship type's configured scan range
+(30m, user-specified), leads its shot (a from-scratch quadratic
+intercept solve, `sim.TurretAiming`, unit-tested including a full
+independent geometric cross-check — needed because this project's
+0-rad-is-north angle convention meant deriving a fresh
+direction→angle inverse, `MathUtils.atan2(-dx, dy)`), and fires once
+aligned and off cooldown, draining the **same shared capacitor** as the
+main gun (only `WeaponSystem` recharges it, avoiding a double-recharge
+bug for ships with both). New `TurretConfig` (scan range/cooldown/turn
+rate) lives in each ship's `.meta.json`, sibling to
+`ShipSpriteMetadata`. Turret art: `R:\StarWars\sprites\turret`'s 40px
+variant for the Falcon, 32px for the Star Destroyer, matching each
+ship's own `pixelsPerMeter` — imported the same way as ship art, no
+`AtlasPacker` code changes needed.
+
+**Real gotcha hit while verifying this live (two real client processes,
+`SendKeys`/`keybd_event` + window-focus automation):** `SetForegroundWindow`
+from an automation script **silently fails** (returns without error, no
+exception) when Windows' foreground-lock heuristic blocks it — keys then
+go to whichever window already had focus, not the intended target. First
+symptom looked exactly like a data/rendering bug (one ship's turret
+seemingly never rendering) but was actually a mis-targeted key press the
+whole time (a "T" and a ship-selection sequence both landed on the wrong
+of the two windows). **Fix that actually works:** simulate an Alt
+key-tap (`keybd_event` down+up on VK_MENU) immediately before
+`SetForegroundWindow` — satisfies the heuristic reliably — and always
+verify with `GetForegroundWindow()` afterward before sending further
+input; don't trust `SetForegroundWindow`'s return value or assume success
+from timing alone. **General rule for future multi-window `SendKeys`
+verification in this project: always do the Alt-tap-then-verify dance,
+and when two automated windows are involved, confirm which one actually
+received each input via a screenshot before drawing conclusions from an
+absence of an expected effect** — screen-region `CopyFromScreen`
+screenshots are also useless for telling two overlapping windows apart
+(both grab whatever's topmost); use `PrintWindow` (flag `PW_RENDERFULLCONTENT`)
+per-window instead, which captures a window's own content regardless of
+z-order/overlap.
+
+**Confirmed genuinely working, not just "no exceptions":** once keys were
+verified reaching the right window, the full scan→track→lead→fire→hit→kill
+loop was observed to be actually lethal — repeated real kills/respawns
+with both turrets enabled, including from a real non-zero distance (flew
+the Falcon away first via a held thrust key). **Found, not fixed (out of
+scope, pre-existing):** because respawn still always uses the same fixed
+origin point (documented limitation from the weapons milestone), an
+enabled turret makes it much more consequential — respawning ships land
+right back in another ship's turret range at point-blank distance,
+producing a rapid kill/respawn loop. Belongs to the still-open "map/arena
+design" open question, not to the turret feature itself.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

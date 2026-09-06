@@ -57,5 +57,10 @@
       "x" : 29.0,
       "y" : 18.0
     } ]
+  },
+  "turretConfig" : {
+    "scanRangeMeters" : 30.0,
+    "cooldownSeconds" : 0.6,
+    "turnRateDegreesPerSecond" : 90.0
   }
 }

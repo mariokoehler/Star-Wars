@@ -29,6 +29,7 @@ import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
+import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
@@ -41,6 +42,8 @@ import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.WeaponStats;
+import de.mkoehler.starwars.sim.metadata.PixelPoint;
+import de.mkoehler.starwars.sim.metadata.TurretConfig;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 
@@ -48,6 +51,7 @@ import java.io.IOException;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -121,6 +125,9 @@ public class Client implements Screen {
 
     private static final Color OTHER_SHIP_TINT = new Color(0.6f, 0.85f, 1f, 1f);
 
+    /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
+    private static final Vector2 TURRET_OFFSET = new Vector2();
+
     /** Size, in screen pixels, of the ship status HUD widget - placeholder until tuned by feel. */
     private static final float HUD_STATUS_SIZE = 220f;
     /** Screen-pixel margin from the bottom-left corner for the ship status HUD widget. */
@@ -145,6 +152,7 @@ public class Client implements Screen {
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
     private final Map<ShipType, TextureRegion> shipRegionsByType = new EnumMap<>(ShipType.class);
+    private final Map<ShipType, TextureRegion> turretRegionsByType = new EnumMap<>(ShipType.class);
     private TextureAtlas projectilesAtlas;
     private TextureRegion ownProjectileRegion;
     private TextureRegion enemyProjectileRegion;
@@ -173,6 +181,7 @@ public class Client implements Screen {
     private float myHullMax;
     private float myShieldCurrent;
     private float myShieldMax;
+    private float[] myTurretAimAngles = new float[0];
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
     private final PowerKeyHold shieldsHold = new PowerKeyHold();
     private final PowerKeyHold weaponsHold = new PowerKeyHold();
@@ -208,6 +217,11 @@ public class Client implements Screen {
         for (ShipType type : ShipType.values()) {
             shipRegionsByType.put(type, shipsAtlas.findRegion(hullRegionName(type), 20));
         }
+        // Only the two ship types that actually have turrets (design.md — turret weapons) get an
+        // entry here; every other ship type simply has none, which drawTurrets treats as "nothing
+        // to draw" rather than an error.
+        turretRegionsByType.put(ShipType.FALCON, shipsAtlas.findRegion("turrets/turret40"));
+        turretRegionsByType.put(ShipType.STARDESTROYER, shipsAtlas.findRegion("turrets/turret32"));
         projectilesAtlas = new TextureAtlas(Gdx.files.internal("textures/projectiles.atlas"));
         ownProjectileRegion = projectilesAtlas.findRegion("red_dot");
         enemyProjectileRegion = projectilesAtlas.findRegion("blue_dot");
@@ -304,6 +318,7 @@ public class Client implements Screen {
         // would flash empty for a frame or two right after spawning/respawning.
         myHullMax = myHullCurrent = myStats.getMaxHealth();
         myShieldMax = myShieldCurrent = myStats.getShieldMaxCapacity();
+        myTurretAimAngles = new float[0];
 
         // A fresh ship (spawn or respawn) always gets a fresh PowerDistributionComponent on the
         // server too (ShipFactory.createShip), so resetting the local mirror here keeps the two in
@@ -360,6 +375,7 @@ public class Client implements Screen {
                 myHullMax = state.getHullMax();
                 myShieldCurrent = state.getShieldCurrent();
                 myShieldMax = state.getShieldMax();
+                myTurretAimAngles = state.getTurretAimAngles();
                 continue;
             }
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
@@ -370,6 +386,7 @@ public class Client implements Screen {
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
                 state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
                 state.getAngularVelocity());
+            ship.turretAimAngles = state.getTurretAimAngles();
         }
 
         // Projectiles have no destroyed-notification of their own (design.md 3.5's
@@ -450,6 +467,10 @@ public class Client implements Screen {
             if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !leavingMatch) {
                 leavingMatch = true;
                 networkClient.sendTCP(new LeaveMatchRequest());
+            }
+
+            if (Gdx.input.isKeyJustPressed(Input.Keys.T)) {
+                networkClient.sendTCP(new TurretToggleMessage());
             }
         }
 
@@ -626,8 +647,63 @@ public class Client implements Screen {
                 widthPixels, heightPixels,
                 1f, 1f,
                 ship.renderAngle * MathUtils.radiansToDegrees);
+            drawTurrets(ship.shipType, stats, ship.renderX, ship.renderY, ship.renderAngle, ship.turretAimAngles);
         }
         batch.setColor(Color.WHITE);
+    }
+
+    /**
+     * Draws a ship's turret(s), if its type has any (design.md — turret
+     * weapons: currently only the Falcon and Star Destroyer). Each mount's
+     * screen position is the ship's own position plus its local attachment
+     * offset (from that ship type's sprite metadata, in the same authored
+     * order as {@code turretAimAngles}) rotated by the ship's *current*
+     * facing — but each mount's own *rotation* is its independently-tracked,
+     * absolute world-space {@code turretAimAngles} entry, never combined
+     * with the ship's facing, since a turret keeps aiming at its target
+     * regardless of which way the hull is pointed. Sized the same way as the
+     * hull sprite (design.md — pixels-per-meter fix): the turret art's own
+     * native pixel size, rescaled by *this ship type's* pixels-per-meter, so
+     * a turret authored at a different resolution than its ship (the 32px/
+     * 40px turret sprites vs. each ship's own hull resolution) still ends up
+     * a consistent real-world size.
+     */
+    private void drawTurrets(ShipType type, ShipStats stats, float shipScreenX, float shipScreenY,
+                             float shipAngleRadians, float[] turretAimAngles) {
+        if (turretAimAngles.length == 0) {
+            return;
+        }
+        TextureRegion turretRegion = turretRegionsByType.get(type);
+        if (turretRegion == null) {
+            return;
+        }
+        List<PixelPoint> mountPoints = stats.getSpriteMetadata()
+            .map(metadata -> metadata.getAttachmentPoints().get(TurretConfig.ATTACHMENT_NAME))
+            .orElse(null);
+        if (mountPoints == null || mountPoints.isEmpty()) {
+            return;
+        }
+
+        float pixelsPerMeter = stats.getPixelsPerMeter();
+        float screenScale = PhysicsConstants.PIXELS_PER_METER / pixelsPerMeter;
+        float widthPixels = turretRegion.getRegionWidth() * screenScale;
+        float heightPixels = turretRegion.getRegionHeight() * screenScale;
+
+        int count = Math.min(mountPoints.size(), turretAimAngles.length);
+        for (int i = 0; i < count; i++) {
+            PixelPoint point = mountPoints.get(i);
+            TURRET_OFFSET.set(point.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
+                point.getY() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER).rotateRad(shipAngleRadians);
+            float turretScreenX = shipScreenX + TURRET_OFFSET.x;
+            float turretScreenY = shipScreenY + TURRET_OFFSET.y;
+
+            batch.draw(turretRegion,
+                turretScreenX - widthPixels / 2f, turretScreenY - heightPixels / 2f,
+                widthPixels / 2f, heightPixels / 2f,
+                widthPixels, heightPixels,
+                1f, 1f,
+                turretAimAngles[i] * MathUtils.radiansToDegrees);
+        }
     }
 
     private void drawLocalShip() {
@@ -651,6 +727,7 @@ public class Client implements Screen {
             widthPixels, heightPixels,
             1f, 1f,
             angle * MathUtils.radiansToDegrees);
+        drawTurrets(myShipType, myStats, x, y, angle, myTurretAimAngles);
     }
 
     private void drawProjectiles() {
@@ -739,6 +816,9 @@ public class Client implements Screen {
         float renderX;
         float renderY;
         float renderAngle;
+        // Turret aim is entirely server-simulated and never predicted/extrapolated (same
+        // reasoning as projectiles) - just held at whatever the latest snapshot reported.
+        float[] turretAimAngles = new float[0];
 
         RemoteShip(float x, float y, float angle, ShipType shipType) {
             this.shipType = shipType;

@@ -16,6 +16,7 @@ import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
+import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
@@ -54,7 +55,8 @@ class MessageRegistryTest {
             ProjectileState.class, ProjectileState[].class,
             ShipDestroyedMessage.class, ShipType.class,
             PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class,
-            LeaveMatchRequest.class, LeaveMatchDeniedMessage.class
+            LeaveMatchRequest.class, LeaveMatchDeniedMessage.class,
+            TurretToggleMessage.class, float[].class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -124,8 +126,9 @@ class MessageRegistryTest {
     void worldSnapshotMessageSurvivesRoundTrip() {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
-                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING),
-                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.TIEFIGHTER)
+                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0]),
+                new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.STARDESTROYER,
+                    new float[]{0.4f, -1.1f, 2.9f, -2.9f})
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 0.5f)
@@ -140,9 +143,12 @@ class MessageRegistryTest {
         assertEquals(60f, copy.getShips()[0].getShieldCurrent());
         assertEquals(100f, copy.getShips()[0].getShieldMax());
         assertEquals(ShipType.XWING, copy.getShips()[0].getShipType());
+        assertEquals(0, copy.getShips()[0].getTurretAimAngles().length);
         assertEquals(-1.2f, copy.getShips()[1].getAngle());
         assertEquals(-0.3f, copy.getShips()[1].getAngularVelocity());
-        assertEquals(ShipType.TIEFIGHTER, copy.getShips()[1].getShipType());
+        assertEquals(ShipType.STARDESTROYER, copy.getShips()[1].getShipType());
+        assertEquals(4, copy.getShips()[1].getTurretAimAngles().length);
+        assertEquals(-1.1f, copy.getShips()[1].getTurretAimAngles()[1]);
         assertEquals(1, copy.getProjectiles().length);
         assertEquals(100, copy.getProjectiles()[0].getProjectileId());
         assertEquals(1, copy.getProjectiles()[0].getOwnerPlayerId());
@@ -197,6 +203,12 @@ class MessageRegistryTest {
     void leaveMatchDeniedMessageSurvivesRoundTrip() {
         LeaveMatchDeniedMessage copy = roundTrip(new LeaveMatchDeniedMessage(), LeaveMatchDeniedMessage.class);
         assertEquals(LeaveMatchDeniedMessage.class, copy.getClass());
+    }
+
+    @Test
+    void turretToggleMessageSurvivesRoundTrip() {
+        TurretToggleMessage copy = roundTrip(new TurretToggleMessage(), TurretToggleMessage.class);
+        assertEquals(TurretToggleMessage.class, copy.getClass());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

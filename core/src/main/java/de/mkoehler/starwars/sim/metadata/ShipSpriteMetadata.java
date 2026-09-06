@@ -22,7 +22,9 @@ import java.util.Map;
  * a ship with multiple guns (e.g. twin-linked cannons) can have more than
  * one {@code "PROJECTILE"} point — how that's actually used (fire from all
  * at once, alternate, etc.) is a decision for whatever consumes this data,
- * not something this class enforces.
+ * not something this class enforces. A ship's {@code "TURRET"} points work
+ * the same way — one independently-tracking turret per point, tuned by the
+ * shared {@link #getTurretConfig()}.
  * <p>
  * Plain mutable bean (public no-arg constructor, getters and setters) so
  * Jackson can (de)serialize it with no extra configuration.
@@ -31,6 +33,7 @@ public class ShipSpriteMetadata {
 
     private List<PixelPoint> hitboxPolygon = new ArrayList<>();
     private Map<String, List<PixelPoint>> attachmentPoints = new LinkedHashMap<>();
+    private TurretConfig turretConfig;
 
     /**
      * Returns the collision hitbox's vertices, in sprite-local pixel space
@@ -71,5 +74,25 @@ public class ShipSpriteMetadata {
      */
     public void setAttachmentPoints(Map<String, List<PixelPoint>> attachmentPoints) {
         this.attachmentPoints = attachmentPoints;
+    }
+
+    /**
+     * Returns this ship type's turret tuning values, if it has any
+     * {@code "TURRET"} attachment points — {@code null} for every other
+     * ship type.
+     *
+     * @return the turret config, or {@code null} if this ship has no turrets
+     */
+    public TurretConfig getTurretConfig() {
+        return turretConfig;
+    }
+
+    /**
+     * Sets this ship type's turret tuning values.
+     *
+     * @param turretConfig the turret config, or {@code null} for a ship with no turrets
+     */
+    public void setTurretConfig(TurretConfig turretConfig) {
+        this.turretConfig = turretConfig;
     }
 }

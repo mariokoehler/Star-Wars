@@ -19,10 +19,14 @@ import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
+import de.mkoehler.starwars.sim.components.TurretComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
+import de.mkoehler.starwars.sim.metadata.TurretConfig;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Builds ship Box2D bodies, and (server-side) full Ashley entities wrapping
@@ -67,9 +71,37 @@ public final class ShipFactory {
         entity.add(new WeaponComponent(WeaponStats.BLASTER));
         entity.add(new PowerDistributionComponent());
         entity.add(new CombatTimerComponent());
+        createTurretComponent(stats).ifPresent(entity::add);
         engine.addEntity(entity);
         body.setUserData(entity);
         return entity;
+    }
+
+    /**
+     * Builds this ship type's {@link TurretComponent}, one {@link
+     * TurretComponent.TurretMount} per authored {@code "TURRET"} attachment
+     * point (design.md — turret weapons) — empty if the ship type has no
+     * such points, or no {@link TurretConfig} to tune them with (both must
+     * be present; currently only the Falcon and Star Destroyer have either).
+     *
+     * @param stats the ship type's tuning values
+     * @return the turret component to add, or empty for a ship with no turrets
+     */
+    private static Optional<TurretComponent> createTurretComponent(ShipStats stats) {
+        return stats.getSpriteMetadata().flatMap(metadata -> {
+            List<PixelPoint> turretPoints = metadata.getAttachmentPoints().get(TurretConfig.ATTACHMENT_NAME);
+            TurretConfig config = metadata.getTurretConfig();
+            if (turretPoints == null || turretPoints.isEmpty() || config == null) {
+                return Optional.empty();
+            }
+            float pixelsPerMeter = stats.getPixelsPerMeter();
+            List<TurretComponent.TurretMount> mounts = new ArrayList<>();
+            for (PixelPoint point : turretPoints) {
+                Vector2 localOffsetMeters = new Vector2(point.getX() / pixelsPerMeter, point.getY() / pixelsPerMeter);
+                mounts.add(new TurretComponent.TurretMount(localOffsetMeters));
+            }
+            return Optional.of(new TurretComponent(mounts, config));
+        });
     }
 
     /**

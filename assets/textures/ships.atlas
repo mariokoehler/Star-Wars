@@ -6,84 +6,98 @@ filter: Linear, Linear
 repeat: none
 falcon/falcon256
   rotate: false
-  xy: 516, 692
+  xy: 516, 734
   size: 256, 256
   orig: 256, 256
   offset: 0, 0
   index: 20
 falcon/portrait
   rotate: false
-  xy: 2, 1464
+  xy: 2, 1506
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 snowspeeder/portrait
   rotate: false
-  xy: 2, 950
+  xy: 2, 992
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 snowspeeder/snowspeeder
   rotate: false
-  xy: 260, 306
+  xy: 260, 348
   size: 128, 128
   orig: 128, 128
   offset: 0, 0
   index: 20
 stardestroyer/portrait
   rotate: false
-  xy: 516, 1464
+  xy: 516, 1506
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 stardestroyer/stardestroyer256
   rotate: false
-  xy: 2, 2
+  xy: 2, 44
   size: 256, 432
   orig: 256, 432
   offset: 0, 0
   index: 20
 tiefighter/portrait
   rotate: false
-  xy: 2, 436
+  xy: 2, 478
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 tiefighter/tie_fighter256
   rotate: false
-  xy: 1544, 1720
+  xy: 1544, 1762
   size: 256, 256
   orig: 256, 256
   offset: 0, 0
   index: 20
 tieinterceptor/interceptor256
   rotate: false
-  xy: 1030, 1206
+  xy: 1030, 1248
   size: 256, 256
   orig: 256, 256
   offset: 0, 0
   index: 20
 tieinterceptor/portrait
   rotate: false
-  xy: 516, 950
+  xy: 516, 992
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
+turrets/turret32
+  rotate: false
+  xy: 774, 958
+  size: 32, 32
+  orig: 32, 32
+  offset: 0, 0
+  index: -1
+turrets/turret40
+  rotate: false
+  xy: 2, 2
+  size: 40, 40
+  orig: 40, 40
+  offset: 0, 0
+  index: -1
 xwing/portrait
   rotate: false
-  xy: 1030, 1464
+  xy: 1030, 1506
   size: 512, 512
   orig: 512, 512
   offset: 0, 0
   index: -1
 xwing/xwing128
   rotate: false
-  xy: 516, 562
+  xy: 516, 604
   size: 128, 128
   orig: 128, 128
   offset: 0, 0
