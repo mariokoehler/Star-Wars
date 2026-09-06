@@ -32,6 +32,17 @@ public final class TurretAiming {
      * (e.g. the target is outrunning the projectile in every direction, or
      * is exactly stationary in a degenerate way) — still a reasonable aim,
      * just not a lead.
+     * <p>
+     * <b>Known simplification:</b> {@code projectileSpeed} here is the
+     * weapon's own muzzle speed, not the shot's actual world-frame speed —
+     * {@link ProjectileFactory#createProjectile} adds the firing ship's own
+     * velocity on top once the shot is actually fired (so a moving ship's
+     * shots don't visibly lag behind it), but that contribution isn't fed
+     * back into this lead calculation. The turret's own ship is normally
+     * moving far slower than its shots, so the resulting aim error is
+     * usually negligible; revisit (thread the turret's own current velocity
+     * through here too) if fast-moving turret platforms ever make it
+     * noticeable.
      *
      * @param shooterX       the shooter's X position, in meters
      * @param shooterY       the shooter's Y position, in meters

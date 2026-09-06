@@ -135,7 +135,7 @@ public class WeaponSystem extends IteratingSystem {
 
         ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
             body.getPosition().x + SPAWN_OFFSET.x, body.getPosition().y + SPAWN_OFFSET.y,
-            body.getAngle(), weapon.getStats());
+            body.getAngle(), body.getLinearVelocity().x, body.getLinearVelocity().y, weapon.getStats());
     }
 
     // The attachment point's sprite-local, center-origin, Y-up coordinates (see PixelPoint's
@@ -150,6 +150,6 @@ public class WeaponSystem extends IteratingSystem {
 
         ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
             body.getPosition().x + SPAWN_OFFSET.x, body.getPosition().y + SPAWN_OFFSET.y,
-            body.getAngle(), weapon.getStats());
+            body.getAngle(), body.getLinearVelocity().x, body.getLinearVelocity().y, weapon.getStats());
     }
 }

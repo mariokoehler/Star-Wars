@@ -1304,6 +1304,30 @@ not a bug, but easy to misdiagnose as one if the two processes' build
 provenance isn't tracked. Rebuilding and restarting *both* ends
 together is the only fix.
 
+**Real bug fixed 2026-09-06: projectiles didn't inherit their shooter's
+velocity.** See design.md 2.4 for the full writeup. User noticed shots
+appearing to fly "backwards" — a ship moving faster than the blaster's
+50 m/s muzzle speed literally outran its own shots, since
+`ProjectileFactory` only ever set a fired projectile's velocity to
+`direction × muzzleSpeed`, never adding the firing ship's own current
+velocity on top. Wrong for this project's own Newtonian model: a shot
+fired from a moving platform should keep that platform's velocity, same
+as a bullet fired from a moving plane in reality. Fixed at the one
+shared factory method (`ProjectileFactory.createProjectile` now takes
+the shooter's velocity and adds it to the muzzle velocity), so both
+`WeaponSystem` and `TurretSystem` got the fix from one change. Flagged,
+not fixed: `TurretAiming`'s lead solve still assumes the shot's speed
+equals bare muzzle speed, not muzzle speed plus the turret's own ship's
+velocity — negligible in practice since a turret's own platform is
+normally far slower than its shots, noted in `TurretAiming`'s Javadoc
+for whenever that stops being true. Verified live: accelerated a ship to
+speed with sustained thrust, fired while still moving fast, and
+screenshotted mid-flight (holding the fire key so `PrintWindow` had
+something to actually catch, since a single instantaneous shot the
+first two attempts happened to land between two identical-looking
+captures) — the two shots sat clearly, visibly ahead of the ship instead
+of hovering near it. Full `mvn clean test` (82 tests) green throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

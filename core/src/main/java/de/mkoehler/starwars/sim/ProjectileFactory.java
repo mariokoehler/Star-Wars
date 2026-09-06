@@ -25,9 +25,18 @@ public final class ProjectileFactory {
 
     /**
      * Creates a projectile entity travelling in the direction of {@code angle}
-     * at the weapon's configured speed, and adds it to the given engine. The
-     * body's {@code userData} is set to the entity, so a Box2D
-     * {@code ContactListener} can look it up on collision.
+     * at the weapon's configured speed <b>relative to the firing ship</b> -
+     * the shooter's own velocity is added on top, the same way a bullet
+     * fired from a moving platform keeps the platform's velocity in the real
+     * world. Without this, a ship flying faster than its own shot's muzzle
+     * speed would visibly overtake and outrun it - reported by the user as
+     * projectiles appearing to fly "backwards" relative to a fast-moving
+     * ship, which is exactly that case (world-frame projectile speed lower
+     * than the shooter's own speed in roughly the same direction).
+     * <p>
+     * Adds the projectile to the given engine; the body's {@code userData}
+     * is set to the entity, so a Box2D {@code ContactListener} can look it
+     * up on collision.
      *
      * @param engine        the Ashley engine to add the entity to
      * @param world         the Box2D world to create the body in
@@ -37,11 +46,14 @@ public final class ProjectileFactory {
      * @param y             spawn position, in meters
      * @param angle         travel direction, in radians (0 = facing/travelling north, matching
      *                      {@link de.mkoehler.starwars.sim.systems.ShipControlSystem}'s convention)
+     * @param shooterVelX   the firing ship's own velocity at the moment of firing, in meters/second
+     * @param shooterVelY   the firing ship's own velocity at the moment of firing, in meters/second
      * @param stats         the weapon type's tuning values
      * @return the created entity
      */
     public static Entity createProjectile(Engine engine, World world, int projectileId, int ownerPlayerId,
-                                           float x, float y, float angle, WeaponStats stats) {
+                                           float x, float y, float angle, float shooterVelX, float shooterVelY,
+                                           WeaponStats stats) {
         BodyDef bodyDef = new BodyDef();
         bodyDef.type = BodyDef.BodyType.DynamicBody;
         bodyDef.position.set(x, y);
@@ -63,7 +75,7 @@ public final class ProjectileFactory {
         body.createFixture(fixtureDef);
         shape.dispose();
 
-        DIRECTION.set(0, 1).rotateRad(angle).scl(stats.getProjectileSpeed());
+        DIRECTION.set(0, 1).rotateRad(angle).scl(stats.getProjectileSpeed()).add(shooterVelX, shooterVelY);
         body.setLinearVelocity(DIRECTION);
 
         Entity entity = new Entity();

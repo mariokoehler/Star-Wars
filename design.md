@@ -340,6 +340,28 @@ rather than at its exact center (belt-and-suspenders, and just more
 correct — a shot should originate from the nose, not the center of
 mass).
 
+**Bug found and fixed (2026-09-06): a projectile didn't inherit its
+shooter's velocity, so a fast enough ship could outrun its own shots.**
+Reported symptom: the user saw a shot appear to fly "backwards" — the
+ship, moving faster in roughly the same direction than the blaster's own
+50 m/s muzzle speed, simply overtook it. `ProjectileFactory` set a fired
+projectile's velocity to *only* `direction × muzzleSpeed`, with no
+contribution from the firing ship's own current velocity — physically
+wrong for this project's own Newtonian model (2.1): a shot fired from a
+moving platform should keep that platform's velocity, the same way a
+bullet fired from a moving plane does in reality. Fixed by having
+`ProjectileFactory.createProjectile` add the shooter's velocity (read
+from its Box2D body at the moment of firing) on top of the muzzle
+velocity, for both `WeaponSystem` and `TurretSystem` — the same fix
+point serves both, since they share one factory method. **Known
+follow-on simplification, not fixed:** `TurretAiming.computeLeadAngle`'s
+intercept solve still assumes the shot's speed *is* the muzzle speed,
+not muzzle speed plus the turret's own ship's velocity — the turret's
+own platform is normally moving far slower than its shots, so the
+resulting aim error is usually negligible; revisit only if a fast-moving
+turret platform ever makes it visible (see `TurretAiming`'s own Javadoc
+for the full note).
+
 ### 2.5 Ship sprite metadata: polygon hitboxes & attachment points (2026-09-05)
 
 Ships previously used a plain circle (`ShipStats.getRadiusMeters()`) as
