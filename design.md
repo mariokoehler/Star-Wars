@@ -1108,6 +1108,66 @@ missing, called out explicitly by the user rather than forgotten: **no
 way for a player to see their own XP yet** — accounts accumulate it
 correctly now, there's just no UI surfacing it.
 
+### 2.11 Scoreboard overlay (2026-09-07)
+
+Answers 2.10's own "no way for a player to see their own XP yet" gap —
+holding **TAB** on the gameplay screen shows a panel listing every
+player currently connected to the server (not just those with a live
+ship — someone still on Ship Selection counts too), each row's display
+name, total account XP, and this-session-only kill/death counts. Rows
+sort by kills descending, then XP descending, then name — not specified
+by the user, a reasonable default. Session kill/death counts are never
+persisted (unlike XP, design.md 2.10) — they reset to zero for a player
+the moment they reconnect.
+
+**Art:** the user supplied `assets-raw/hud/Scoreboard.png` /
+`assets/textures/hud/scoreboard.png` (768x512, not atlas-packed — same
+"one panel, drawn alone, never batched with other sprites" convention
+tileable backgrounds and other full-screen HUD chrome already follow) —
+a holographic panel with "PLAYER SCORES" and the "NAME"/"XP"/"KILLS"/
+"DEATHS" column headers already baked in. The user specified each
+column's X position and the first data row's Y in the panel image's own
+pixel space (matching header positions exactly); row height (32px) is
+an untuned placeholder the user didn't specify, comfortably fitting more
+than the 8-player cap. The panel renders at its native pixel size,
+centered on screen, rather than scaled — keeps the coordinate math
+identical to what the user specified, no extra scale factor to keep in
+sync.
+
+**First real user of `gdx-freetype` (design.md 4.4's addendum) for
+something other than `ConnectScreen`:** row text renders in the real
+"SF Distant Galaxy" font at 14px, matching the baked headers' size.
+
+**Protocol:** new `PlayerScoreEntry` (playerId, displayName, xp, kills,
+deaths) and `ScoreboardMessage` (one entry per connected player),
+broadcast over TCP on a flat 1-second cadence
+(`GameNetworkServer.SCOREBOARD_BROADCAST_INTERVAL_SECONDS`) — much
+slower than `WorldSnapshotMessage`'s per-tick UDP broadcast, deliberately:
+this data isn't render-critical, a TAB-holding player only needs
+roughly-current standings, not frame-perfect ones. `GameNetworkServer`
+gained two new session-only maps, `killsByPlayerId`/`deathsByPlayerId`
+(incremented in `handleShipDestroyed` — a self-destruct/ESC-leave never
+touches them, since it doesn't go through that method at all), cleared
+per player on disconnect same as its other per-connection maps.
+Display name and XP are read live from `AccountStore` at broadcast time
+(not cached), so a mid-match XP gain shows up within one broadcast
+cycle.
+
+**Verified live, end-to-end, not just build+tests:** full `mvn clean
+test` green across every module; a real server + two real client
+processes (`red_five`/`blue_two`, fresh accounts) — held TAB on one
+client, confirmed both connected players listed, correctly sorted;
+fired and landed a real kill, confirmed the killer's row updated to
+`KILLS=1` and real kill-XP (`30`, matching design.md 2.10's formula for
+a same-tier kill) in the very next broadcast; confirmed the victim
+correctly dropped off the list the moment their client disconnected to
+the Death Screen (design.md 2.3-adjacent — a death always disconnects,
+so "currently connected" excludes them, as intended, not a bug). Also
+confirms the font's zero glyph renders as a stylized hollow ring rather
+than a struck-through/plain oval "0" — consistent across every "0" seen
+(a bare `DEATHS` value and the `0` inside `30`), so that's this font's
+actual design, not a rendering bug.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape

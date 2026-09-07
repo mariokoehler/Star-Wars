@@ -1372,6 +1372,67 @@ a different, unverified legal question. Revisit before sharing/
 distributing this project beyond the current player group; see
 design.md 4.4's addendum for the same flag.
 
+**Significant upstream drift discovered pushing the above commit,
+2026-09-07 — worth flagging since it wasn't visible from this session's
+starting context.** `git push` was rejected (remote had diverged); a
+rebase pulled in **ten commits done outside this session**: jgitver
+automatic Maven versioning (design.md 3.10 — `<version>` is now `0` in
+every POM, the real version is computed at build time; **`core` must be
+reinstalled after every new commit lands**, a stale local install can
+silently go missing under a version other builds now expect), a
+client/server handshake version check (rejects a mismatched pair rather
+than misbehaving), tier-weighted kill XP (design.md 2.10), a packaged
+Windows client release pipeline (jpackage, design.md 3.11), and a
+Docker/QNAP server deployment (design.md 3.12). The rebase itself was
+clean (no conflicts — this session's POM edits and the upstream
+jgitver/versioning changes touched adjacent, not overlapping, lines).
+**Take this as a reminder to `git fetch`/check for upstream drift before
+assuming this file's own "where we left off" framing is current** — it
+'s accurate for what *this* session did, but this project is
+apparently also being worked on elsewhere between sessions.
+
+**Scoreboard overlay (design.md 2.11) — implemented 2026-09-07, same
+session.** User-provided art (`assets-raw/hud/Scoreboard.png`) plus
+exact column X positions/first-row Y; holding TAB on the gameplay
+screen shows every connected player's name/XP/session kills/session
+deaths. New `ScoreboardMessage`/`PlayerScoreEntry` (broadcast over TCP
+every 1s, not per-tick — this data isn't render-critical), new
+`GameNetworkServer` session-only `killsByPlayerId`/`deathsByPlayerId`
+maps, new `core.render.ScoreboardHud` (the second real consumer of
+`GameFonts`/`gdx-freetype` after `ConnectScreen`, at 14px to match the
+panel art's baked headers). Full writeup in design.md 2.11.
+
+**Verified live with a real kill, not just a static screenshot:** ran a
+real server + two real client processes, held TAB and confirmed both
+connected players listed and correctly sorted, then actually landed a
+kill and confirmed the killer's row updated (`KILLS` incremented, real
+kill-XP awarded per design.md 2.10's formula) in the very next
+broadcast, and the victim correctly vanished from the list the instant
+their client disconnected to the Death Screen (a death always
+disconnects — expected, not a bug). Also directly confirmed the
+rendered "0" digit is this font's actual stylized-ring zero glyph, not
+a broken/missing-glyph rendering bug — checked by comparing a bare `0`
+against the `0` inside a real `30` XP value, both identical.
+
+**Automation gotcha hit getting two distinct logged-in test accounts
+for this verification, worth remembering for next time:** sending
+literal `Ctrl+A` via `SendKeys` into a focused `VisTextField` does
+**not** trigger select-all — it inserts a literal, unhandled control
+character (rendered as a tofu/box glyph by the game font), corrupting
+the field instead of clearing it. What actually works: `ConnectScreen`'s
+own custom Tab-handling already calls `selectAll()` on whichever field
+Tab moves focus *to* (see this file's Connect Dialog history) — so
+tabbing into a field and immediately typing correctly replaces its
+existing content, no explicit select-all needed at all; only the
+*first* field (focused directly at `show()`, never reached via Tab) has
+no such auto-select, and needs `{END}` then `+{HOME}` (shift+home) to
+select-to-start before typing over it. A first attempt at clicking
+fields via raw `mouse_event` at guessed screen coordinates also failed
+silently (every field's text landed in whatever field already had
+focus, i.e. clicking never actually changed Scene2D keyboard focus) —
+abandoned in favor of the Tab-based approach above rather than debugged
+further, since it worked immediately once tried.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

@@ -9,10 +9,12 @@ import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
+import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
@@ -57,7 +59,8 @@ class MessageRegistryTest {
             ShipDestroyedMessage.class, ShipType.class,
             PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class,
             LeaveMatchRequest.class, LeaveMatchDeniedMessage.class,
-            TurretToggleMessage.class, float[].class, SpawnRequest.class
+            TurretToggleMessage.class, float[].class, SpawnRequest.class,
+            PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -219,6 +222,22 @@ class MessageRegistryTest {
     void turretToggleMessageSurvivesRoundTrip() {
         TurretToggleMessage copy = roundTrip(new TurretToggleMessage(), TurretToggleMessage.class);
         assertEquals(TurretToggleMessage.class, copy.getClass());
+    }
+
+    @Test
+    void scoreboardMessageSurvivesRoundTrip() {
+        ScoreboardMessage original = new ScoreboardMessage(new PlayerScoreEntry[]{
+            new PlayerScoreEntry(1, "Red Five", 250, 3, 1),
+            new PlayerScoreEntry(2, "Blue Two", 0, 0, 0)
+        });
+        ScoreboardMessage copy = roundTrip(original, ScoreboardMessage.class);
+        assertEquals(2, copy.getEntries().length);
+        assertEquals(1, copy.getEntries()[0].getPlayerId());
+        assertEquals("Red Five", copy.getEntries()[0].getDisplayName());
+        assertEquals(250, copy.getEntries()[0].getXp());
+        assertEquals(3, copy.getEntries()[0].getKills());
+        assertEquals(1, copy.getEntries()[0].getDeaths());
+        assertEquals("Blue Two", copy.getEntries()[1].getDisplayName());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

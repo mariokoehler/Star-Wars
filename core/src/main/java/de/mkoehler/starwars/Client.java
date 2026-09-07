@@ -24,8 +24,10 @@ import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
@@ -35,6 +37,7 @@ import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.PowerDistributionHud;
+import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
@@ -49,6 +52,8 @@ import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 
 import java.io.IOException;
+import java.util.Arrays;
+import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -144,6 +149,17 @@ public class Client implements Screen {
     /** Gap from the top of the screen to the banner's top edge - kept near the top, deliberately away from the player's own ship (which stays near screen-center via camera-follow) since this fires during tense moments. */
     private static final float WARNING_BANNER_TOP_MARGIN = 48f;
 
+    private static final PlayerScoreEntry[] NO_SCORES = new PlayerScoreEntry[0];
+    /**
+     * Scoreboard row order (design.md 2.11 doesn't specify one): most kills
+     * first, ties broken by XP, then by name, so the order stays stable
+     * without depending on server-side iteration order.
+     */
+    private static final Comparator<PlayerScoreEntry> SCOREBOARD_ORDER =
+        Comparator.comparingInt(PlayerScoreEntry::getKills).reversed()
+            .thenComparing(Comparator.comparingInt(PlayerScoreEntry::getXp).reversed())
+            .thenComparing(PlayerScoreEntry::getDisplayName);
+
     private final StarWarsGame game;
     private final ShipType selectedShipType;
     private final ConnectionInfo connectionInfo;
@@ -158,6 +174,7 @@ public class Client implements Screen {
     private ParallaxBackground background;
     private ShipStatusHud statusHud;
     private PowerDistributionHud powerHud;
+    private ScoreboardHud scoreboardHud;
     private Texture warningBannerTexture;
     private OrthographicCamera camera;
     private Viewport viewport;
@@ -181,6 +198,8 @@ public class Client implements Screen {
     private float myShieldCurrent;
     private float myShieldMax;
     private float[] myTurretAimAngles = new float[0];
+    /** Latest scoreboard from the server (design.md 2.11) - only drawn while TAB is held. */
+    private PlayerScoreEntry[] scoreboardEntries = NO_SCORES;
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
     private final PowerKeyHold shieldsHold = new PowerKeyHold();
     private final PowerKeyHold weaponsHold = new PowerKeyHold();
@@ -239,6 +258,7 @@ public class Client implements Screen {
         );
         statusHud = new ShipStatusHud();
         powerHud = new PowerDistributionHud();
+        scoreboardHud = new ScoreboardHud();
         warningBannerTexture = new Texture(Gdx.files.internal("textures/hud/hud_warning_ejection_locked.png"));
 
         camera = new OrthographicCamera();
@@ -290,6 +310,8 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> onShipDestroyed(destroyed));
                 } else if (object instanceof LeaveMatchDeniedMessage) {
                     pendingUpdates.add(Client.this::onLeaveMatchDenied);
+                } else if (object instanceof ScoreboardMessage scoreboard) {
+                    pendingUpdates.add(() -> scoreboardEntries = scoreboard.getEntries());
                 } else if (object instanceof HandshakeResponse response) {
                     if (response.isAccepted()) {
                         networkClient.sendTCP(new SpawnRequest(selectedShipType));
@@ -530,7 +552,29 @@ public class Client implements Screen {
         batch.begin();
         drawHud();
         drawWarningMessage();
+        if (Gdx.input.isKeyPressed(Input.Keys.TAB)) {
+            drawScoreboard();
+        }
         batch.end();
+    }
+
+    /**
+     * Draws the scoreboard overlay (design.md 2.11) centered on screen, at
+     * its panel's native pixel size, while TAB is held - rows sorted by
+     * {@link #SCOREBOARD_ORDER}, applied to a copy so the underlying array
+     * (replaced wholesale by the next {@link ScoreboardMessage}) is never
+     * mutated in place.
+     */
+    private void drawScoreboard() {
+        if (scoreboardEntries.length == 0) {
+            return;
+        }
+        PlayerScoreEntry[] sorted = Arrays.copyOf(scoreboardEntries, scoreboardEntries.length);
+        Arrays.sort(sorted, SCOREBOARD_ORDER);
+
+        float x = (Gdx.graphics.getWidth() - scoreboardHud.getPanelWidth()) / 2f;
+        float y = (Gdx.graphics.getHeight() - scoreboardHud.getPanelHeight()) / 2f;
+        scoreboardHud.render(batch, x, y, sorted);
     }
 
     private void drawWarningMessage() {
@@ -812,6 +856,7 @@ public class Client implements Screen {
         background.dispose();
         statusHud.dispose();
         powerHud.dispose();
+        scoreboardHud.dispose();
         warningBannerTexture.dispose();
     }
 

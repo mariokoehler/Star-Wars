@@ -7,10 +7,12 @@ import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
+import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
@@ -71,5 +73,8 @@ public final class MessageRegistry {
         kryo.register(TurretToggleMessage.class);
         kryo.register(float[].class);
         kryo.register(SpawnRequest.class);
+        kryo.register(PlayerScoreEntry.class);
+        kryo.register(PlayerScoreEntry[].class);
+        kryo.register(ScoreboardMessage.class);
     }
 }

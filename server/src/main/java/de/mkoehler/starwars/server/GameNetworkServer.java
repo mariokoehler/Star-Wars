@@ -21,8 +21,10 @@ import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
+import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
@@ -31,6 +33,7 @@ import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
+import de.mkoehler.starwars.server.accounts.PlayerAccount;
 import de.mkoehler.starwars.sim.KillXp;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
@@ -61,6 +64,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -90,6 +94,8 @@ public class GameNetworkServer extends NetworkServer {
     private static final float RESPAWN_DELAY_SECONDS = 3f;
     /** design.md 2.3's combat-lock window: ESC-leave is blocked within this long of firing or being hit. */
     private static final float COMBAT_LOCK_SECONDS = 20f;
+    /** How often {@link #broadcastScoreboard()} runs - the TAB overlay (design.md 2.11) doesn't need per-tick freshness. */
+    private static final float SCOREBOARD_BROADCAST_INTERVAL_SECONDS = 1f;
 
     private final World world = new World(new Vector2(0, 0), true);
     private final Engine engine = new Engine();
@@ -110,8 +116,13 @@ public class GameNetworkServer extends NetworkServer {
     // Populated on a successful handshake, removed on disconnect - lets a kill be credited to
     // the killer's account (design.md - kill XP) via nothing more than their playerId.
     private final Map<Integer, String> loginByPlayerId = new HashMap<>();
+    // Session-only (design.md 2.11 - never persisted, unlike XP): cleared per player on
+    // disconnect, never read back from anywhere on connect.
+    private final Map<Integer, Integer> killsByPlayerId = new HashMap<>();
+    private final Map<Integer, Integer> deathsByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
+    private float scoreboardBroadcastTimer;
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
     // Resolved via Gdx.files.local (relative to wherever the server process is launched from,
     // design.md 3.6) rather than hardcoded, but AccountStore itself has no libGDX dependency -
@@ -183,8 +194,10 @@ public class GameNetworkServer extends NetworkServer {
      * its main gun), resolves any hits (splitting damage between shield and
      * hull, see {@link ShipDamage}), regenerates shields, advances every
      * ship's combat-lock timers (design.md 2.3), expires old projectiles,
-     * advances respawn timers, and broadcasts the resulting world state to
-     * every connected client.
+     * advances respawn timers, broadcasts the resulting world state to every
+     * connected client, and - on its own, much slower cadence, see
+     * {@link #broadcastScoreboard()} - the scoreboard overlay's data
+     * (design.md 2.11).
      *
      * @param deltaTime time since the last tick, in seconds
      */
@@ -224,6 +237,12 @@ public class GameNetworkServer extends NetworkServer {
         tickRespawns(deltaTime);
 
         broadcastSnapshot();
+
+        scoreboardBroadcastTimer += deltaTime;
+        if (scoreboardBroadcastTimer >= SCOREBOARD_BROADCAST_INTERVAL_SECONDS) {
+            scoreboardBroadcastTimer = 0f;
+            broadcastScoreboard();
+        }
     }
 
     private static Entity asEntity(Body body) {
@@ -302,8 +321,9 @@ public class GameNetworkServer extends NetworkServer {
 
     /**
      * Handles a combat kill: tears down the victim's ship, schedules their
-     * respawn, awards the killer kill XP ({@link #awardKillXp}), and
-     * broadcasts the death.
+     * respawn, records the kill/death for the scoreboard overlay (design.md
+     * 5.2 - session-only, never persisted), awards the killer kill XP
+     * ({@link #awardKillXp}), and broadcasts the death.
      *
      * @param ship           the destroyed ship entity
      * @param killerPlayerId the id of whoever landed the fatal hit, or
@@ -314,6 +334,10 @@ public class GameNetworkServer extends NetworkServer {
     private void handleShipDestroyed(Entity ship, Integer killerPlayerId) {
         int playerId = destroyShipEntity(ship);
         respawnTimers.put(playerId, RESPAWN_DELAY_SECONDS);
+        deathsByPlayerId.merge(playerId, 1, Integer::sum);
+        if (killerPlayerId != null) {
+            killsByPlayerId.merge(killerPlayerId, 1, Integer::sum);
+        }
         awardKillXp(playerId, killerPlayerId);
         sendToAllTCP(new ShipDestroyedMessage(playerId));
     }
@@ -497,6 +521,8 @@ public class GameNetworkServer extends NetworkServer {
             connectionsByPlayerId.remove(playerId);
             shipTypeByPlayerId.remove(playerId);
             loginByPlayerId.remove(playerId);
+            killsByPlayerId.remove(playerId);
+            deathsByPlayerId.remove(playerId);
             respawnTimers.remove(playerId);
             despawnShip(playerId);
         });
@@ -601,6 +627,29 @@ public class GameNetworkServer extends NetworkServer {
         }
 
         sendToAllUDP(new WorldSnapshotMessage(shipStates, projectileStates));
+    }
+
+    /**
+     * Broadcasts one {@link PlayerScoreEntry} per currently-connected player
+     * (design.md 2.11's TAB overlay) - everyone tracked in
+     * {@link #connectionsByPlayerId}, whether or not they've spawned a ship
+     * yet, not just those with a live {@link ShipState}. Sent over the
+     * reliable TCP channel, on {@link #SCOREBOARD_BROADCAST_INTERVAL_SECONDS}'s
+     * much slower cadence than {@link #broadcastSnapshot()} - this data isn't
+     * render-critical.
+     */
+    private void broadcastScoreboard() {
+        PlayerScoreEntry[] entries = new PlayerScoreEntry[connectionsByPlayerId.size()];
+        int i = 0;
+        for (int playerId : connectionsByPlayerId.keySet()) {
+            String login = loginByPlayerId.get(playerId);
+            Optional<PlayerAccount> account = login != null ? accountStore.findByLogin(login) : Optional.empty();
+            String displayName = account.map(PlayerAccount::getDisplayName).orElse("?");
+            int xp = account.map(PlayerAccount::getXp).orElse(0);
+            entries[i++] = new PlayerScoreEntry(playerId, displayName, xp,
+                killsByPlayerId.getOrDefault(playerId, 0), deathsByPlayerId.getOrDefault(playerId, 0));
+        }
+        sendToAllTCP(new ScoreboardMessage(entries));
     }
 
     private static final float[] NO_TURRETS = new float[0];
