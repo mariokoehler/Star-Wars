@@ -54,4 +54,15 @@
       <scope>test</scope>
     </dependency>
   </dependencies>
+
+  <build>
+    <resources>
+      <resource>
+        <!-- Filtering substitutes ${project.version} (jgitver-computed, design.md 3.10)
+             into starwars-version.properties, read at runtime by AppVersion. -->
+        <directory>src/main/resources</directory>
+        <filtering>true</filtering>
+      </resource>
+    </resources>
+  </build>
 </project>

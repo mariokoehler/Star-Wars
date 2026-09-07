@@ -1,6 +1,7 @@
 package de.mkoehler.starwars.net;
 
 import com.esotericsoftware.kryonet.Connection;
+import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
@@ -14,6 +15,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -92,6 +94,50 @@ class NetworkServerClientIntegrationTest {
         client.sendUdpPing(udpTimestamp);
         assertTrue(udpPongLatch.await(AWAIT_SECONDS, TimeUnit.SECONDS), "no UDP pong received");
         assertEquals(udpTimestamp, udpPong.get().getTimestamp());
+    }
+
+    @Test
+    void handshakeIsRejectedWhenClientVersionDoesNotMatchServerVersion() throws Exception {
+        int[] ports = findTwoFreePorts();
+        int tcpPort = ports[0];
+        int udpPort = ports[1];
+
+        server = new NetworkServer();
+        server.start(tcpPort, udpPort);
+
+        CountDownLatch connectedLatch = new CountDownLatch(1);
+        CountDownLatch handshakeLatch = new CountDownLatch(1);
+        AtomicReference<HandshakeResponse> handshakeResponse = new AtomicReference<>();
+
+        client = new NetworkClient() {
+            @Override
+            protected void onConnected(Connection connection) {
+                connectedLatch.countDown();
+            }
+
+            @Override
+            protected void onReceived(Object object) {
+                if (object instanceof HandshakeResponse response) {
+                    handshakeResponse.set(response);
+                    handshakeLatch.countDown();
+                }
+            }
+        };
+
+        client.connect(NetworkConstants.CONNECTION_TIMEOUT_MILLIS, "localhost", tcpPort, udpPort);
+        assertTrue(connectedLatch.await(AWAIT_SECONDS, TimeUnit.SECONDS), "client did not connect in time");
+
+        // Bypasses NetworkClient#sendHandshake (which always stamps the real AppVersion) to
+        // simulate a client built from a different commit than this test's own server.
+        String bogusVersion = AppVersion.getVersion() + "-old";
+        client.sendTCP(new HandshakeRequest("test_pilot", "password123", "Test Pilot", bogusVersion));
+
+        assertTrue(handshakeLatch.await(AWAIT_SECONDS, TimeUnit.SECONDS), "no handshake response received");
+        assertFalse(handshakeResponse.get().isAccepted());
+        assertTrue(handshakeResponse.get().getMessage().contains(bogusVersion),
+            "rejection message should name the client's version: " + handshakeResponse.get().getMessage());
+        assertTrue(handshakeResponse.get().getMessage().contains(AppVersion.getVersion()),
+            "rejection message should name the server's version: " + handshakeResponse.get().getMessage());
     }
 
     /**

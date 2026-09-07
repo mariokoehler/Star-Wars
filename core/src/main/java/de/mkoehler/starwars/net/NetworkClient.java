@@ -74,14 +74,16 @@ public class NetworkClient {
 
     /**
      * Sends a handshake request over the reliable channel, logging into (or
-     * creating, design.md 3.6) a player account.
+     * creating, design.md 3.6) a player account. Stamped with this build's
+     * own {@link AppVersion#getVersion()} (design.md 3.10), checked by the
+     * server before login is even attempted.
      *
      * @param login       the account's login name
      * @param password    the account's password, in plain text
      * @param displayName the name to identify this client with
      */
     public void sendHandshake(String login, String password, String displayName) {
-        client.sendTCP(new HandshakeRequest(login, password, displayName));
+        client.sendTCP(new HandshakeRequest(login, password, displayName, AppVersion.getVersion()));
     }
 
     /**

@@ -119,7 +119,7 @@ public class NetworkServer {
      */
     protected void onReceived(Connection connection, Object object) {
         if (object instanceof HandshakeRequest request) {
-            connection.sendTCP(handleHandshake(connection, request));
+            connection.sendTCP(resolveHandshakeResponse(connection, request));
         } else if (object instanceof TcpPingMessage ping) {
             connection.sendTCP(new TcpPongMessage(ping.getTimestamp()));
         } else if (object instanceof UdpPingMessage ping) {
@@ -128,9 +128,33 @@ public class NetworkServer {
     }
 
     /**
-     * Produces the response to a client's handshake request. The default
-     * implementation accepts every request unconditionally; subclasses may
-     * override this to add validation, such as protocol version checks or
+     * Rejects a handshake whose {@link HandshakeRequest#getVersion()} doesn't
+     * match this server's own {@link AppVersion#getVersion()} (design.md
+     * 3.10) before {@link #handleHandshake} — and whatever it does, such as
+     * an account lookup — ever runs. A version mismatch is grounds for
+     * rejection on its own, regardless of whether the credentials would
+     * otherwise be valid.
+     *
+     * @param connection the connection the request came from
+     * @param request    the handshake request
+     * @return a rejecting {@link HandshakeResponse} on a version mismatch,
+     *         otherwise whatever {@link #handleHandshake} returns
+     */
+    private HandshakeResponse resolveHandshakeResponse(Connection connection, HandshakeRequest request) {
+        String serverVersion = AppVersion.getVersion();
+        String clientVersion = request.getVersion();
+        if (!serverVersion.equals(clientVersion)) {
+            return new HandshakeResponse(false, "Client version " + clientVersion + " does not match server version "
+                + serverVersion + ". Please update your client.");
+        }
+        return handleHandshake(connection, request);
+    }
+
+    /**
+     * Produces the response to a client's handshake request whose version
+     * already matches this server's own (see {@link #resolveHandshakeResponse}).
+     * The default implementation accepts every request unconditionally;
+     * subclasses may override this to add further validation, such as
      * account authentication.
      *
      * @param connection the connection the request came from

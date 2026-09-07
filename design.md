@@ -1643,20 +1643,37 @@ configured beyond the extension itself):**
 mechanism work end to end — not a real release, no GitHub Release/build
 artifacts published for it (see the still-open items below).
 
-**Not yet built — planned flow, in order:**
-1. Embed the computed version into both jars: a resource-filtered
-   properties file in `core` (`${project.version}` substituted by Maven
-   at `package` time), read at startup by a small shared class — since
-   both `server` and `lwjgl3` depend on `core`, they automatically carry
-   the same baked-in version without duplicating the resource.
-2. Add a version field to `HandshakeRequest`/`HandshakeResponse`
-   (`core/.../net/messages/`, 3.6): the server rejects
-   (`accepted=false`) a mismatched client with a message naming both
-   versions.
-3. An `update.cmd`, shipped inside the client zip, to make picking up a
+**Version check — implemented 2026-09-07:**
+1. `core`'s `starwars-version.properties` (`version=${project.version}`,
+   resource-filtered — `core/pom.xml`'s `<build><resources>`) is read by
+   the new `AppVersion` (`core/.../net/`), a small eager-loading wrapper
+   around the classpath resource. Since both `server` and `lwjgl3` depend
+   on `core` and bundle its resources into their shaded jars, they
+   automatically carry the same baked-in version without duplicating
+   anything.
+2. `HandshakeRequest` (3.6) gained a `version` field, stamped by
+   `NetworkClient#sendHandshake` from `AppVersion.getVersion()` —
+   deliberately *not* read by `HandshakeRequest` itself, to keep it a
+   plain data holder; the network layer is what's responsible for knowing
+   where the version comes from. `HandshakeResponse` did **not** need a
+   matching field: on rejection its existing free-text `message` already
+   names both versions, and the existing "wrong password" error display
+   in `ConnectScreen` (5.1) shows it verbatim — no UI changes needed at
+   all for this feature.
+3. The comparison itself lives in `NetworkServer#resolveHandshakeResponse`
+   (new, private), called from `onReceived` *before* `handleHandshake` —
+   so a version mismatch is rejected before `GameNetworkServer`'s account
+   lookup (3.6) ever runs, and every current/future `NetworkServer`
+   subclass gets the check for free rather than having to remember to add
+   it. Covered by `NetworkServerClientIntegrationTest` (real loopback
+   sockets, a deliberately wrong version) and `AppVersionTest`/
+   `MessageRegistryTest`'s round-trip test (updated for the new field).
+
+**Still not built:**
+4. An `update.cmd`, shipped inside the client zip, to make picking up a
    new version fast — mechanism not yet designed. This is what's meant to
    make the "any release forces an update" trade-off above tolerable.
-4. A tag-triggered GitHub Actions workflow (`push: tags: v*`) that
+5. A tag-triggered GitHub Actions workflow (`push: tags: v*`) that
    packages `server`+`lwjgl3`, zips the shaded jars, and publishes them
    to a GitHub Release for that tag — deliberately **not built yet**
    (holding off until closer to an actual first release, see CLAUDE.md
@@ -2356,9 +2373,11 @@ once a component is actually being worked on.
       placeholder `<version>0</version>` in every pom.xml; `v0.0.1` tagged
       to see it compute a real version end to end. See 3.10 for the full
       plan.
-- [ ] **Client/server version check** — bake the jgitver-computed version
-      into both jars, add it to `HandshakeRequest`/`HandshakeResponse`,
-      reject mismatched clients. See 3.10.
+- [x] **Client/server version check (2026-09-07)** — `AppVersion` bakes
+      the jgitver-computed version into both jars; `HandshakeRequest`
+      carries it; `NetworkServer` rejects a mismatch before the account
+      lookup runs, reusing the Connect Dialog's existing error display.
+      See 3.10.
 - [ ] **`update.cmd`** in the client zip, to make picking up a new version
       low-friction. See 3.10.
 - [ ] **Tag-triggered GitHub Actions release workflow** — package, zip,

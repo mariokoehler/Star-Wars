@@ -70,11 +70,12 @@ class MessageRegistryTest {
 
     @Test
     void handshakeRequestSurvivesRoundTrip() {
-        HandshakeRequest original = new HandshakeRequest("red_five", "s3cret", "Red Five");
+        HandshakeRequest original = new HandshakeRequest("red_five", "s3cret", "Red Five", "1.2.3-test");
         HandshakeRequest copy = roundTrip(original, HandshakeRequest.class);
         assertEquals(original.getLogin(), copy.getLogin());
         assertEquals(original.getPassword(), copy.getPassword());
         assertEquals(original.getDisplayName(), copy.getDisplayName());
+        assertEquals(original.getVersion(), copy.getVersion());
     }
 
     @Test
