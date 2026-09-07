@@ -147,7 +147,7 @@ public class AccountStore {
         if (existing == null) {
             String salt = PasswordHasher.generateSalt();
             String hash = PasswordHasher.hash(password, salt);
-            PlayerAccount created = new PlayerAccount(login, hash, salt, displayName, 0);
+            PlayerAccount created = new PlayerAccount(login, hash, salt, displayName, 0, 0, 0);
             accountsByLogin.put(login, created);
             dirty.set(true);
             return AuthResult.success(created, "Welcome, " + displayName + "! Account created.");
@@ -178,6 +178,39 @@ public class AccountStore {
             return;
         }
         account.setXp(account.getXp() + amount);
+        dirty.set(true);
+    }
+
+    /**
+     * Increments an existing account's lifetime kill count by one
+     * (design.md 2.11's addendum - kills/deaths are persisted the same way
+     * as XP, specifically so they survive a combat death, which
+     * disconnects the client). Does nothing if the login doesn't exist,
+     * same reasoning as {@link #addXp}.
+     *
+     * @param login the killer's account login name
+     */
+    public synchronized void addKill(String login) {
+        PlayerAccount account = accountsByLogin.get(login);
+        if (account == null) {
+            return;
+        }
+        account.setKills(account.getKills() + 1);
+        dirty.set(true);
+    }
+
+    /**
+     * Increments an existing account's lifetime death count by one, see
+     * {@link #addKill}.
+     *
+     * @param login the victim's account login name
+     */
+    public synchronized void addDeath(String login) {
+        PlayerAccount account = accountsByLogin.get(login);
+        if (account == null) {
+            return;
+        }
+        account.setDeaths(account.getDeaths() + 1);
         dirty.set(true);
     }
 

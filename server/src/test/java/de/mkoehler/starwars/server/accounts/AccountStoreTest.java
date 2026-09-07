@@ -168,6 +168,54 @@ class AccountStoreTest {
     }
 
     @Test
+    void addKillIncreasesTheRunningTotal(@TempDir Path tempDir) {
+        AccountStore store = createStore(tempDir.resolve("accounts.json"));
+        store.login("han", "solo123", "Han Solo");
+
+        store.addKill("han");
+        store.addKill("han");
+
+        assertEquals(2, store.findByLogin("han").orElseThrow().getKills());
+    }
+
+    @Test
+    void addDeathIncreasesTheRunningTotal(@TempDir Path tempDir) {
+        AccountStore store = createStore(tempDir.resolve("accounts.json"));
+        store.login("han", "solo123", "Han Solo");
+
+        store.addDeath("han");
+
+        assertEquals(1, store.findByLogin("han").orElseThrow().getDeaths());
+    }
+
+    @Test
+    void addKillAndAddDeathForAnUnknownLoginDoNothing(@TempDir Path tempDir) {
+        AccountStore store = createStore(tempDir.resolve("accounts.json"));
+
+        store.addKill("nobody");
+        store.addDeath("nobody");
+
+        assertTrue(store.findByLogin("nobody").isEmpty());
+    }
+
+    @Test
+    void killsAndDeathsSurviveReloadFromDisk(@TempDir Path tempDir) {
+        Path file = tempDir.resolve("accounts.json");
+        AccountStore first = createStore(file);
+        first.login("han", "solo123", "Han Solo");
+        first.addKill("han");
+        first.addKill("han");
+        first.addDeath("han");
+        first.flush();
+
+        AccountStore reloaded = createStore(file);
+
+        PlayerAccount account = reloaded.findByLogin("han").orElseThrow();
+        assertEquals(2, account.getKills());
+        assertEquals(1, account.getDeaths());
+    }
+
+    @Test
     void mutationsAreNotOnDiskUntilFlushed(@TempDir Path tempDir) throws IOException {
         Path file = tempDir.resolve("accounts.json");
         AccountStore store = createStore(file);

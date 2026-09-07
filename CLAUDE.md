@@ -1488,6 +1488,78 @@ Only `ConnectScreen` is remote-controllable; every other screen still
 needs the old keyboard/screenshot approach until this pattern proves
 worth extending.
 
+**Kills/deaths moved from session-only to persisted account totals; the
+Death Screen gained its own scoreboard — implemented 2026-09-08.** Full
+writeup in design.md 2.11/5.1's addenda. User feedback after living
+with the scoreboard for a session: kills/deaths reset to zero on every
+death, since a combat death disconnects the client and they were
+tracked as in-memory state keyed by the ephemeral `playerId`. User
+proposed their own fix ("maybe it's just easier to persist them in the
+account") - went with it: simpler than any session-scoped alternative
+(reused the exact `AccountStore.addXp` pattern already there for XP),
+more robust (survives death *and* reconnect *and* even a server
+restart), and net *removed* code from `GameNetworkServer` (its two
+in-memory maps are gone, `broadcastScoreboard()` now reads
+kills/deaths from the account the same way it already read XP).
+`PlayerAccount`'s constructor gained two params (`kills`, `deaths`) -
+its only other caller, `AccountStore.login`'s account-creation path,
+was updated too; old `accounts.json` entries missing the new fields
+deserialize them as `0` for free (confirmed live against this
+project's own real accounts file, which predates the change).
+
+Second half of the ask: "it would be nice if you could call up the
+scoreboard while in the death screen as well" - own stats only, since
+that screen has no live server connection (the user correctly
+anticipated this as the likely complication themselves).
+`Client.goToDeathScreen()` now hands `DeathScreen` a one-shot
+`PlayerScoreEntry` snapshot; `GameNetworkServer.handleShipDestroyed`
+also broadcasts the scoreboard once immediately (not just its existing
+1-second cadence) right before the death notification, both over the
+same ordered TCP channel, so that snapshot is guaranteed fresh -
+without this the death that just happened wouldn't yet be reflected.
+
+**Verified live, fully end-to-end, with a real kill** (not just the new
+`AccountStoreTest.addKill`/`addDeath` cases mirroring the existing
+`addXp` ones): two real client processes, a real kill landed, the
+killer's live scoreboard immediately showed the update; the victim's
+Death Screen, held TAB, showed its own `DEATHS=1` mid-death, fully
+disconnected - the exact moment that used to always read zero. Then
+sent the victim through ESC → Ship Selection → respawn (a genuinely new
+connection/`playerId`, confirmed via the server's connection log) and
+confirmed the live scoreboard still showed `DEATHS=1`, not reset -
+proving the fix survives a real reconnect, not just the Death Screen's
+own one-shot snapshot. Full `mvn clean test` green throughout.
+
+**Real bug found by the user, fixed 2026-09-08: pressing TAB on the
+Connect screen typed a literal tab character into whichever field it
+just moved focus to.** Only became visible once the live TTF font
+landed — "SF Distant Galaxy" happens to render a real (small
+rectangle) glyph for the tab character, where VisUI's old default font
+apparently didn't, or rendered something inconspicuous enough nobody
+had spotted it. Root cause, confirmed by actually reading
+`TextField.java`'s real source (`gdx-1.14.2-sources.jar`, not
+guessed): `TextField.InputListener.keyTyped`'s `checkFocusTraversal`
+only swallows the tab character when `focusTraversal` is `true` -
+`ConnectScreen` sets it `false` on every field (see this file's own
+earlier Connect Dialog history - needed to fix a *different*,
+already-resolved double-focus-jump bug), so with it off, tab silently
+falls through to the same "insert this character" branch every other
+keystroke goes through - landing in the newly-focused field, since
+that stage-level listener's `keyDown` already reassigned focus before
+this same keypress's separate `keyTyped` event fires. Fixed by adding
+a `TextField.TextFieldFilter` (`c != '\t'`) to every field - narrower
+than reverting `focusTraversal`, and doesn't reopen the bug that
+setting it false originally fixed. **General rule worth repeating:**
+when you need precise details of how a lightly-documented library
+method actually behaves, check whether its sources jar is already in
+`~/.m2` (`find ~/.m2/repository/... -iname "*sources*"`) before
+guessing from Javadoc or memory - it was, here, and reading the real
+`keyTyped` implementation directly is what turned a plausible theory
+into a confirmed root cause. Verified live: typed into all four fields
+via Tab navigation, screenshotted, confirmed no stray glyph at the
+start of any field's text anymore. Full `mvn clean test` green
+throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

@@ -7,6 +7,8 @@ import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.utils.ScreenUtils;
+import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
+import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ScrollingBackground;
 
 /**
@@ -51,6 +53,13 @@ import de.mkoehler.starwars.render.ScrollingBackground;
  * it - see {@code GameNetworkServer#onDisconnected}'s existing cleanup) but
  * is no longer exercised by this client, which always leaves well within
  * its 3-second window.
+ * <p>
+ * Holding <b>TAB</b> here shows the same scoreboard overlay as the
+ * gameplay screen ({@link de.mkoehler.starwars.render.ScoreboardHud},
+ * design.md 2.11/5.1's addendum) - but with only the local player's own
+ * row ({@link #myScore}, a snapshot handed over by {@code Client} at the
+ * moment of death), not everyone connected, since this screen has no live
+ * server connection of its own to ask for anyone else's.
  */
 public class DeathScreen implements Screen {
 
@@ -66,12 +75,14 @@ public class DeathScreen implements Screen {
 
     private final StarWarsGame game;
     private final ConnectionInfo connectionInfo;
+    private final PlayerScoreEntry myScore;
 
     private SpriteBatch batch;
     private OrthographicCamera camera;
     private ScrollingBackground background;
     private Texture dialogBackgroundTexture;
     private Texture quoteTexture;
+    private ScoreboardHud scoreboardHud;
 
     /**
      * Ignores keyboard input for exactly this screen's first {@link #render}
@@ -91,10 +102,14 @@ public class DeathScreen implements Screen {
      * @param connectionInfo the already-validated login this session was
      *                       established with, passed through to
      *                       {@link ShipSelectionScreen}
+     * @param myScore        a snapshot of the local player's own stats at
+     *                       the moment of death, for the TAB scoreboard
+     *                       overlay (see the class Javadoc)
      */
-    public DeathScreen(StarWarsGame game, ConnectionInfo connectionInfo) {
+    public DeathScreen(StarWarsGame game, ConnectionInfo connectionInfo, PlayerScoreEntry myScore) {
         this.game = game;
         this.connectionInfo = connectionInfo;
+        this.myScore = myScore;
     }
 
     @Override
@@ -102,6 +117,7 @@ public class DeathScreen implements Screen {
         batch = new SpriteBatch();
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+        scoreboardHud = new ScoreboardHud();
 
         background = new ScrollingBackground(new Texture(Gdx.files.internal("textures/backgrounds/menu_starfield.png")),
             BACKGROUND_DRIFT_DIRECTION_DEGREES, BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND);
@@ -135,6 +151,11 @@ public class DeathScreen implements Screen {
         background.render(batch, screenWidth, screenHeight);
         batch.draw(dialogBackgroundTexture, dialogScreenX, dialogScreenY, DIALOG_WIDTH, DIALOG_HEIGHT);
         batch.draw(quoteTexture, dialogScreenX, dialogScreenY, DIALOG_WIDTH, DIALOG_HEIGHT);
+        if (Gdx.input.isKeyPressed(Input.Keys.TAB)) {
+            float scoreboardX = (screenWidth - scoreboardHud.getPanelWidth()) / 2f;
+            float scoreboardY = (screenHeight - scoreboardHud.getPanelHeight()) / 2f;
+            scoreboardHud.render(batch, scoreboardX, scoreboardY, new PlayerScoreEntry[] {myScore});
+        }
         batch.end();
     }
 
@@ -161,5 +182,6 @@ public class DeathScreen implements Screen {
         background.dispose();
         dialogBackgroundTexture.dispose();
         quoteTexture.dispose();
+        scoreboardHud.dispose();
     }
 }

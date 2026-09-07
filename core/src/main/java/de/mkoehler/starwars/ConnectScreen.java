@@ -211,11 +211,20 @@ public class ConnectScreen implements Screen, RemoteControllable {
         passwordField.setPasswordMode(true);
         passwordField.setPasswordCharacter('*');
         tabOrder = new VisTextField[] {hostField, displayNameField, loginField, passwordField};
-        // TextField.focusTraversal defaults to true - it would otherwise handle TAB itself
-        // (jumping focus in Stage actor-tree order, not the field order below) *in addition to*
-        // the stage-level listener further down, double-stepping focus on every press.
         for (VisTextField field : tabOrder) {
+            // TextField.focusTraversal defaults to true - it would otherwise handle TAB itself
+            // (jumping focus in Stage actor-tree order, not the field order below) *in addition
+            // to* the stage-level listener further down, double-stepping focus on every press.
             field.setFocusTraversal(false);
+            // Side effect of the line above: TextField.InputListener#keyTyped only ever swallows
+            // the TAB character itself when focusTraversal is true (TextField.java's
+            // checkFocusTraversal) - with it off, TAB falls through to being typed like any other
+            // character instead, landing in whichever field the stage-level listener below just
+            // focused (its keyDown runs, and reassigns focus, before this same keypress's
+            // keyTyped fires). Invisible with VisUI's default font; visible with SF Distant
+            // Galaxy's box glyph for it (design.md 4.4/CLAUDE.md), which is what actually
+            // surfaced this - explicitly rejecting TAB here is the fix either way.
+            field.setTextFieldFilter((textField, c) -> c != '\t');
         }
 
         ConnectionConfigStore.load().ifPresentOrElse(saved -> {

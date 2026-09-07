@@ -418,12 +418,37 @@ public class Client implements Screen {
     /**
      * Leaves this match and shows {@link DeathScreen} (design.md 5.1) after
      * a real combat death - same disposal pattern/reasoning as
-     * {@link #returnToShipSelection()}.
+     * {@link #returnToShipSelection()}. Hands over a snapshot of the local
+     * player's own {@link #findMyScoreEntry()} so that screen can show at
+     * least the player's own stats (design.md 5.1's addendum) despite
+     * having no live server connection of its own.
      */
     private void goToDeathScreen() {
         transitionedAway = true;
-        game.setScreen(new DeathScreen(game, connectionInfo));
+        game.setScreen(new DeathScreen(game, connectionInfo, findMyScoreEntry()));
         dispose();
+    }
+
+    /**
+     * Returns the local player's own row from the latest
+     * {@link #scoreboardEntries} - the server broadcasts a fresh one
+     * immediately on every death (see {@code GameNetworkServer.handleShipDestroyed}),
+     * ordered ahead of the {@link ShipDestroyedMessage} that triggers
+     * {@link #goToDeathScreen()}, over the same reliable/ordered TCP
+     * channel, so by the time this runs the entry already reflects this
+     * very death. Falls back to a zeroed entry (using
+     * {@link ConnectionInfo#displayName()}) in the unexpected case no
+     * scoreboard broadcast has arrived yet at all.
+     *
+     * @return the local player's own current score entry
+     */
+    private PlayerScoreEntry findMyScoreEntry() {
+        for (PlayerScoreEntry entry : scoreboardEntries) {
+            if (entry.getPlayerId() == myPlayerId) {
+                return entry;
+            }
+        }
+        return new PlayerScoreEntry(myPlayerId, connectionInfo.displayName(), 0, 0, 0);
     }
 
     private void onWorldSnapshot(WorldSnapshotMessage snapshot) {

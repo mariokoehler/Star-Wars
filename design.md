@@ -1168,6 +1168,65 @@ than a struck-through/plain oval "0" — consistent across every "0" seen
 (a bare `DEATHS` value and the `0` inside `30`), so that's this font's
 actual design, not a rendering bug.
 
+**Addendum (2026-09-08): kills/deaths moved from session-only to
+persisted account totals, and the Death Screen gained its own
+scoreboard.** User feedback, after actually living with the feature for
+a session: kills/deaths reset to zero on every single death, which felt
+wrong — because a combat death disconnects the client (2.3-adjacent,
+confirmed above), and they were tracked as in-memory state keyed by the
+ephemeral per-connection `playerId`, cleared on disconnect. User's own
+framing: it'd be nicer if stats survived at least until the game is
+closed, or — their own suggested simplification — "maybe it's just
+easier to persist them in the account." Went with the latter: simpler
+(reuses the exact `AccountStore.addXp` pattern that already existed),
+more robust (survives death *and* reconnect *and* even a full game
+restart, not just "until closed"), and removed code rather than adding
+it — `GameNetworkServer`'s two in-memory maps
+(`killsByPlayerId`/`deathsByPlayerId`) are gone entirely, replaced by
+`PlayerAccount` gaining `kills`/`deaths` fields (mirroring `xp` exactly)
+and `AccountStore.addKill`/`addDeath`. `broadcastScoreboard()` now reads
+kills/deaths from the account the same way it already read XP, so it
+got *simpler*, not more complex. Old `accounts.json` entries missing
+the two new fields deserialize them as `0` for free (plain Jackson
+bean, no special handling needed) — verified live by loading this
+project's own real accounts file, which predates this change.
+
+`GameNetworkServer.handleShipDestroyed` also now calls
+`broadcastScoreboard()` once immediately (in addition to its existing
+1-second periodic cadence) right before sending `ShipDestroyedMessage` —
+both go over the same reliable/ordered TCP channel, so the victim's own
+client is guaranteed to have already applied the fresh
+`ScoreboardMessage` (updating `Client.scoreboardEntries`) by the time it
+reacts to its own death. This closed a real timing gap: without it, the
+death that just happened wouldn't yet be reflected by the time...
+
+**...the Death Screen's own new TAB overlay reads it.** Second half of
+the user's ask: "it would be nice if you could call up the scoreboard
+while in the death screen as well" — their own stats only is fine,
+since the screen has no live server connection of its own to ask about
+anyone else's (correctly anticipated by the user as the likely
+complication). `Client.goToDeathScreen()` hands `DeathScreen` a one-shot
+`PlayerScoreEntry` snapshot (`Client.findMyScoreEntry()`, found by
+`playerId` in `scoreboardEntries` — made reliably fresh by the
+immediate-broadcast-on-death above), and `DeathScreen` reuses
+`ScoreboardHud` exactly as `Client` does, just rendering a single-element
+array instead of every connected player's.
+
+**Verified live, fully end-to-end, real kill included — not just unit
+tests of the account logic (`AccountStoreTest` gained
+`addKill`/`addDeath` cases mirroring the existing `addXp` ones):** a
+real server + two real client processes (`stats_a`/`stats_b`, fresh
+accounts); `stats_a` landed a real kill; `stats_a`'s live TAB scoreboard
+immediately showed `KILLS=1`/`XP=30`; `stats_b`'s Death Screen, held TAB,
+showed its own row with `DEATHS=1` — a real player, mid-death, entirely
+disconnected from the server, correctly seeing an up-to-date stat that
+used to always read zero at this exact moment. Then `stats_b` continued
+(ESC) back to Ship Selection and respawned on a **new** connection (a
+new `playerId`, confirmed via the server's connection log) — its live
+in-flight scoreboard still showed `DEATHS=1`, not reset, proving the fix
+survives a real reconnect, not just the Death Screen's one-shot
+snapshot. Full `mvn clean test` green throughout.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -2974,6 +3033,15 @@ documents why it's skipped) and copying the raw files loose into
 `assets/textures/after_death/`; `DeathScreen` loads only
 `Dialog_Background.png` and whichever single `Quote_<n>.png` was dealt,
 as plain `Texture`s - at most ~2MB decoded per death instead of ~67MB.
+
+**Addendum (2026-09-08): holding TAB here now shows the local player's
+own scoreboard row.** Full writeup (including the related kills/deaths-
+persistence fix that made the numbers trustworthy at this exact moment)
+is in 2.11's own addendum. Short version: `Client` hands `DeathScreen` a
+one-shot `PlayerScoreEntry` snapshot of the player's own stats at the
+constructor, and `DeathScreen` reuses `ScoreboardHud` (2.11) to draw it
+- just the one row, since this screen has no live server connection of
+its own to ask about anyone else's.
 
 ### 5.2 Keybind Setup screen
 

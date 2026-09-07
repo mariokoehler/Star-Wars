@@ -113,13 +113,10 @@ public class GameNetworkServer extends NetworkServer {
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
     private final Map<Integer, ShipType> shipTypeByPlayerId = new HashMap<>();
-    // Populated on a successful handshake, removed on disconnect - lets a kill be credited to
-    // the killer's account (design.md - kill XP) via nothing more than their playerId.
+    // Populated on a successful handshake, removed on disconnect - lets a kill/death/XP change
+    // be credited to the right account (design.md - kill XP, 2.11's addendum) via nothing more
+    // than a playerId.
     private final Map<Integer, String> loginByPlayerId = new HashMap<>();
-    // Session-only (design.md 2.11 - never persisted, unlike XP): cleared per player on
-    // disconnect, never read back from anywhere on connect.
-    private final Map<Integer, Integer> killsByPlayerId = new HashMap<>();
-    private final Map<Integer, Integer> deathsByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
     private float scoreboardBroadcastTimer;
@@ -321,9 +318,21 @@ public class GameNetworkServer extends NetworkServer {
 
     /**
      * Handles a combat kill: tears down the victim's ship, schedules their
-     * respawn, records the kill/death for the scoreboard overlay (design.md
-     * 5.2 - session-only, never persisted), awards the killer kill XP
-     * ({@link #awardKillXp}), and broadcasts the death.
+     * respawn, credits the kill/death to each account's lifetime totals
+     * (design.md 2.11's addendum - persisted, same as XP, specifically so
+     * they survive a combat death rather than resetting every time, which
+     * they did back when they were tracked as in-memory per-connection
+     * state instead), awards the killer kill XP ({@link #awardKillXp}),
+     * broadcasts the just-updated scoreboard, and broadcasts the death.
+     * <p>
+     * The scoreboard broadcast happens deliberately <i>before</i> the
+     * {@link ShipDestroyedMessage} below, both over the same
+     * reliable/ordered TCP channel: this guarantees the victim's own
+     * client has already applied the fresh {@link ScoreboardMessage} (see
+     * {@code Client#onReceived}) by the time it reacts to its own death
+     * and switches to the Death Screen, which shows a snapshot of exactly
+     * that data (design.md 5.1's addendum) - without this ordering, the
+     * screen could show stats from just before this death.
      *
      * @param ship           the destroyed ship entity
      * @param killerPlayerId the id of whoever landed the fatal hit, or
@@ -334,12 +343,39 @@ public class GameNetworkServer extends NetworkServer {
     private void handleShipDestroyed(Entity ship, Integer killerPlayerId) {
         int playerId = destroyShipEntity(ship);
         respawnTimers.put(playerId, RESPAWN_DELAY_SECONDS);
-        deathsByPlayerId.merge(playerId, 1, Integer::sum);
+        recordDeath(playerId);
         if (killerPlayerId != null) {
-            killsByPlayerId.merge(killerPlayerId, 1, Integer::sum);
+            recordKill(killerPlayerId);
         }
         awardKillXp(playerId, killerPlayerId);
+        broadcastScoreboard();
         sendToAllTCP(new ShipDestroyedMessage(playerId));
+    }
+
+    /**
+     * Credits one death to a player's account, if their login is still
+     * known - see {@link #handleShipDestroyed}.
+     *
+     * @param playerId the destroyed ship's owning player id
+     */
+    private void recordDeath(int playerId) {
+        String login = loginByPlayerId.get(playerId);
+        if (login != null) {
+            accountStore.addDeath(login);
+        }
+    }
+
+    /**
+     * Credits one kill to a player's account, if their login is still
+     * known - see {@link #handleShipDestroyed}.
+     *
+     * @param playerId the killer's player id
+     */
+    private void recordKill(int playerId) {
+        String login = loginByPlayerId.get(playerId);
+        if (login != null) {
+            accountStore.addKill(login);
+        }
     }
 
     /**
@@ -521,8 +557,6 @@ public class GameNetworkServer extends NetworkServer {
             connectionsByPlayerId.remove(playerId);
             shipTypeByPlayerId.remove(playerId);
             loginByPlayerId.remove(playerId);
-            killsByPlayerId.remove(playerId);
-            deathsByPlayerId.remove(playerId);
             respawnTimers.remove(playerId);
             despawnShip(playerId);
         });
@@ -633,10 +667,13 @@ public class GameNetworkServer extends NetworkServer {
      * Broadcasts one {@link PlayerScoreEntry} per currently-connected player
      * (design.md 2.11's TAB overlay) - everyone tracked in
      * {@link #connectionsByPlayerId}, whether or not they've spawned a ship
-     * yet, not just those with a live {@link ShipState}. Sent over the
-     * reliable TCP channel, on {@link #SCOREBOARD_BROADCAST_INTERVAL_SECONDS}'s
-     * much slower cadence than {@link #broadcastSnapshot()} - this data isn't
-     * render-critical.
+     * yet, not just those with a live {@link ShipState}. XP/kills/deaths
+     * are read live from each player's account (design.md 2.11's addendum -
+     * all three are lifetime totals now), not cached anywhere here. Sent
+     * over the reliable TCP channel: on {@link #SCOREBOARD_BROADCAST_INTERVAL_SECONDS}'s
+     * slower periodic cadence (this data isn't normally render-critical),
+     * and once more immediately whenever a kill/death actually happens
+     * (see {@link #handleShipDestroyed}).
      */
     private void broadcastScoreboard() {
         PlayerScoreEntry[] entries = new PlayerScoreEntry[connectionsByPlayerId.size()];
@@ -646,8 +683,9 @@ public class GameNetworkServer extends NetworkServer {
             Optional<PlayerAccount> account = login != null ? accountStore.findByLogin(login) : Optional.empty();
             String displayName = account.map(PlayerAccount::getDisplayName).orElse("?");
             int xp = account.map(PlayerAccount::getXp).orElse(0);
-            entries[i++] = new PlayerScoreEntry(playerId, displayName, xp,
-                killsByPlayerId.getOrDefault(playerId, 0), deathsByPlayerId.getOrDefault(playerId, 0));
+            int kills = account.map(PlayerAccount::getKills).orElse(0);
+            int deaths = account.map(PlayerAccount::getDeaths).orElse(0);
+            entries[i++] = new PlayerScoreEntry(playerId, displayName, xp, kills, deaths);
         }
         sendToAllTCP(new ScoreboardMessage(entries));
     }

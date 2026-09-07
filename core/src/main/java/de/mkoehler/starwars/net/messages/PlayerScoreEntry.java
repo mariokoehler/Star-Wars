@@ -2,8 +2,11 @@ package de.mkoehler.starwars.net.messages;
 
 /**
  * One connected player's row in the {@link ScoreboardMessage} overlay: their
- * display name, total account XP, and this-session-only kill/death counts
- * (design.md 2.11 — session stats are never persisted, unlike XP).
+ * display name and total account XP/kills/deaths - all three are lifetime
+ * totals, persisted on the account (design.md 2.11's addendum; kills/deaths
+ * originally reset on every death since a combat death disconnects the
+ * client, before they were moved from in-memory per-connection state to the
+ * account, the same way XP already worked).
  */
 public class PlayerScoreEntry {
 
@@ -25,8 +28,8 @@ public class PlayerScoreEntry {
      * @param playerId    the player's id
      * @param displayName the name to show for this player
      * @param xp          the player's total accumulated account XP
-     * @param kills       this session's kill count for the player
-     * @param deaths      this session's death count for the player
+     * @param kills       the player's total accumulated account kills
+     * @param deaths      the player's total accumulated account deaths
      */
     public PlayerScoreEntry(int playerId, String displayName, int xp, int kills, int deaths) {
         this.playerId = playerId;
