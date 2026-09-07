@@ -239,6 +239,11 @@
               <mainClass>${mainClass}</mainClass>
               <type>APP_IMAGE</type>
               <destination>${jpackage.outputDir}</destination>
+              <!-- Lives in assets-raw/, not lwjgl3/src/main/dist/, alongside this project's
+                   other pre-processed source art (design.md's assets-raw/ -> assets/
+                   convention) - jpackage only needs a build-time file path for this, it never
+                   ends up on the classpath, so no copy into assets/ is needed. -->
+              <icon>${project.basedir}/../assets-raw/icon.ico</icon>
               <javaOptions>
                 <option>--enable-native-access=ALL-UNNAMED</option>
               </javaOptions>

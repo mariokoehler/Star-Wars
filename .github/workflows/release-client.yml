@@ -1,0 +1,56 @@
+# Builds the packaged Windows client (design.md 3.11) and publishes it to a
+# GitHub Release whenever a version tag is pushed. Runs the exact same
+# `release-client` Maven profile a local build would - see lwjgl3/pom.xml.
+#
+# NOTE: this repo is currently private, so the resulting release asset is
+# only downloadable by authenticated repo collaborators - update.cmd's
+# anonymous download (and a friend just clicking the releases page) won't
+# work until the repo goes public. Deliberately accepted for now (see
+# design.md 3.11's "Still open" list); revisit before the first real
+# playtest with people outside this GitHub account.
+name: Release client
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-client:
+    # jpackage --type app-image produces a Windows-native app-image (a real
+    # .exe + a Windows-built jlink runtime) - this has to run on Windows,
+    # not just target it.
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # jgitver (design.md 3.10) computes the version from git tags/
+          # history - a shallow, tag-less checkout would break that.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      - name: Build the client zip
+        # Same command as a local release build (README/CLAUDE.md) - -am so
+        # `core` is built fresh in this reactor run, no separate install step
+        # needed on a clean CI checkout.
+        run: mvn -pl lwjgl3 -am -Prelease-client verify
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" `
+            "lwjgl3/target/StarWars-Client.zip" `
+            --title "$env:GITHUB_REF_NAME" `
+            --generate-notes

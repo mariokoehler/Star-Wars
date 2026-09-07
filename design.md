@@ -1794,12 +1794,38 @@ publish the client zip. Publishing the client first means players who
 update immediately start failing the handshake against a server that
 hasn't caught up yet.
 
-**Still open:** an app icon (`lwjgl3/src/main/dist/icon.ico` doesn't
-exist yet, so jpackage uses its default); the GitHub Actions workflow
-itself (§6); the successful-update path is untested until a real release
-exists; no code-signing certificate is planned, so first run will trigger
-Windows SmartScreen's "protected your PC" warning (accepted trade-off,
-not a bug).
+**Icon and release workflow — implemented 2026-09-07.** The app icon
+lives at `assets-raw/icon.ico` (alongside this project's other
+pre-processed source art, design.md's `assets-raw/` → `assets/`
+convention) rather than under `lwjgl3/src/main/dist/` as originally
+sketched — jpackage's `icon` parameter just needs a build-time file path,
+never the classpath, so no copy into `assets/` is needed either.
+`.github/workflows/release-client.yml` runs on `push: tags: v*`, checks
+out full history (`fetch-depth: 0`, `fetch-tags: true` — jgitver needs
+real tag history, not a shallow clone), builds with the exact same `mvn
+-pl lwjgl3 -am -Prelease-client verify` a local release build uses, and
+publishes `StarWars-Client.zip` to a GitHub Release via `gh release
+create` (not a third-party Action, since `gh` is pre-authenticated on
+GitHub-hosted runners via `GH_TOKEN`/`secrets.GITHUB_TOKEN`).
+
+**Known limitation, deliberately accepted for now (2026-09-07): this repo
+is currently private.** GitHub release assets on a private repo require
+authentication to download, so `update.cmd`'s anonymous
+`Invoke-WebRequest` — and a friend just clicking the releases page — get
+a 404 today. Only the repo owner (authenticated) can actually exercise
+the full download/update flow right now; decided to keep it this way
+until closer to the first real playtest with people outside this GitHub
+account, at which point the repo needs to go public for any of this
+distribution mechanism to work for anyone else. Worth remembering before
+assuming "the release pipeline works" means "a friend could use it
+today" - it doesn't yet.
+
+**Still open:** the successful-update path is untested until a real
+release exists; no code-signing certificate is planned, so first run
+will trigger Windows SmartScreen's "protected your PC" warning (accepted
+trade-off, not a bug); the icon is a single 32×32 image, not a
+multi-resolution `.ico` (fine for now, could look sharper at other
+sizes - e.g. the taskbar - later).
 
 ## 4. Rendering & presentation
 
@@ -2499,9 +2525,12 @@ once a component is actually being worked on.
       download-failure paths both exercised for real) but the
       successful-download/swap path is still unverified - no release
       exists yet to download. See 3.11.
-- [ ] **Tag-triggered GitHub Actions release workflow** — run the
-      `release-client` profile (3.11) and publish `StarWars-Client.zip`
-      to a GitHub Release on `v*` tag push. Deliberately not started yet.
+- [x] **Tag-triggered GitHub Actions release workflow (2026-09-07)** —
+      `.github/workflows/release-client.yml` runs the `release-client`
+      profile and publishes `StarWars-Client.zip` to a GitHub Release on
+      `v*` tag push. Not yet triggered for a real release; repo is still
+      private (see 3.11's "known limitation"), so the published asset
+      isn't downloadable by anyone outside this GitHub account yet.
 - [x] **Entity/component model (first pass, server-side)** — Ashley set
       up in `core` under `de.mkoehler.starwars.sim`, used by
       `GameNetworkServer`: `PhysicsBodyComponent`, `PlayerControlledComponent`,
@@ -2623,13 +2652,6 @@ consumes them.
 Track unresolved decisions here so they don't get lost. Move an item into
 the relevant section above once decided.
 
-- **Client distribution**: **packaging built 2026-09-07 (see 3.11)** — a
-  jpackage-produced `StarWars-Client.zip` (native exe + jlink runtime +
-  `update.cmd`), meant to be attached to a GitHub Release by a
-  tag-triggered Actions workflow. Only that workflow itself remains
-  unbuilt, so this still isn't how players actually get the client today
-  — but `mvn -pl lwjgl3 -am -Prelease-client verify` produces the real
-  artifact locally already.
 - **Ship roster**: which specific iconic ships, and their relative
   stats/balance. **Idea floated 2026-09-06, not implemented:** a "Ship
   Tree" for XP unlocks (3.6/6) — every account starts with the faction-
