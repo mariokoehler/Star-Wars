@@ -1644,6 +1644,99 @@ entirely, restarted both, logged in again, and confirmed the unlock was
 still there** — real persistence across a full restart, not just within
 one session. Full `mvn clean test` green throughout.
 
+**Ship Tree (branch-order unlock gating) + hover tooltips — implemented
+2026-09-08, same session, right after the above.** See design.md 2.13
+for the full writeup. Once the user saw the full gameplay-loop status
+recap (this file/design.md's §6/§7), they remembered the "Ship Tree"
+idea from 2026-09-06 (§7) and asked for it now: unlocking isn't just
+XP-gated (2.12) anymore, it's branch-gated too — **Imperial:** TIE
+Fighter → TIE Interceptor → Star Destroyer; **Rebel:** A-Wing → X-wing
+→ Falcon (Snowspeeder outside both, always unlocked). New pure,
+unit-tested `core.sim.ShipTree` (`prerequisiteOf`/`prerequisiteMet`) is
+the one place this table lives, used identically by the client (which
+padlock to show) and the server (`GameNetworkServer.handleUnlockShipRequest`,
+re-validated there same as the XP check already was — never trusting
+the client's own padlock choice). A third padlock, user-provided
+(`assets-raw/menu/Padlock_White_TierTooHigh.png`), shows whenever the
+branch prerequisite isn't met, taking priority over the green/white
+affordability padlock even when a ship would otherwise be affordable —
+knowing which ship to unlock first is the more fundamental blocker.
+
+**Note on the branch order itself:** the user's actual instruction here
+was "A-Wing → X-Wing → Falcon" for the Rebel side — the *reverse* of
+§7's original 2026-09-06 sketch (which had X-wing before A-Wing). Went
+with the fresh instruction as authoritative and corrected design.md's
+§7 accordingly. Turned out not to require any data changes at all:
+`ShipType`'s tiers (2.10, set the same day the idea was first floated)
+already had A-Wing at tier 2 and X-wing at tier 3 — i.e. already
+encoded this exact order — so `ShipTree`'s prerequisite table just
+needed to agree with tiers that were already correct.
+
+**Tooltips — new user request, answered same session: "would it be
+possible to display a tooltip when the player moves the mouse over the
+padlock?"** Yes — new `core.render.Tooltip`, a floating text box with
+its own drawn background (a tinted, stretched 1×1-pixel `Texture`
+rather than pulling in a `ShapeRenderer` for one rectangle), using
+`GameFonts`' live "SF Distant Galaxy" text (third consumer, after
+`ConnectScreen`/`ScoreboardHud`). Shows exactly two messages, only for
+the two locked-and-blocked cases (never for green/already-unlocked,
+both already self-explanatory): "You need to unlock the A-Wing before
+you can unlock this." (tree-blocked) or "You're lacking 1000 XP to
+unlock this ship." (affordable tree-wise, short on XP). New
+`ShipType.getDisplayName()` (e.g. `"TIE Fighter"`) feeds the first
+message — this codebase's first-ever need for a ship's name as live
+text rather than baked into art.
+
+**Real bug caught before it ever ran, by re-reading the draw call, not
+by seeing it happen:** `SpriteBatch.getColor()` returns the batch's own
+live, mutable `Color` field, not a snapshot. The first draft of
+`Tooltip.render` saved that reference to restore "the previous tint"
+after temporarily setting a background color — but since `setColor(...)`
+mutates that very object in place, the "saved" reference would have
+already become the new color by the time it was used to "restore" the
+old one, permanently tinting every draw call after the first tooltip.
+Fixed with an explicit `.cpy()` before mutating. **General rule for
+later: any libGDX getter that returns a live mutable field (not just
+`SpriteBatch.getColor()`) needs an explicit copy before a "save, change,
+restore" pattern** — assigning the reference itself doesn't save
+anything.
+
+**Automation gotcha hit heavily during this session's live verification,
+worth stating plainly since it cost real time: after a failed form
+submit, keyboard focus stays wherever it last was — not back at the
+first field — so a fixed "N tabs from the start" script only works on a
+screen's very first `show()`, not after any retry within the same
+running instance.** Blindly re-running the same tab sequence after a
+correction typed new text into the *wrong* field more than once here.
+**Fix that actually worked: after any correction, take a checkpoint
+screenshot and visually confirm every field's content before pressing
+Enter again**, rather than trusting the tab-count math to still hold.
+Also re-confirmed the existing "always verify `GetForegroundWindow()`
+before typing" rule (CLAUDE.md, turret-weapons milestone) the hard way:
+one `SendKeys` call fired without re-checking foreground focus first
+landed nothing useful, quietly. **Also: killing several `java.exe`
+processes by PID after enumerating them with `Get-Process` requires
+recording which PID is the server *before* tearing anything down** — a
+blind `taskkill` across "all the PIDs from the last listing" once
+killed the dedicated server along with the client it was meant to
+target (exec:java runs the server in-process, no fork, so it doesn't
+get its own obviously-separate PID the way exec:exec's forked client
+does), producing a red herring "could not reach 'localhost'" login
+error that had nothing to do with the actual game code.
+
+**Verified live, fully end-to-end, with a real server + client and a
+real unlock:** a fresh account showed the X-wing tier-too-high
+(correctly overriding the white padlock that would otherwise apply)
+with a hover tooltip reading "You need to unlock the A-Wing before you
+can unlock this."; TIE Fighter (no prerequisite) showed plain white
+with "You're lacking 1000 XP to unlock this ship."; seeded to 6000 XP
+with TIE Fighter already unlocked, TIE Interceptor showed green,
+SPACE unlocked it; **Star Destroyer, previously tier-too-high, switched
+to green the instant TIE Interceptor's unlock landed — no restart
+needed**, confirming the prerequisite check reads the account's
+just-updated state, not a stale one. Full `mvn clean test` green
+throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

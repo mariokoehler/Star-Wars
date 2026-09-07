@@ -41,6 +41,7 @@ import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.ShipTree;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.ShipUnlocks;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
@@ -549,13 +550,13 @@ public class GameNetworkServer extends NetworkServer {
 
     /**
      * Handles an {@link UnlockShipRequest} (design.md - ship unlocks):
-     * re-validates affordability server-side (the client's own "green
-     * padlock" UI is only ever a convenience, never trusted on its own),
-     * and if affordable, adds the ship type to the account's unlocked set
-     * and persists it. Always replies with the account's current XP/
-     * unlocked-ships state, whether the ship ends up unlocked just now,
-     * was already unlocked (treated as a harmless success, not an error),
-     * or the request is denied for being unaffordable.
+     * re-validates both the {@link ShipTree} branch prerequisite and XP
+     * affordability server-side (the client's own padlock UI is only ever a
+     * convenience, never trusted on its own), and if both pass, adds the
+     * ship type to the account's unlocked set and persists it. Always
+     * replies with the account's current XP/unlocked-ships state, whether
+     * the ship ends up unlocked just now, was already unlocked (treated as
+     * a harmless success, not an error), or the request is denied.
      *
      * @param playerId   the requesting player's id
      * @param connection that player's connection, to reply to
@@ -571,6 +572,10 @@ public class GameNetworkServer extends NetworkServer {
         Set<ShipType> unlockedShips = account.getUnlockedShips();
         if (ShipUnlocks.isUnlocked(shipType, unlockedShips)) {
             connection.sendTCP(new UnlockShipResponse(true, "Already unlocked.", account.getXp(), toArray(unlockedShips)));
+            return;
+        }
+        if (!ShipTree.prerequisiteMet(shipType, unlockedShips)) {
+            connection.sendTCP(new UnlockShipResponse(false, "Unlock the previous ship in this branch first.", account.getXp(), toArray(unlockedShips)));
             return;
         }
         int availableXp = ShipUnlocks.availableXp(account.getXp(), unlockedShips);

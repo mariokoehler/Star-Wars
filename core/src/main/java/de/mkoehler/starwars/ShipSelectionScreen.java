@@ -16,7 +16,9 @@ import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.render.DialogLayout;
 import de.mkoehler.starwars.render.ScrollingBackground;
+import de.mkoehler.starwars.render.Tooltip;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.ShipTree;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.ShipUnlocks;
 
@@ -64,6 +66,15 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * {@link ShipType#SNOWSPEEDER} never shows a padlock at all — it's always
  * unlocked. Start/ENTER do nothing for a still-locked ship, same as this
  * screen already does nothing for input on its very first frame.
+ * <p>
+ * <b>Ship Tree (design.md):</b> unlocking is also gated by
+ * {@link ShipTree} — each branch ship needs its own predecessor already
+ * unlocked, not just enough XP. A ship blocked this way shows the
+ * "Padlock_White_TierTooHigh" overlay regardless of affordability; hovering
+ * the mouse over a locked ship's portrait/padlock (whichever kind) shows a
+ * {@link Tooltip} explaining exactly why — missing XP amount, or which
+ * ship to unlock first — since neither padlock's baked-in text alone says
+ * either of those specifics.
  */
 public class ShipSelectionScreen implements Screen {
 
@@ -119,6 +130,13 @@ public class ShipSelectionScreen implements Screen {
     private TextureRegion startButtonHoverRegion;
     private TextureRegion padlockGreenRegion;
     private TextureRegion padlockWhiteRegion;
+    private TextureRegion padlockTierTooHighRegion;
+    private Tooltip tooltip;
+
+    private static final int TOOLTIP_FONT_SIZE_PX = 16;
+    /** Offset from the mouse cursor so the tooltip doesn't sit directly under it. */
+    private static final float TOOLTIP_OFFSET_X = 18f;
+    private static final float TOOLTIP_OFFSET_Y = 18f;
 
     private NetworkClient networkClient;
     private final Queue<Runnable> pendingUpdates = new ConcurrentLinkedQueue<>();
@@ -174,6 +192,8 @@ public class ShipSelectionScreen implements Screen {
         startButtonHoverRegion = menuAtlas.findRegion("Start_Button_MouseOver");
         padlockGreenRegion = menuAtlas.findRegion("Padlock_Green");
         padlockWhiteRegion = menuAtlas.findRegion("Padlock_White");
+        padlockTierTooHighRegion = menuAtlas.findRegion("Padlock_White_TierTooHigh");
+        tooltip = new Tooltip(TOOLTIP_FONT_SIZE_PX);
 
         // Ship hull sprites are also in this atlas, but only the portrait regions are used here.
         shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
@@ -264,6 +284,11 @@ public class ShipSelectionScreen implements Screen {
         float startButtonY = dialogScreenY - START_BUTTON_GAP - START_BUTTON_HEIGHT;
         boolean hoveringStartButton = contains(startButtonX, startButtonY, START_BUTTON_WIDTH, START_BUTTON_HEIGHT, mouseX, mouseY);
 
+        float portraitBoxScreenX = DialogLayout.toScreenX(dialogScreenX, PORTRAIT_AREA_TOP_DOWN_X);
+        float portraitBoxScreenY = DialogLayout.toScreenY(dialogScreenY, DIALOG_HEIGHT, PORTRAIT_AREA_TOP_DOWN_Y, PORTRAIT_AREA_SIZE);
+        boolean hoveringPortrait = contains(portraitBoxScreenX, portraitBoxScreenY, PORTRAIT_AREA_SIZE, PORTRAIT_AREA_SIZE, mouseX, mouseY);
+        String tooltipText = hoveringPortrait ? tooltipTextFor(SHIP_TYPES[selectedIndex]) : null;
+
         if (handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton)) {
             // startMatch() just disposed this screen's own textures/batch (switching to Client) -
             // drawing anything else this frame would use them after disposal and crash (a GL
@@ -285,6 +310,10 @@ public class ShipSelectionScreen implements Screen {
         drawDescription(dialogScreenX, dialogScreenY);
         batch.draw(hoveringStartButton ? startButtonHoverRegion : startButtonRegion,
             startButtonX, startButtonY, START_BUTTON_WIDTH, START_BUTTON_HEIGHT);
+
+        if (tooltipText != null) {
+            tooltip.render(batch, tooltipText, mouseX + TOOLTIP_OFFSET_X, mouseY + TOOLTIP_OFFSET_Y, screenWidth, screenHeight);
+        }
 
         batch.end();
     }
@@ -310,6 +339,7 @@ public class ShipSelectionScreen implements Screen {
 
         ShipType selectedType = SHIP_TYPES[selectedIndex];
         if (!isUnlocked(selectedType) && !unlockRequestInFlight
+                && ShipTree.prerequisiteMet(selectedType, unlockedShips)
                 && availableXp() >= ShipStats.forType(selectedType).getUnlockCostXp()
                 && Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
             unlockRequestInFlight = true;
@@ -355,18 +385,29 @@ public class ShipSelectionScreen implements Screen {
     }
 
     /**
-     * Draws the green ("affordable, SPACE to unlock") or white ("not enough
+     * Draws the tier-too-high ("unlock the previous ship in this branch
+     * first"), green ("affordable, SPACE to unlock"), or white ("not enough
      * XP") padlock overlay, centered over the portrait, for the currently-
      * selected ship type — or nothing at all if it's already unlocked (see
-     * the class Javadoc's "Ship unlocks" section).
+     * the class Javadoc's "Ship unlocks"/"Ship Tree" section). The tree
+     * check ({@link ShipTree#prerequisiteMet}) takes priority over the
+     * affordability one: a ship can be both unaffordable <i>and</i> blocked
+     * by the tree, but only one padlock can show at a time, and knowing
+     * which branch ship to unlock first is the more fundamental blocker.
      */
     private void drawLockOverlay(float dialogScreenX, float dialogScreenY) {
         ShipType type = SHIP_TYPES[selectedIndex];
         if (isUnlocked(type)) {
             return;
         }
-        TextureRegion padlock = availableXp() >= ShipStats.forType(type).getUnlockCostXp()
-            ? padlockGreenRegion : padlockWhiteRegion;
+        TextureRegion padlock;
+        if (!ShipTree.prerequisiteMet(type, unlockedShips)) {
+            padlock = padlockTierTooHighRegion;
+        } else if (availableXp() >= ShipStats.forType(type).getUnlockCostXp()) {
+            padlock = padlockGreenRegion;
+        } else {
+            padlock = padlockWhiteRegion;
+        }
         if (padlock == null) {
             return;
         }
@@ -384,6 +425,28 @@ public class ShipSelectionScreen implements Screen {
 
     private int availableXp() {
         return ShipUnlocks.availableXp(myXp, unlockedShips);
+    }
+
+    /**
+     * Returns the tooltip message explaining why {@code type}'s padlock is
+     * showing what it's showing, or {@code null} if no tooltip should be
+     * drawn — either the ship is already unlocked, or it's the green,
+     * affordable-and-unlockable case, whose meaning is already fully
+     * conveyed by the padlock art's own baked-in "'SPACE' to unlock" text.
+     */
+    private String tooltipTextFor(ShipType type) {
+        if (isUnlocked(type)) {
+            return null;
+        }
+        if (!ShipTree.prerequisiteMet(type, unlockedShips)) {
+            ShipType prerequisite = ShipTree.prerequisiteOf(type).orElseThrow();
+            return "You need to unlock the " + prerequisite.getDisplayName() + " before you can unlock this.";
+        }
+        int missingXp = ShipStats.forType(type).getUnlockCostXp() - availableXp();
+        if (missingXp > 0) {
+            return "You're lacking " + missingXp + " XP to unlock this ship.";
+        }
+        return null;
     }
 
     private void drawDescription(float dialogScreenX, float dialogScreenY) {
@@ -446,5 +509,6 @@ public class ShipSelectionScreen implements Screen {
         logoTexture.dispose();
         menuAtlas.dispose();
         shipsAtlas.dispose();
+        tooltip.dispose();
     }
 }

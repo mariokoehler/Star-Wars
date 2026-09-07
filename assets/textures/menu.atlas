@@ -27,14 +27,14 @@ Arrow_Left_MouseOver
   index: -1
 Arrow_Right
   rotate: false
-  xy: 1464, 494
+  xy: 1548, 582
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Right_MouseOver
   rotate: false
-  xy: 1548, 582
+  xy: 1971, 937
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
@@ -81,6 +81,13 @@ Padlock_White
   orig: 174, 218
   offset: 0, 0
   index: -1
+Padlock_White_TierTooHigh
+  rotate: false
+  xy: 1802, 7
+  size: 174, 218
+  orig: 174, 218
+  offset: 0, 0
+  index: -1
 Select_Ship_Dialog
   rotate: false
   xy: 2, 397
@@ -111,7 +118,7 @@ Start_Button
   index: -1
 Start_Button_MouseOver
   rotate: false
-  xy: 1802, 139
+  xy: 1464, 446
   size: 82, 86
   orig: 82, 86
   offset: 0, 0

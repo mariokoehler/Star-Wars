@@ -1331,6 +1331,82 @@ unlock was still there** (no padlock on TIE Fighter) — real persistence
 across a full restart, not just within one session. Full `mvn clean
 test` green throughout.
 
+### 2.13 Ship Tree (2026-09-08)
+
+§7's old "Ship Tree" idea — floated 2026-09-06, never built — is now
+real: unlocking isn't just gated by XP (2.12), it's gated by branch
+order too. **Imperial:** TIE Fighter → TIE Interceptor → Star
+Destroyer. **Rebel:** A-Wing → X-wing → Falcon. Snowspeeder is outside
+both branches, always unlocked. This **finalizes/corrects §7's original
+sketch**, which had the Rebel branch as X-wing → A-Wing → Falcon — the
+user's actual instruction when building this reversed the first two,
+and it turns out the code already agreed: `ShipType`'s tiers (2.10),
+set the day the Ship Tree idea was first floated, already had A-Wing at
+tier 2 and X-wing at tier 3, i.e. already encoded this exact order. Both
+branches climb tiers 2→3→4 in lockstep, so the whole tree is just one
+fixed prerequisite table, not separate per-branch bookkeeping: new pure,
+unit-tested `core.sim.ShipTree` (`prerequisiteOf`/`prerequisiteMet`),
+same "shared pure function" convention as `ShipUnlocks`/`ShipDamage`.
+
+**A third padlock overlay**, user-provided
+(`assets-raw/menu/Padlock_White_TierTooHigh.png`, "TIER TOO HIGH" baked
+in) — shown instead of green/white whenever `ShipTree.prerequisiteMet`
+fails, regardless of affordability (a ship can be both unaffordable
+*and* tree-blocked; the tree check wins, since knowing which ship to
+unlock first is more fundamental than the XP number). Same
+`SPACE`-to-unlock gating and server-side `UnlockShipRequest`
+re-validation (`GameNetworkServer.handleUnlockShipRequest`) as 2.12
+extended with this same prerequisite check — the server never trusted
+the client's own padlock choice before, and still doesn't now that
+there's a second reason to reject.
+
+**Tooltips — new, user-requested.** Hovering the mouse over a locked
+ship's portrait/padlock now shows a small floating message explaining
+*why*, since neither padlock's baked-in text says specifics: "You need
+to unlock the A-Wing before you can unlock this." (tree-blocked) or
+"You're lacking 1000 XP to unlock this ship." (affordable-tree-wise but
+short on XP) — computed by a new `ShipSelectionScreen.tooltipTextFor`.
+No tooltip for the green case or an already-unlocked ship — both are
+already fully explained by what's on screen. New `core.render.Tooltip`:
+a small floating text box with its own drawn (not pre-made-art)
+background — a tinted, stretched 1×1-pixel `Texture`, the same "no atlas
+needed for one solid rectangle" trick a `ShapeRenderer` would otherwise
+be reached for — using `GameFonts`' live "SF Distant Galaxy" text (the
+third consumer, after `ConnectScreen`/`ScoreboardHud`). Clamped to stay
+inside the window edges rather than running off-screen near a corner.
+New `ShipType.getDisplayName()` (e.g. `"TIE Fighter"`, `"A-Wing"`) feeds
+the tree tooltip's ship name — the first place in this codebase that's
+ever needed a ship's name as live text rather than baked into art.
+
+**A real bug caught writing `Tooltip`, before it ever ran live:**
+`SpriteBatch.getColor()` returns the batch's own live, mutable `Color`
+field, not a snapshot — saving that reference and later restoring
+"the previous color" from it after calling `setColor(...)` would have
+actually restored the *just-set* color (since `setColor` mutates that
+very object in place), silently leaving the batch permanently tinted
+for every draw call after the first tooltip. Fixed by `.cpy()`-ing the
+color before mutating it. Caught by re-reading the draw call before
+running it, not by seeing the bug happen — worth remembering:
+`SpriteBatch.getColor()` needs an explicit copy before any "save/change/
+restore" tint pattern, same class of gotcha as any other getter that
+returns a live mutable field rather than a value.
+
+**Verified live, fully end-to-end, with a real server + client and a
+real unlock:** a fresh account (0 XP, nothing unlocked) showed the
+X-wing (tier 3, Rebel) with the tier-too-high padlock — correctly
+overriding the white "not enough XP" padlock that would otherwise apply
+— and hovering it showed "You need to unlock the A-Wing before you can
+unlock this."; TIE Fighter (tier 2, no prerequisite) correctly showed
+plain white "not enough XP" with a hover tooltip reading "You're lacking
+1000 XP to unlock this ship."; seeded to 6000 XP with TIE Fighter
+already unlocked, TIE Interceptor (prerequisite met, affordable) showed
+green, SPACE unlocked it (padlock gone); **Star Destroyer, previously
+tier-too-high despite being easily affordable, immediately re-checked as
+green the moment TIE Interceptor's unlock landed** — confirmed live,
+no restart needed, directly proving the prerequisite check re-evaluates
+against the account's just-updated unlocked set rather than a stale
+snapshot. `mvn clean test` green throughout.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -3091,6 +3167,16 @@ ship. Unlocking is a live round trip (`UnlockShipRequest`/
 `UnlockShipResponse`) over that same connection, not a purely local
 UI state change.
 
+**Second addendum (2026-09-08): a third padlock (branch prerequisite)
+and hover tooltips.** Full writeup in the new 2.13 ("Ship Tree"). Short
+version: a locked ship whose branch prerequisite isn't unlocked yet
+(design.md's Imperial/Rebel unlock order) now shows a third
+"tier too high" padlock instead of green/white, regardless of
+affordability; hovering any locked ship's portrait now shows a small
+tooltip explaining exactly why — the missing XP amount, or which ship
+to unlock first — since neither padlock's baked-in text alone gives
+that specific.
+
 **Death Screen — implemented 2026-09-06.** User provided all the art:
 `Dialog_Background.png` (a plain bordered panel) and 23
 `Quote_<n>.png` variants, all 818×618 - the same dialog size Ship
@@ -3377,10 +3463,14 @@ once a component is actually being worked on.
 - [x] **Kill XP (2026-09-07)** — see 2.10: tier-weighted
       `base * tierMultiplier * rankDisparityMultiplier` formula
       (`KillXp`), awarded via `AccountStore#addXp` on a confirmed kill.
-- [ ] **XP display + ship-unlock thresholds** — still nothing shows a
-      player their own XP (explicitly deferred, not forgotten), and
-      unlocking additional ships at XP thresholds (§7's "Ship Tree" idea)
-      isn't built — every ship is still selectable unconditionally.
+- [x] **Ship unlocks + Ship Tree (2026-09-08)** — see 2.12/2.13: ships
+      cost tiered XP to unlock (Snowspeeder always free), affordability
+      is derived XP minus already-spent cost, and unlocking is further
+      gated by a fixed Imperial/Rebel branch order — all enforced
+      server-side, not just client UI. **Still open:** nothing on Ship
+      Selection prints the player's raw XP number or exactly how much
+      more a locked ship needs — only the TAB scoreboard (2.11) shows a
+      live XP figure, and only mid-match, not on this screen.
 
 ### 6.1 Content TODO: death screen quotes
 
@@ -3395,21 +3485,19 @@ consumes them.
 Track unresolved decisions here so they don't get lost. Move an item into
 the relevant section above once decided.
 
-- **Ship roster**: which specific iconic ships, and their relative
-  stats/balance. **Idea floated 2026-09-06, not implemented:** a "Ship
-  Tree" for XP unlocks (3.6/6) — every account starts with the faction-
-  neutral Snowspeeder, then branches: Imperial side unlocks TIE Fighter →
-  TIE Interceptor → Star Destroyer; Rebel Alliance side unlocks X-wing →
-  A-Wing → Falcon. Symmetric by design (3 ships per branch) — the A-Wing
-  (4.3) was imported specifically to fill the Rebel side's middle slot,
-  since the roster only had 3 Rebel ships (X-wing, Snowspeeder, Falcon)
-  against 3 Imperial ones (TIE Fighter, TIE Interceptor, Star Destroyer)
-  before it. No unlock-threshold values, no enforcement of the tree
-  itself (Ship Selection still shows every ship unconditionally, 5.1),
-  and no decision on what happens to a Snowspeeder pilot who's unlocked
-  ships on *both* branches (allowed simultaneously, or forces a
-  once-only faction pick?) - purely a roster/content idea for whenever
-  XP & progression (6) actually gets built.
+- **Ship roster balance**: every ship still shares the X-wing's exact
+  thrust/torque/hull/shield numbers (2.7) — no real per-ship balance
+  pass has happened yet, just the tiered unlock costs (2.12) and the
+  branch order (2.13).
+- **~~Ship Tree~~ — built, see 2.13.** (Was: idea floated 2026-09-06,
+  not implemented — a branching Imperial/Rebel unlock order. Now real:
+  TIE Fighter → TIE Interceptor → Star Destroyer, A-Wing → X-wing →
+  Falcon, enforced both client- and server-side.) **Still genuinely
+  open, not addressed by 2.13:** a Snowspeeder pilot unlocking ships on
+  *both* branches is explicitly allowed (nothing stops it, nor was it
+  asked to) — no faction-exclusivity decision has actually been made,
+  this is the current behavior by default rather than a deliberate
+  choice either way.
 - **Map/arena design**: single arena to start — size, obstacles (asteroid
   fields? capital ship hulls?), boundary handling (do you die if you fly off
   the edge, or is it wrapped/bounded?).

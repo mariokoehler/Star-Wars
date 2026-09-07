@@ -45,6 +45,28 @@ public enum ShipType {
     }
 
     /**
+     * Returns a human-readable name for this ship type (e.g.
+     * {@code "TIE Fighter"}), used in the Ship Selection screen's unlock
+     * tooltip ({@link de.mkoehler.starwars.render.Tooltip}) — nowhere else
+     * in this codebase needs a display name today, since every other
+     * ship-facing label (descriptions, HUD art) is pre-baked art rather
+     * than live text.
+     *
+     * @return the display name
+     */
+    public String getDisplayName() {
+        return switch (this) {
+            case XWING -> "X-wing";
+            case FALCON -> "Falcon";
+            case SNOWSPEEDER -> "Snowspeeder";
+            case STARDESTROYER -> "Star Destroyer";
+            case TIEFIGHTER -> "TIE Fighter";
+            case TIEINTERCEPTOR -> "TIE Interceptor";
+            case AWING -> "A-Wing";
+        };
+    }
+
+    /**
      * Returns the base name used to derive this ship type's classpath
      * resource paths, e.g. {@code "xwing"} for
      * {@code shipdata/xwing.stats.json} and
