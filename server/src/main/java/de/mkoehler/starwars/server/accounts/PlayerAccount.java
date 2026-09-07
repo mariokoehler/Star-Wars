@@ -83,4 +83,16 @@ public class PlayerAccount {
     public void setXp(int xp) {
         this.xp = xp;
     }
+
+    /**
+     * Returns an independent copy of this account - safe to hand to
+     * {@link AccountStore}'s background flush thread without racing further
+     * mutations made to the original (every field here is an immutable
+     * type, so a plain field-by-field copy is already a full deep copy).
+     *
+     * @return an independent copy of this account
+     */
+    public PlayerAccount copy() {
+        return new PlayerAccount(login, passwordHash, passwordSalt, displayName, xp);
+    }
 }

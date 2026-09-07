@@ -1552,10 +1552,11 @@ for a constant-time compare) and `AccountStore` (the file-backed map
 above — `synchronized` against concurrent logins racing on the same new
 login, since KryoNet's handshake handler runs on the network thread).
 Deliberately has **no libGDX dependency** (plain `java.nio.file.Path`),
-so it's directly unit-tested (`AccountStoreTest`/`PasswordHasherTest`, 15
-cases together, including a real reload-from-disk round trip) without a
-running application; `GameNetworkServer` resolves the actual runtime path
-via `Gdx.files.local("data/accounts.json")` and passes it in.
+so it's directly unit-tested (`AccountStoreTest`/`PasswordHasherTest`, 22
+cases together as of the persistence redesign below, including a real
+reload-from-disk round trip) without a running application;
+`GameNetworkServer` resolves the actual runtime path via
+`Gdx.files.local("data/accounts.json")` and passes it in.
 
 **One interpretation decision the spec above didn't cover, made and
 flagged here:** what happens if an *existing* login's display name field
@@ -1578,6 +1579,62 @@ Selection) — with `SpawnRequest` only ever following a `HandshakeResponse`
 that came back accepted. See 5.1 for how this plays out across screens,
 including why it's a *second*, fresh handshake on Client's own
 connection rather than one kept alive from the Connect Dialog.
+
+**Persistence redesigned from write-through to periodic async flush
+(2026-09-07).** Originally `save()` ran synchronously, inline, on every
+single mutation — a full rewrite of `accounts.json` on every login,
+display-name change, and (once kill XP, 2.10, landed) every kill,
+**on the calling thread** — for XP specifically, that's the game's own
+30Hz tick thread, meaning a kill during a busy fight did a blocking disk
+write as part of that tick's work. Flagged by the user as a real concern
+once XP made writes far more frequent, and likely to get more frequent
+still as more account metadata gets added later. Redesigned:
+
+- `login()`/`addXp()` now only ever mutate the in-memory map, under
+  `synchronized` — no disk I/O on the calling thread at all anymore.
+- A background `ScheduledExecutorService` (single daemon thread) flushes
+  every 60 seconds — skipped entirely if nothing changed since the last
+  flush (a `dirty` flag), so an idle server doesn't keep rewriting an
+  unchanged file forever.
+- The **only** part that needs the lock is copying the current state —
+  and it has to be a **deep** copy, not just a shallow map copy:
+  `PlayerAccount` is a mutable bean, so the live objects still being
+  referenced by a shallow copy could be mutated by a concurrent
+  `login`/`addXp` while the background thread serializes them. Deep-copied
+  via a new `PlayerAccount#copy()`. The actual disk write happens
+  entirely off the lock, on the background thread, so it never blocks a
+  login or an XP award.
+- **Rolling backups**, a natural extension of periodic flushing: every
+  30th flush (~30 minutes) also writes a timestamped snapshot to a
+  `backups/` folder alongside `accounts.json` — same bind-mounted NAS
+  folder (3.12), so backups show up as normal browsable/snapshot-able
+  files there too — pruned to the newest 48 (~a day's worth).
+- **A JVM shutdown hook** (`Runtime.addShutdownHook`, not a libGDX
+  lifecycle callback — this class has no libGDX dependency and a plain
+  hook is a stronger guarantee, independent of whether the surrounding
+  app's own shutdown path reliably reaches it) does one final synchronous
+  flush on exit. This is what keeps an ordinary restart/redeploy
+  (`docker stop` → SIGTERM → the JVM's default shutdown-hook handling)
+  from losing whatever changed since the last scheduled flush — verified
+  for real, not just assumed: a throwaway standalone program logged in
+  (dirty, unflushed) and called `System.exit(0)`, and the login was
+  present on disk afterward. **Accepted trade-off, stated plainly:** only
+  a hard kill (`SIGKILL`/crash) can still lose up to ~60 seconds of
+  changes — the whole point of moving off synchronous write-through was
+  accepting that window in exchange for never blocking the tick thread.
+- A public `flush()` forces an immediate synchronous write outside the
+  normal cadence — used by the shutdown hook, and directly by tests so
+  they don't need to wait on real wall-clock time to observe a write.
+  `close()` (idempotent — safe to call twice) stops the scheduler and
+  flushes once more; it's what the shutdown hook actually calls.
+
+`AccountStoreTest` grew from 9 to 16 cases covering the new behavior
+specifically — including that a mutation genuinely isn't on disk until
+`flush()` is called (the core behavior change, worth locking in with a
+test rather than trusting the description), that a no-op flush doesn't
+rewrite an unchanged file, and backup retention/pruning (seeded with
+fake seed files rather than waiting on real wall-clock time to
+accumulate 30+ real backups).
 
 ### 3.7 Client local config (connection)
 
