@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Registers jgitver as a Maven core extension: it computes ${project.version}
+  for every module in this reactor from git tags/history, before the build
+  starts, replacing the placeholder "0" declared in the pom.xml files. See
+  design.md 3.10 for the version scheme this produces and why.
+-->
+<extensions xmlns="http://maven.apache.org/EXTENSIONS/1.0.0"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+            xsi:schemaLocation="http://maven.apache.org/EXTENSIONS/1.0.0 http://maven.apache.org/xsd/core-extensions-1.0.0.xsd">
+  <extension>
+    <groupId>fr.brouillard.oss</groupId>
+    <artifactId>jgitver-maven-plugin</artifactId>
+    <version>1.9.0</version>
+  </extension>
+</extensions>

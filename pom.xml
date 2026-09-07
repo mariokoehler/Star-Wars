@@ -6,7 +6,9 @@
 
   <groupId>de.mkoehler.starwars</groupId>
   <artifactId>starwars-parent</artifactId>
-  <version>1.0.0</version>
+  <!-- Placeholder only - jgitver-maven-plugin (.mvn/extensions.xml) overrides the
+       real version from git tags/history at build time. See design.md 3.10. -->
+  <version>0</version>
   <packaging>pom</packaging>
 
   <name>StarWars</name>

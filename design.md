@@ -1589,6 +1589,89 @@ setters, as opposed to the immutable-final-field style used for Kryo
 network message classes) round-trips cleanly, including a `Map<String,
 List<PixelPoint>>` value.
 
+### 3.10 Build/release versioning & client-server version check (2026-09-07)
+
+Client and server are separate downloads that can drift out of sync — a
+player on an old client build talking to an updated server (or vice
+versa) is a real failure mode for a KryoNet-based protocol (3.4/CLAUDE.md
+"Kryo network compatibility depends on registration order"). Wanted an
+automatic version number to check at connect time, without a manually-
+maintained constant to remember to bump.
+
+**Decision: [jgitver-maven-plugin](https://github.com/jgitver/jgitver-maven-plugin)
+computes `${project.version}` for the whole reactor from git tags — no
+version number is ever hand-edited in a pom.xml.** Wired in as a Maven
+*core* extension via `.mvn/extensions.xml` (loaded before the build
+starts, so it can override the version before anything else reads it).
+Every `pom.xml` in the reactor now carries a placeholder `<version>0</version>`
+(the parent's own version, and each child's `<parent><version>`) that
+jgitver overwrites in memory at build time — the `0` is never the real
+version, just satisfies Maven's own consistency check between a child and
+its declared parent version before the extension runs.
+
+Considered and rejected:
+- A hand-maintained `PROTOCOL_VERSION` constant, bumped only when the wire
+  format actually changes — this is the "correct" engineering answer, but
+  for a "play with friends" hobby project, reliably judging *which*
+  changes are wire-breaking is more mental bookkeeping than it saves, and
+  forgetting a bump (silently shipping an incompatible protocol as
+  "compatible") is a worse failure than being occasionally too strict.
+  **Explicitly decided against, in favor of laziness:** the version check
+  (once built, see below) will compare the full computed version string,
+  so *any* new release forces old clients to update, whether or not the
+  protocol actually changed.
+- `versions-maven-plugin`-driven bumps from CI — rejected, adds a bump
+  commit to history for every release, more moving parts than tags alone.
+- `git-commit-id-maven-plugin` — would add commit-provenance metadata
+  (hash, dirty flag, build time) but doesn't compute the version itself;
+  jgitver was the more direct fit for "increase the version automatically
+  every time I package for release."
+
+**How the computed version behaves, with jgitver's defaults (nothing
+configured beyond the extension itself):**
+- HEAD exactly on a tag `vX.Y.Z` → version is exactly `X.Y.Z`.
+- Any commit after that tag with no new tag yet → `X.Y.(Z+1)-SNAPSHOT`
+  (patch auto-incremented, `-SNAPSHOT` appended) — every ordinary dev
+  build already looks like a pre-release of the next patch.
+- No tag reachable at all → `0.0.0-SNAPSHOT` (confirmed by running `mvn
+  -N validate` before `v0.0.1`, the first tag, existed).
+- Cutting a release is therefore just `git tag vX.Y.Z` (or drafting a
+  GitHub Release through the UI, which creates the tag for you) — nothing
+  in a file to edit, nowhere to forget a bump.
+
+**`v0.0.1` created (2026-09-07)** as the first tag, purely to see the
+mechanism work end to end — not a real release, no GitHub Release/build
+artifacts published for it (see the still-open items below).
+
+**Not yet built — planned flow, in order:**
+1. Embed the computed version into both jars: a resource-filtered
+   properties file in `core` (`${project.version}` substituted by Maven
+   at `package` time), read at startup by a small shared class — since
+   both `server` and `lwjgl3` depend on `core`, they automatically carry
+   the same baked-in version without duplicating the resource.
+2. Add a version field to `HandshakeRequest`/`HandshakeResponse`
+   (`core/.../net/messages/`, 3.6): the server rejects
+   (`accepted=false`) a mismatched client with a message naming both
+   versions.
+3. An `update.cmd`, shipped inside the client zip, to make picking up a
+   new version fast — mechanism not yet designed. This is what's meant to
+   make the "any release forces an update" trade-off above tolerable.
+4. A tag-triggered GitHub Actions workflow (`push: tags: v*`) that
+   packages `server`+`lwjgl3`, zips the shaded jars, and publishes them
+   to a GitHub Release for that tag — deliberately **not built yet**
+   (holding off until closer to an actual first release, see CLAUDE.md
+   status). Because jgitver ties the jar's embedded version to the same
+   tag that would trigger this workflow, the two are automatically in
+   sync with no manual step to keep them that way.
+
+**Gotcha to remember:** the "install core first" local workflow
+(CLAUDE.md, Build system) — `mvn install -pl core -am -DskipTests` — bakes
+in whatever version jgitver computes *at that moment*. Any commit made
+afterwards changes the computed version for the *next* build (even of an
+unrelated module), so a stale locally-installed `core` artifact can go
+missing from `~/.m2` under the version `lwjgl3`/`server` now expect. Rerun
+that install after any new commit, not just once per session.
+
 ## 4. Rendering & presentation
 
 ### 4.1 Camera
@@ -2269,6 +2352,18 @@ once a component is actually being worked on.
       ENTER). First real use of VisUI (4.4).
 - [ ] **Keybind Setup screen** — press-to-bind capture, localized key-label
       display (see 3.8 implementation note), persists to local config.
+- [x] **jgitver wired in (2026-09-07)** — `.mvn/extensions.xml` +
+      placeholder `<version>0</version>` in every pom.xml; `v0.0.1` tagged
+      to see it compute a real version end to end. See 3.10 for the full
+      plan.
+- [ ] **Client/server version check** — bake the jgitver-computed version
+      into both jars, add it to `HandshakeRequest`/`HandshakeResponse`,
+      reject mismatched clients. See 3.10.
+- [ ] **`update.cmd`** in the client zip, to make picking up a new version
+      low-friction. See 3.10.
+- [ ] **Tag-triggered GitHub Actions release workflow** — package, zip,
+      and publish `server`/`lwjgl3` to a GitHub Release on `v*` tag push.
+      Deliberately not started yet. See 3.10.
 - [x] **Entity/component model (first pass, server-side)** — Ashley set
       up in `core` under `de.mkoehler.starwars.sim`, used by
       `GameNetworkServer`: `PhysicsBodyComponent`, `PlayerControlledComponent`,
@@ -2390,9 +2485,10 @@ consumes them.
 Track unresolved decisions here so they don't get lost. Move an item into
 the relevant section above once decided.
 
-- **Client distribution**: how do players get the client build? Plain jar
-  download for now is the likely v1 answer — revisit if that's too much
-  friction.
+- **Client distribution**: **decided 2026-09-07 (see 3.10)** — a zipped
+  client build attached to a GitHub Release, published by a tag-triggered
+  Actions workflow. The workflow itself isn't built yet, so this still
+  isn't how players actually get the client today.
 - **Ship roster**: which specific iconic ships, and their relative
   stats/balance. **Idea floated 2026-09-06, not implemented:** a "Ship
   Tree" for XP unlocks (3.6/6) — every account starts with the faction-

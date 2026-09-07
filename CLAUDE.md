@@ -1442,6 +1442,17 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   still walks the whole reactor and just fails the same way on any
   project that doesn't declare that execution id. Dropping `-am` on the
   exec step itself is the actual fix, not `@id`.
+- **jgitver (2026-09-07, design.md 3.10) computes `${project.version}`
+  from git tags/history, as a Maven core extension (`.mvn/extensions.xml`)
+  — every pom.xml's version is now the placeholder `0`, never the real
+  one.** This interacts with the "install core first" workflow above: the
+  installed `core` artifact's version is whatever jgitver computed *at
+  that moment*, so a commit made afterwards (even to an unrelated module)
+  changes the version the next build expects, and the old one silently
+  isn't in `~/.m2` anymore under the new expected version. Re-run `mvn
+  install -pl core -am -DskipTests` after every new commit, not just once
+  per session — a `-am`-less exec step failing to resolve `core` is the
+  symptom.
 
 ## Git / GitHub
 

@@ -7,7 +7,7 @@
   <parent>
     <groupId>de.mkoehler.starwars</groupId>
     <artifactId>starwars-parent</artifactId>
-    <version>1.0.0</version>
+    <version>0</version>
   </parent>
 
   <artifactId>starwars-dev-tools</artifactId>
