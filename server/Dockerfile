@@ -20,7 +20,22 @@ COPY . .
 # release build works (README/CLAUDE.md) - no local .m2 install to rely on.
 # Tests run as part of this (no -DskipTests): a broken build should fail
 # here, not ship as an image.
-RUN mvn -pl server -am package
+#
+# APP_VERSION (build-arg, plain "0.0.3" not "v0.0.3") overrides jgitver's own
+# auto-detection via -Djgitver.use-version (design.md 3.10): jgitver reliably
+# miscomputes "X.Y.(Z+1)-SNAPSHOT" for a GitHub Actions checkout even exactly
+# on a tag, confirmed on v0.0.2/v0.0.3 - a known class of jgitver+CI
+# ref-ambiguity issue, root cause not fully pinned down. release-server.yml
+# already knows the exact tag that triggered this build, so passing it
+# through directly sidesteps the auto-detection bug rather than chasing it.
+# Empty by default so a local `docker build` with no --build-arg still works
+# (falls back to jgitver's own - correct - auto-detection outside CI).
+ARG APP_VERSION=""
+RUN if [ -n "$APP_VERSION" ]; then \
+      mvn -pl server -am "-Djgitver.use-version=$APP_VERSION" package; \
+    else \
+      mvn -pl server -am package; \
+    fi
 
 # Not eclipse-temurin's -alpine variant: libGDX's native libraries (its own
 # core native plus Box2D, both pulled in via the natives-desktop classifier)

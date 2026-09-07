@@ -36,7 +36,13 @@ jobs:
       - name: Build and push the server image
         env:
           IMAGE: ghcr.io/mariokoehler/starwars-server
+        # APP_VERSION (plain "0.0.3", no "v") threads through to the
+        # Dockerfile's ARG/jgitver.use-version override (see its comment) -
+        # jgitver's own auto-detection reliably miscomputes a -SNAPSHOT
+        # version for this exact checkout, confirmed on v0.0.2/v0.0.3, so we
+        # tell it the version we already know from $GITHUB_REF_NAME instead.
         run: |
-          docker build -f server/Dockerfile -t "$IMAGE:$GITHUB_REF_NAME" -t "$IMAGE:latest" .
+          VERSION="${GITHUB_REF_NAME#v}"
+          docker build -f server/Dockerfile --build-arg "APP_VERSION=$VERSION" -t "$IMAGE:$GITHUB_REF_NAME" -t "$IMAGE:latest" .
           docker push "$IMAGE:$GITHUB_REF_NAME"
           docker push "$IMAGE:latest"

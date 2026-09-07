@@ -1650,6 +1650,39 @@ configured beyond the extension itself):**
   GitHub Release through the UI, which creates the tag for you) — nothing
   in a file to edit, nowhere to forget a bump.
 
+**Bug found and fixed (2026-09-07): jgitver miscomputes a `-SNAPSHOT`
+version inside GitHub Actions' checkout, even exactly on a tag.** Found
+when `v0.0.3`'s client (built locally, clean) and server (CI-built)
+failed the version handshake against each other despite both nominally
+being "the v0.0.3 release." Traced with three separate local
+reproductions - a plain `git checkout v0.0.3` on the existing clone, a
+fresh `git clone` + checkout, and a manual simulation of
+`actions/checkout`'s minimal-fetch strategy - and **all three correctly
+computed clean `0.0.3`**, while the *actual* `release-client.yml` (`v0.0.2`
+and `v0.0.3`) and `release-server.yml` (`v0.0.3`) CI logs both showed
+`[INFO] version 'X.Y.(Z+1)-SNAPSHOT' computed`. So this has silently
+affected **every CI-built artifact since the very first tagged release** -
+not a regression from anything added in 3.11/3.12, just never surfaced
+before because client and server had always been built by the same CI
+mechanism and were at least internally *consistent* with each other,
+until this session cross-checked a locally-built client against a
+CI-built server. Root cause not fully pinned down (jgitver has a
+[documented issue](https://github.com/jgitver/jgitver-maven-plugin/issues/12)
+where ambiguous/duplicate tag refs on one commit force a SNAPSHOT
+result, which fits the shape of the symptom, but wasn't confirmed as
+*the* mechanism here) - rather than keep chasing GitHub Actions'
+internals, both release workflows now pass `-Djgitver.use-version=X.Y.Z`
+explicitly (stripped from `$GITHUB_REF_NAME`, the tag that triggered the
+run) instead of relying on jgitver's auto-detection for CI builds at
+all: `release-client.yml` passes it straight to `mvn`, `release-server.yml`
+threads it through `server/Dockerfile`'s `ARG APP_VERSION` (empty by
+default, so a local `docker build` with no `--build-arg` still falls
+back to correct auto-detection). Verified locally with `podman build
+--build-arg APP_VERSION=9.9.9` before trusting this in CI again. Local/
+dev builds (`mvn -N validate`, `mvn -pl lwjgl3 -am -Prelease-client
+verify` without the profile's own CI wrapping) are unaffected and keep
+using plain auto-detection, since they were never the ones misbehaving.
+
 **`v0.0.1` created (2026-09-07)** as the first tag, purely to see the
 mechanism work end to end — not a real release, no GitHub Release/build
 artifacts published for it (see the still-open items below).

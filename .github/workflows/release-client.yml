@@ -43,8 +43,19 @@ jobs:
       - name: Build the client zip
         # Same command as a local release build (README/CLAUDE.md) - -am so
         # `core` is built fresh in this reactor run, no separate install step
-        # needed on a clean CI checkout.
-        run: mvn -pl lwjgl3 -am -Prelease-client verify
+        # needed on a clean CI checkout - PLUS an explicit jgitver.use-version
+        # override (design.md 3.10): jgitver's own tag-vs-HEAD auto-detection
+        # reliably (confirmed on v0.0.2/v0.0.3) computes "X.Y.(Z+1)-SNAPSHOT"
+        # in GitHub Actions' checkout even exactly on a tag, despite behaving
+        # correctly on an identical local/fresh clone - a known class of
+        # jgitver+CI ref-ambiguity issue, root cause not fully pinned down.
+        # Since this workflow only ever runs because a specific tag was
+        # pushed, we already know the intended version with certainty -
+        # telling jgitver directly sidesteps the auto-detection bug entirely
+        # rather than chasing it further.
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v', ''
+          mvn -pl lwjgl3 -am -Prelease-client "-Djgitver.use-version=$version" verify
 
       - name: Publish GitHub Release
         env:
