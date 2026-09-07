@@ -41,6 +41,12 @@
       <version>${gdxVersion}</version>
       <classifier>natives-desktop</classifier>
     </dependency>
+    <dependency>
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-freetype-platform</artifactId>
+      <version>${gdxVersion}</version>
+      <classifier>natives-desktop</classifier>
+    </dependency>
     <!-- Test-scoped so it never ends up in the shaded runtime jar: used only by the
          AtlasPacker dev tool under src/test, run on demand to (re)build texture atlases
          from assets-raw/. See CLAUDE.md "Build system" for the command to run it. -->

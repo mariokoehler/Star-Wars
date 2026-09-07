@@ -26,6 +26,15 @@
       <version>${gdxVersion}</version>
     </dependency>
     <dependency>
+      <!-- Official libGDX extension for loading real .ttf files (FreeTypeFontGenerator) -
+           the base `gdx` artifact only supports pre-baked BitmapFonts. Needs its own natives,
+           see gdx-freetype-platform in lwjgl3/pom.xml (same class of gotcha as gdx-platform/
+           gdx-box2d-platform, see CLAUDE.md "Maven + libGDX gotchas"). -->
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-freetype</artifactId>
+      <version>${gdxVersion}</version>
+    </dependency>
+    <dependency>
       <groupId>com.badlogicgames.ashley</groupId>
       <artifactId>ashley</artifactId>
       <version>${ashleyVersion}</version>

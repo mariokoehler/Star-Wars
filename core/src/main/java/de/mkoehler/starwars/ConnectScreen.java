@@ -7,6 +7,7 @@ import com.badlogic.gdx.audio.Music;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -28,6 +29,7 @@ import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.render.DialogLayout;
+import de.mkoehler.starwars.render.GameFonts;
 import de.mkoehler.starwars.render.ScrollingBackground;
 
 import java.io.IOException;
@@ -100,6 +102,9 @@ public class ConnectScreen implements Screen {
     private static final float BACKGROUND_DRIFT_DIRECTION_DEGREES = 25f;
     private static final float BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND = 15f;
 
+    /** Pixel size for the live-rendered {@link GameFonts#generateSfDistantGalaxy} UI font. */
+    private static final int UI_FONT_SIZE_PX = 24;
+
     private static final Color ERROR_COLOR = new Color(1f, 0.45f, 0.35f, 1f);
     private static final Color FIELD_FONT_COLOR = new Color(0.92f, 0.95f, 1f, 1f);
     private static final Color BUTTON_FONT_COLOR = new Color(0.94f, 0.87f, 0.66f, 1f);
@@ -113,6 +118,8 @@ public class ConnectScreen implements Screen {
     private TextureAtlas menuAtlas;
     private TextureRegion dialogRegion;
     private Music music;
+
+    private BitmapFont uiFont;
 
     private Stage stage;
     private VisTextField hostField;
@@ -167,6 +174,11 @@ public class ConnectScreen implements Screen {
         }
         stage = new Stage(new ScreenViewport());
 
+        // Live-rendered "SF Distant Galaxy" (design.md 4.4/CLAUDE.md - the same font this
+        // project's baked logo/menu art already uses) in place of VisUI's default skin font,
+        // for every widget on this screen that draws dynamic (not pre-baked) text.
+        uiFont = GameFonts.generateSfDistantGalaxy(UI_FONT_SIZE_PX);
+
         VisTextField.VisTextFieldStyle fieldStyle =
             new VisTextField.VisTextFieldStyle(VisUI.getSkin().get(VisTextField.VisTextFieldStyle.class));
         BaseDrawable transparentBackground = transparentBackgroundWithPadding();
@@ -180,6 +192,7 @@ public class ConnectScreen implements Screen {
         fieldStyle.focusBorder = null;
         fieldStyle.fontColor = FIELD_FONT_COLOR;
         fieldStyle.focusedFontColor = FIELD_FONT_COLOR;
+        fieldStyle.font = uiFont;
 
         hostField = new VisTextField("", fieldStyle);
         displayNameField = new VisTextField("", fieldStyle);
@@ -204,6 +217,7 @@ public class ConnectScreen implements Screen {
 
         Label.LabelStyle errorStyle = new Label.LabelStyle(VisUI.getSkin().get(Label.LabelStyle.class));
         errorStyle.fontColor = ERROR_COLOR;
+        errorStyle.font = uiFont;
         errorLabel = new VisLabel("", errorStyle);
 
         VisTextButton.VisTextButtonStyle buttonStyle =
@@ -214,6 +228,7 @@ public class ConnectScreen implements Screen {
         buttonStyle.over = over;
         buttonStyle.down = over;
         buttonStyle.fontColor = BUTTON_FONT_COLOR;
+        buttonStyle.font = uiFont;
         connectButton = new VisTextButton("Connect", buttonStyle);
         connectButton.addListener(new com.badlogic.gdx.scenes.scene2d.utils.ClickListener() {
             @Override
@@ -451,6 +466,7 @@ public class ConnectScreen implements Screen {
         background.dispose();
         logoTexture.dispose();
         menuAtlas.dispose();
+        uiFont.dispose();
         stage.dispose();
         // Null once ownership has passed to StarWarsGame#fadeOutAndDisposeMusic (the normal,
         // successful-login exit) - only still non-null here if this screen is being torn down

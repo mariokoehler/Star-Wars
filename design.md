@@ -2393,10 +2393,55 @@ VisUI's own `backgroundOver` — a hover-only field VisUI adds beyond the
 base `TextField.TextFieldStyle`, easy to miss and left at the default
 skin's light box otherwise) so they sit invisibly on top of the baked
 "well" art, contributing only their live cursor/typed/masked text.
-Labels, error text, and the button's own label still use VisUI's default
-font — reserving custom-baked text for chrome that never changes, same
+The static field labels ("Server", "Display Name", etc.) are baked
+directly into the dialog panel art (chrome that never changes, same
 principle as the Ship Selection dialog's own baked "Previous/Next:"
-label. See 5.1 for the full screen writeup.
+label) — only the field text itself, the error label, and the button's
+label are live Scene2D text. See 5.1 for the full screen writeup.
+
+**Live TTF text via `gdx-freetype` (2026-09-07).** Until now, every
+piece of in-game text using "SF Distant Galaxy" (the logo, "SELECT YOUR
+SHIP!", the combat-lock banner, etc.) was pre-baked into art with
+Python/Pillow, because libGDX's built-in `BitmapFont` can only load
+already-baked bitmap fonts, not raw `.ttf` files — there was no live
+rendering path for text whose content isn't known ahead of time (typed
+form input, error messages). `gdx-freetype` (an official libGDX
+extension, not a third-party plugin) closes that gap:
+`FreeTypeFontGenerator` rasterizes a real `.ttf` into a `BitmapFont` at
+a given pixel size at runtime. The actual font file
+(`assets/fonts/sf_distant_galaxy.ttf`, sourced from the same "SF
+Distant Galaxy.ttf" already installed locally and used for the baked
+art, source copy at `assets-raw/fonts/sf-distant-galaxy/`) is now
+bundled with the game rather than assumed to be present on the machine
+it runs on. New `core.render.GameFonts.generateSfDistantGalaxy(sizePx)`
+wraps the generate/dispose dance (the generator itself is only needed
+to bake the glyph texture and is disposed immediately after; the
+returned `BitmapFont` owns that texture from then on and is the
+caller's own responsibility to dispose).
+
+`ConnectScreen` is the first (and so far only) consumer: one
+`BitmapFont` generated at 24px and assigned directly to the three
+custom `Style` copies it already builds (`VisTextFieldStyle`,
+`Label.LabelStyle` for the error label, `VisTextButtonStyle`) — a
+narrower, per-screen swap rather than replacing VisUI's global
+`default-font`, since this is currently the only screen with live
+text. Field text, the error message, and the Connect button's label
+all render in the real game font now, not VisUI's stock one.
+
+Needs its own native library, same class of dependency as
+`gdx-box2d-platform` (CLAUDE.md "Maven + libGDX gotchas"):
+`gdx-freetype` in `core`'s POM (the Java API,
+`FreeTypeFontGenerator`), `gdx-freetype-platform` classifier
+`natives-desktop` in `lwjgl3`'s POM (the actual FreeType native lib).
+Not added to `server` — the server never renders text.
+
+**Licensing note, not yet resolved:** "SF Distant Galaxy" was already
+being used to bake art (a use the font's original license may or may
+not actually cover), but bundling the raw `.ttf` file itself in the
+repo and redistributing it inside the game's assets is a further step
+— its exact license/redistribution terms haven't been checked. Revisit
+before this project is ever shared or distributed beyond the current
+players.
 
 **Known, deliberately accepted mismatch:** VisUI 1.5.9 (latest on Maven
 Central as of this writing) is itself pinned to gdx 1.14.1 in its own

@@ -1328,6 +1328,50 @@ first two attempts happened to land between two identical-looking
 captures) — the two shots sat clearly, visibly ahead of the ship instead
 of hovering near it. Full `mvn clean test` (82 tests) green throughout.
 
+**Live TTF text via `gdx-freetype` — implemented 2026-09-07.** See
+design.md 4.4's addendum for the full writeup. User asked whether TTF
+fonts are usable in this project at all; answer was yes, via
+`gdx-freetype` (official libGDX extension, `FreeTypeFontGenerator`) —
+then wired it up same-session. New dependencies: `gdx-freetype` in
+`core`'s POM, `gdx-freetype-platform` classifier `natives-desktop` in
+`lwjgl3`'s POM (server skipped, it never renders text). The actual "SF
+Distant Galaxy.ttf" (already installed locally,
+`C:\Users\mario\AppData\Local\Microsoft\Windows\Fonts\`, and already
+used for this project's baked art) is now also bundled as a repo asset:
+`assets-raw/fonts/sf-distant-galaxy/` (source copy) →
+`assets/fonts/sf_distant_galaxy.ttf` (what's actually loaded, no
+packing step needed for a `.ttf` unlike PNG atlases). New
+`core.render.GameFonts.generateSfDistantGalaxy(sizePx)` wraps
+generate/dispose of the `FreeTypeFontGenerator` itself (only needed to
+bake the glyph texture, disposed immediately after) — the returned
+`BitmapFont` owns that texture from then on and is the caller's
+responsibility to dispose, same as any other texture-backed resource.
+`ConnectScreen` is the first consumer: generates one 24px font and
+assigns it directly to the three custom `Style` copies it already
+builds (text fields, error label, Connect button) rather than touching
+VisUI's global `default-font` skin entry — scoped to this screen since
+it's currently the only one with live (not pre-baked) text.
+
+**Verified live, not just build+tests:** full `mvn clean test` (82
+tests, unaffected) green across every module; packaged and ran the real
+client jar, screenshotted the Connect screen via the project's usual
+`PrintWindow`-based technique — field text ("LOCALHOST", the saved
+login, masked password dots) and the "CONNECT" button label render in
+the real "SF Distant Galaxy" font now, not VisUI's default; zero
+exceptions. The still-baked chrome labels ("SERVER", "DISPLAY NAME",
+etc., part of the dialog panel art, untouched by this change) are
+visually indistinguishable from the new live text, confirming the live
+render actually matches the baked font rather than just resembling it
+from a distance.
+
+**Flagged, not resolved: `SF Distant Galaxy.ttf`'s redistribution
+license is unknown.** It was fine to *use* locally to bake art before
+(nothing left this machine), but the raw font file is now committed to
+the repo and would ship inside the game's assets to any other player —
+a different, unverified legal question. Revisit before sharing/
+distributing this project beyond the current player group; see
+design.md 4.4's addendum for the same flag.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
