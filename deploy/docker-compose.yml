@@ -11,7 +11,7 @@
 # client release to pair it with.
 services:
   starwars-server:
-    image: ghcr.io/mariokoehler/starwars-server:v0.0.2
+    image: ghcr.io/mariokoehler/starwars-server:v0.0.3
     container_name: starwars-server
     restart: unless-stopped
     ports:
