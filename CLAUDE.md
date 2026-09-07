@@ -1712,3 +1712,17 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   (e.g. resizing an asset, making a background seamlessly tileable,
   adding an alpha channel), just ask rather than trying to script an
   equivalent transformation.
+- **Standing permission to extend the embedded MCP interface (design.md
+  3.13) whenever a better way of testing something in the game would
+  help** — the user granted this outright (2026-09-07, right after the
+  Connect-screen minimal version was verified) rather than wanting to
+  be asked each time. Covers adding new tools, extending
+  `RemoteControllable` to more screens (Ship Selection, gameplay, Death
+  Screen), or richer `describeState()`/action surfaces — the same kind
+  of judgment call already applied to `ConnectScreen`. Keep following
+  the same conventions already established there (dev-only, `--mcp`-
+  gated, stdout carries nothing but JSON-RPC, actions funnel through
+  `RemoteControlQueue` onto the render thread) rather than inventing a
+  new pattern per screen. Still worth a brief mention of *why* when it
+  comes up, same as any other unprompted design choice — this isn't a
+  license to go silent about it, just to not stall on permission first.
