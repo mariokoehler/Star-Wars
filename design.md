@@ -1669,17 +1669,15 @@ artifacts published for it (see the still-open items below).
    sockets, a deliberately wrong version) and `AppVersionTest`/
    `MessageRegistryTest`'s round-trip test (updated for the new field).
 
-**Still not built:**
-4. An `update.cmd`, shipped inside the client zip, to make picking up a
-   new version fast — mechanism not yet designed. This is what's meant to
-   make the "any release forces an update" trade-off above tolerable.
-5. A tag-triggered GitHub Actions workflow (`push: tags: v*`) that
-   packages `server`+`lwjgl3`, zips the shaded jars, and publishes them
-   to a GitHub Release for that tag — deliberately **not built yet**
-   (holding off until closer to an actual first release, see CLAUDE.md
-   status). Because jgitver ties the jar's embedded version to the same
-   tag that would trigger this workflow, the two are automatically in
-   sync with no manual step to keep them that way.
+4. **Client packaging and `update.cmd` — implemented 2026-09-07, see 3.11.**
+5. A tag-triggered GitHub Actions workflow (`push: tags: v*`) that runs
+   the `release-client` Maven profile (3.11) and publishes
+   `StarWars-Client.zip` to a GitHub Release for that tag — deliberately
+   **not built yet** (holding off until closer to an actual first
+   release, see CLAUDE.md status). Because jgitver ties the jar's
+   embedded version to the same tag that would trigger this workflow, the
+   two are automatically in sync with no manual step to keep them that
+   way.
 
 **Gotcha to remember:** the "install core first" local workflow
 (CLAUDE.md, Build system) — `mvn install -pl core -am -DskipTests` — bakes
@@ -1688,6 +1686,120 @@ afterwards changes the computed version for the *next* build (even of an
 unrelated module), so a stale locally-installed `core` artifact can go
 missing from `~/.m2` under the version `lwjgl3`/`server` now expect. Rerun
 that install after any new commit, not just once per session.
+
+### 3.11 Client packaging: a self-contained zip via jpackage (2026-09-07)
+
+**Decision: `jpackage --type app-image`, not a hand-built/committed `jre/`
+folder.** The original idea was to author a trimmed JRE once ourselves and
+commit it to the repo; instead, `jpackage` (built into the JDK) runs
+`jlink` internally and produces a native `StarWars.exe` launcher plus its
+own trimmed runtime, built fresh from the build machine's JDK 25 at
+package time. **Nothing is committed to git for this** — no `jre/` tree in
+source control at all, and no separate `start.cmd` either (the generated
+`.exe` *is* the launcher, a deliberate simplification over the original
+sketch).
+
+Server distribution (a Docker container on the user's NAS) and the actual
+GitHub Actions release workflow are both explicitly **out of scope** —
+this only covers turning a local build into a zip a player can unzip and
+run.
+
+**Layout**, `jpackage --type app-image` on Windows:
+```
+StarWars/
+  StarWars.exe        <- native launcher (auto-generated)
+  app/
+    StarWars-<version>.jar
+    StarWars.cfg
+  runtime/             <- the jlinked, trimmed JRE
+    bin/ conf/ lib/ ...
+  update.cmd            <- added by the build, not by jpackage itself
+```
+`ConnectionConfigStore` (3.7) writes `connection-config.json` via
+`Gdx.files.local(...)`, which resolves against the process's CWD — for a
+double-clicked exe that's the exe's own folder, so it lands at
+`StarWars/connection-config.json`, sibling to `app/`/`runtime/`/
+`update.cmd`. This is the line `update.cmd` must never cross: it only
+ever replaces `StarWars.exe`, `app/`, `runtime/`, and itself.
+
+**Maven wiring** — all in `lwjgl3/pom.xml`'s new `release-client` profile
+(opt-in: `mvn -pl lwjgl3 -am -Prelease-client verify`, so an ordinary
+`mvn clean package` is completely unaffected):
+- `build-helper-maven-plugin`'s `parse-version` goal splits
+  `${project.version}` so jpackage's `appVersion` can be composed from
+  just the numeric `major.minor.incremental` part — jpackage's
+  `appVersion` rejects jgitver's `-SNAPSHOT`-qualified versions outright.
+  This is purely cosmetic (Explorer file properties, Add/Remove
+  Programs); `AppVersion.getVersion()` (3.10) keeps reading the full,
+  untouched version for the actual handshake check.
+- Four packaging steps — stage a clean jar-only input dir, run jpackage,
+  copy `update.cmd` in, zip the result as `StarWars-Client.zip` — are
+  each bound to their **own distinct standard-lifecycle phase**
+  (`pre-integration-test` → `integration-test` → `post-integration-test`
+  → `verify`), not crammed into one shared phase relying on
+  plugin-declaration order. **Learned the hard way**: jpackage refuses to
+  run if its destination app folder already exists, and an earlier
+  same-phase `copy-resources` execution had created exactly that folder
+  as a side effect of copying `update.cmd` into it before jpackage ran.
+  Separately: **Maven silently drops one side of a duplicate same-GA
+  `<plugin>` declaration** within one `<plugins>` list (with only a
+  build warning, not an error) — two separate `maven-resources-plugin`
+  blocks for two unrelated copy steps looked reasonable but only one
+  ever actually ran; the fix was merging both `copy-resources`
+  executions into a single plugin block with two differently-phased
+  `<execution>`s.
+
+**Verified 2026-09-07** by actually building and running the packaged
+output (not just a successful `mvn` exit code, same discipline as the
+native-library gotchas in CLAUDE.md): `StarWars-Client.zip` extracts to
+the layout above; the generated `StarWars.exe` launches and stays running
+with no missing-module errors — the jlink/jdeps auto-detection risk
+(reflection-heavy Kryo/Jackson/VisUI) did **not** materialize, so the
+`addModules` escape hatch left in the pom's config comment wasn't needed;
+`update.cmd`'s self-relaunch-from-`%TEMP%` step and its download-failure
+path both exercised for real (no release exists yet, so the download
+genuinely 404s) — correct banner output, correct error message, correct
+`pause`, correct non-zero exit, and critically nothing in the install
+folder was touched. **Not yet exercised**: the actual successful
+download/extract/staged-swap/rollback path, since that needs a real
+published release to download — deferred to whenever the first real
+`StarWars-Client.zip` release exists.
+
+**`update.cmd`** (`lwjgl3/src/main/dist/update.cmd`) design, in order:
+self-relaunch a copy of itself from `%TEMP%` first (it's one of the files
+about to be replaced, so the running instance can't safely be the one
+doing the replacing); refuse to proceed if `StarWars.exe` is currently
+running (a live JVM holds `app/*.jar` and `runtime/bin/*.dll` open, so
+nothing could be replaced anyway); download + extract via **`powershell.exe`
+only — Windows PowerShell 5.1, bundled with Windows 11, never `pwsh.exe`**
+(a separate, not-guaranteed-installed download) — every PowerShell
+snippet in the script is deliberately 5.1-compatible syntax; verify the
+extracted exe actually exists before touching anything; stage the swap by
+renaming the existing `app/`/`runtime/`/`StarWars.exe` aside with an
+`.old` suffix, moving the new ones in, and only deleting the `.old`
+folders once every move succeeded — any failed move rolls back rather
+than leaving a half-replaced install. The release asset is always named
+`StarWars-Client.zip` (never version-embedded), so `update.cmd` can hit
+GitHub's fixed `releases/latest/download/StarWars-Client.zip` URL
+forever with no API/JSON parsing needed — but this only resolves against
+the newest **non-prerelease** release, a constraint the eventual release
+workflow needs to respect.
+
+**Release-process note (not code, but easy to get wrong later):** because
+the version check (3.10) is an exact-string comparison, a client zip only
+makes sense once a server built from the *same tag* is already running
+wherever players connect. The eventual release sequence needs to be: tag
+→ rebuild/redeploy the NAS server container from that tag → *then*
+publish the client zip. Publishing the client first means players who
+update immediately start failing the handshake against a server that
+hasn't caught up yet.
+
+**Still open:** an app icon (`lwjgl3/src/main/dist/icon.ico` doesn't
+exist yet, so jpackage uses its default); the GitHub Actions workflow
+itself (§6); the successful-update path is untested until a real release
+exists; no code-signing certificate is planned, so first run will trigger
+Windows SmartScreen's "protected your PC" warning (accepted trade-off,
+not a bug).
 
 ## 4. Rendering & presentation
 
@@ -2378,11 +2490,18 @@ once a component is actually being worked on.
       carries it; `NetworkServer` rejects a mismatch before the account
       lookup runs, reusing the Connect Dialog's existing error display.
       See 3.10.
-- [ ] **`update.cmd`** in the client zip, to make picking up a new version
-      low-friction. See 3.10.
-- [ ] **Tag-triggered GitHub Actions release workflow** — package, zip,
-      and publish `server`/`lwjgl3` to a GitHub Release on `v*` tag push.
-      Deliberately not started yet. See 3.10.
+- [x] **Client packaging + `update.cmd` (2026-09-07)** — `jpackage
+      --type app-image` (native `StarWars.exe` + jlink runtime, no
+      committed `jre/`) via `lwjgl3`'s new `release-client` Maven profile,
+      zipped as `StarWars-Client.zip`; `update.cmd` self-updates a local
+      install without touching `connection-config.json`. Built and
+      smoke-tested (packaged exe launches, update.cmd's self-relaunch and
+      download-failure paths both exercised for real) but the
+      successful-download/swap path is still unverified - no release
+      exists yet to download. See 3.11.
+- [ ] **Tag-triggered GitHub Actions release workflow** — run the
+      `release-client` profile (3.11) and publish `StarWars-Client.zip`
+      to a GitHub Release on `v*` tag push. Deliberately not started yet.
 - [x] **Entity/component model (first pass, server-side)** — Ashley set
       up in `core` under `de.mkoehler.starwars.sim`, used by
       `GameNetworkServer`: `PhysicsBodyComponent`, `PlayerControlledComponent`,
@@ -2504,10 +2623,13 @@ consumes them.
 Track unresolved decisions here so they don't get lost. Move an item into
 the relevant section above once decided.
 
-- **Client distribution**: **decided 2026-09-07 (see 3.10)** — a zipped
-  client build attached to a GitHub Release, published by a tag-triggered
-  Actions workflow. The workflow itself isn't built yet, so this still
-  isn't how players actually get the client today.
+- **Client distribution**: **packaging built 2026-09-07 (see 3.11)** — a
+  jpackage-produced `StarWars-Client.zip` (native exe + jlink runtime +
+  `update.cmd`), meant to be attached to a GitHub Release by a
+  tag-triggered Actions workflow. Only that workflow itself remains
+  unbuilt, so this still isn't how players actually get the client today
+  — but `mvn -pl lwjgl3 -am -Prelease-client verify` produces the real
+  artifact locally already.
 - **Ship roster**: which specific iconic ships, and their relative
   stats/balance. **Idea floated 2026-09-06, not implemented:** a "Ship
   Tree" for XP unlocks (3.6/6) — every account starts with the faction-

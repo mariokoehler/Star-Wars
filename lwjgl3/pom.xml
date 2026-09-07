@@ -121,4 +121,156 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <!-- Builds the packaged Windows client zip (design.md 3.11): a jpackage app-image
+         (native StarWars.exe + a trimmed jlink runtime, no JDK/JRE install required by
+         players) plus update.cmd, zipped as StarWars-Client.zip. Not run on an ordinary
+         `mvn clean package` - deliberately opt-in via `mvn -pl lwjgl3 -am -Prelease-client
+         verify`, so everyday dev builds stay exactly as fast as they are today. -->
+    <profile>
+      <id>release-client</id>
+      <properties>
+        <!-- jpackage's appVersion parameter rejects jgitver's "-SNAPSHOT"-qualified versions
+             (only plain major[.minor[.build]] is accepted) - this is purely cosmetic
+             (Explorer file properties, Add/Remove Programs), never the compatibility-check
+             version. AppVersion.getVersion() (core/.../net/) keeps reading the full,
+             untouched ${project.version} from starwars-version.properties for that. -->
+        <jpackage.appVersion>${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion}</jpackage.appVersion>
+        <jpackage.inputDir>${project.build.directory}/jpackage-input</jpackage.inputDir>
+        <jpackage.outputDir>${project.build.directory}/jpackage</jpackage.outputDir>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>build-helper-maven-plugin</artifactId>
+            <version>3.6.0</version>
+            <executions>
+              <execution>
+                <id>parse-version-for-jpackage</id>
+                <phase>validate</phase>
+                <goals>
+                  <goal>parse-version</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+          <!-- Four steps, each bound to its own distinct standard-lifecycle phase between
+               `package` (the shade plugin, above) and `verify` - NOT four executions crammed
+               into one shared phase relying on plugin-declaration order, which turned out to
+               be unsafe in practice: jpackage refuses to run if its destination app folder
+               already exists, and a same-phase copy-resources execution declared earlier
+               creates exactly that folder as a side effect of copying into it. Spreading them
+               across pre-integration-test -> integration-test -> post-integration-test ->
+               verify sidesteps the whole question. -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-resources-plugin</artifactId>
+            <version>3.5.0</version>
+            <executions>
+              <execution>
+                <id>stage-jpackage-input</id>
+                <phase>pre-integration-test</phase>
+                <goals>
+                  <goal>copy-resources</goal>
+                </goals>
+                <configuration>
+                  <!-- A clean, jar-only directory for jpackage to read - target/ itself also
+                       holds classes/, test-classes/, the pre-shade original-*.jar etc., none
+                       of which belong in a player's zip. -->
+                  <outputDirectory>${jpackage.inputDir}</outputDirectory>
+                  <resources>
+                    <resource>
+                      <directory>${project.build.directory}</directory>
+                      <includes>
+                        <include>${appName}-${project.version}.jar</include>
+                      </includes>
+                    </resource>
+                  </resources>
+                </configuration>
+              </execution>
+              <!-- Second execution of this same plugin (kept in this one block, not a
+                   separate <plugin> element - Maven flags/collapses duplicate groupId:
+                   artifactId plugin declarations within one <plugins> list and only one
+                   of them actually ran, silently dropping the other's executions, which is
+                   exactly how this was wrong the first time). Runs after jpackage
+                   (integration-test, below) has already created its destination folder. -->
+              <execution>
+                <id>copy-update-cmd</id>
+                <phase>post-integration-test</phase>
+                <goals>
+                  <goal>copy-resources</goal>
+                </goals>
+                <configuration>
+                  <!-- jpackage's app-image output directory for type=APP_IMAGE, name=${appName}
+                       is <destination>/${appName}/ - update.cmd lands next to the generated exe. -->
+                  <outputDirectory>${jpackage.outputDir}/${appName}</outputDirectory>
+                  <resources>
+                    <resource>
+                      <directory>src/main/dist</directory>
+                      <includes>
+                        <include>update.cmd</include>
+                      </includes>
+                    </resource>
+                  </resources>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+          <plugin>
+            <groupId>org.panteleyev</groupId>
+            <artifactId>jpackage-maven-plugin</artifactId>
+            <version>1.6.6</version>
+            <executions>
+              <execution>
+                <phase>integration-test</phase>
+                <goals>
+                  <goal>jpackage</goal>
+                </goals>
+              </execution>
+            </executions>
+            <configuration>
+              <name>${appName}</name>
+              <appVersion>${jpackage.appVersion}</appVersion>
+              <vendor>Mario Koehler</vendor>
+              <input>${jpackage.inputDir}</input>
+              <mainJar>${appName}-${project.version}.jar</mainJar>
+              <mainClass>${mainClass}</mainClass>
+              <type>APP_IMAGE</type>
+              <destination>${jpackage.outputDir}</destination>
+              <javaOptions>
+                <option>--enable-native-access=ALL-UNNAMED</option>
+              </javaOptions>
+              <!-- Escape hatch for jlink/jdeps under-detecting modules needed by reflection-heavy
+                   dependencies (Kryo, Jackson, VisUI/Scene2D skin loading) - leave unset unless a
+                   packaged build actually fails at runtime with a missing-module error, then try
+                   e.g. `mvn ... -Prelease-client -Djpackage.addModules=ALL-MODULE-PATH verify`. -->
+            </configuration>
+          </plugin>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-assembly-plugin</artifactId>
+            <version>3.8.0</version>
+            <executions>
+              <execution>
+                <id>zip-client</id>
+                <phase>verify</phase>
+                <goals>
+                  <goal>single</goal>
+                </goals>
+                <configuration>
+                  <descriptors>
+                    <descriptor>src/main/assembly/client-zip.xml</descriptor>
+                  </descriptors>
+                  <finalName>StarWars-Client</finalName>
+                  <appendAssemblyId>false</appendAssemblyId>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>

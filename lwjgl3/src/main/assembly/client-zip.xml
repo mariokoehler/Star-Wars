@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Zips the jpackage app-image output (StarWars.exe + app/ + runtime/, plus
+  update.cmd copied in alongside it by the release-client profile) as
+  StarWars-Client.zip, with a StarWars/ folder at the zip root so unzipping
+  drops the whole install in place. See design.md 3.11.
+-->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 http://maven.apache.org/xsd/assembly-2.2.0.xsd">
+  <id>client-zip</id>
+  <formats>
+    <format>zip</format>
+  </formats>
+  <includeBaseDirectory>false</includeBaseDirectory>
+  <fileSets>
+    <fileSet>
+      <directory>${project.build.directory}/jpackage/${appName}</directory>
+      <outputDirectory>${appName}</outputDirectory>
+    </fileSet>
+  </fileSets>
+</assembly>

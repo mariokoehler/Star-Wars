@@ -1453,6 +1453,30 @@ client), `server` (`gdx-backend-headless` dedicated server, added
   install -pl core -am -DskipTests` after every new commit, not just once
   per session — a `-am`-less exec step failing to resolve `core` is the
   symptom.
+- **Maven silently drops one side of a duplicate same-`groupId:artifactId`
+  `<plugin>` declaration within one `<plugins>` list** (2026-09-07,
+  design.md 3.11) — it's only a build *warning* ("must be unique but
+  found duplicate declaration of plugin..."), not an error, so it's easy
+  to miss. Two separate `maven-resources-plugin` blocks for two unrelated
+  `copy-resources` steps in `lwjgl3/pom.xml`'s `release-client` profile
+  looked reasonable but only one of them ever actually ran (its
+  `<executions>` silently discarded), which then made the *other* step
+  look like it had failed for an unrelated reason (its expected input
+  directory just never got created). Fix: merge same-GA plugins into one
+  `<plugin>` block with multiple `<execution>`s, one per phase, rather
+  than declaring the same plugin more than once in one list.
+- **`jpackage`'s `app-image` output refuses to run if its destination app
+  folder already exists** (2026-09-07, design.md 3.11) — this bit the
+  same `release-client` profile from a different angle: a same-phase
+  `copy-resources` execution declared *before* jpackage in the pom
+  created that folder as a side effect of copying a file into it, so
+  jpackage then refused to write there. General lesson for any multi-step
+  packaging pipeline like this one: don't rely on same-phase
+  plugin-declaration order when steps have real ordering dependencies —
+  bind each step to its own distinct standard-lifecycle phase instead
+  (this profile uses `pre-integration-test` → `integration-test` →
+  `post-integration-test` → `verify`, all real phases in the default
+  lifecycle with no default bindings of their own to collide with).
 
 ## Git / GitHub
 
