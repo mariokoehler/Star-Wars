@@ -31,6 +31,7 @@ import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
+import de.mkoehler.starwars.sim.KillXp;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
@@ -106,6 +107,9 @@ public class GameNetworkServer extends NetworkServer {
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
     private final Map<Integer, ShipType> shipTypeByPlayerId = new HashMap<>();
+    // Populated on a successful handshake, removed on disconnect - lets a kill be credited to
+    // the killer's account (design.md - kill XP) via nothing more than their playerId.
+    private final Map<Integer, String> loginByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
@@ -264,14 +268,24 @@ public class GameNetworkServer extends NetworkServer {
         }
         Set<Entity> projectilesToRemove = new HashSet<>();
         Set<Entity> shipsToCheck = new HashSet<>();
+        // Credits whichever hit actually tips a ship's hull to zero, not just whichever hit
+        // happens to be processed last for it this tick (design.md - kill XP) - matters when
+        // more than one hit lands on the same ship in a single tick.
+        Map<Entity, Integer> killerPlayerIdByShip = new HashMap<>();
         for (HitEvent hit : pendingHits) {
             if (!projectilesToRemove.add(hit.projectile)) {
                 continue; // already resolved this tick (e.g. two simultaneous contact events)
             }
             float damage = hit.projectile.getComponent(ProjectileComponent.class).getDamage();
-            ShipDamage.apply(hit.ship.getComponent(ShieldComponent.class), hit.ship.getComponent(HullComponent.class), damage);
+            HullComponent hull = hit.ship.getComponent(HullComponent.class);
+            boolean wasAlreadyDestroyed = hull.isDestroyed();
+            ShipDamage.apply(hit.ship.getComponent(ShieldComponent.class), hull, damage);
             hit.ship.getComponent(CombatTimerComponent.class).markHit();
             shipsToCheck.add(hit.ship);
+            if (!wasAlreadyDestroyed && hull.isDestroyed()) {
+                int killerPlayerId = hit.projectile.getComponent(ProjectileComponent.class).getOwnerPlayerId();
+                killerPlayerIdByShip.put(hit.ship, killerPlayerId);
+            }
         }
         pendingHits.clear();
 
@@ -281,15 +295,54 @@ public class GameNetworkServer extends NetworkServer {
         }
         for (Entity ship : shipsToCheck) {
             if (ship.getComponent(HullComponent.class).isDestroyed()) {
-                handleShipDestroyed(ship);
+                handleShipDestroyed(ship, killerPlayerIdByShip.get(ship));
             }
         }
     }
 
-    private void handleShipDestroyed(Entity ship) {
+    /**
+     * Handles a combat kill: tears down the victim's ship, schedules their
+     * respawn, awards the killer kill XP ({@link #awardKillXp}), and
+     * broadcasts the death.
+     *
+     * @param ship           the destroyed ship entity
+     * @param killerPlayerId the id of whoever landed the fatal hit, or
+     *                       {@code null} if that isn't known (see
+     *                       {@link #resolvePendingHits} - not expected in
+     *                       practice, handled rather than risking a crash)
+     */
+    private void handleShipDestroyed(Entity ship, Integer killerPlayerId) {
         int playerId = destroyShipEntity(ship);
         respawnTimers.put(playerId, RESPAWN_DELAY_SECONDS);
+        awardKillXp(playerId, killerPlayerId);
         sendToAllTCP(new ShipDestroyedMessage(playerId));
+    }
+
+    /**
+     * Awards {@link KillXp} to the killer's account (design.md - kill XP),
+     * if the kill is attributable to a specific player and both ships'
+     * types and the killer's login are still known - not expected to ever
+     * be missing in practice (a ship can only be destroyed by a hit, and
+     * both players are still fully tracked mid-tick even if one of them
+     * disconnects, since disconnects are themselves queued through
+     * {@link #pendingActions}), but this fails soft rather than crashing
+     * the tick loop if one of them somehow is.
+     *
+     * @param victimPlayerId the destroyed ship's owning player id
+     * @param killerPlayerId the id of whoever landed the fatal hit, or
+     *                       {@code null} if unknown
+     */
+    private void awardKillXp(int victimPlayerId, Integer killerPlayerId) {
+        if (killerPlayerId == null) {
+            return;
+        }
+        ShipType victimShipType = shipTypeByPlayerId.get(victimPlayerId);
+        ShipType killerShipType = shipTypeByPlayerId.get(killerPlayerId);
+        String killerLogin = loginByPlayerId.get(killerPlayerId);
+        if (victimShipType == null || killerShipType == null || killerLogin == null) {
+            return;
+        }
+        accountStore.addXp(killerLogin, KillXp.calculate(victimShipType, killerShipType));
     }
 
     /**
@@ -300,8 +353,9 @@ public class GameNetworkServer extends NetworkServer {
      * requirement — but deliberately does <strong>not</strong> schedule a
      * respawn timer, since the player is leaving to Ship Selection (a full
      * reconnect for their next match), not waiting to respawn into this
-     * one. No kill credit/XP is awarded either way, since no such system
-     * exists yet to award it through.
+     * one. No kill credit/XP is awarded either way — this is a self-
+     * destruct, not a kill, so it never goes through {@link #handleShipDestroyed}
+     * at all.
      *
      * @param playerId the leaving player's id
      */
@@ -393,7 +447,10 @@ public class GameNetworkServer extends NetworkServer {
         int playerId = connection.getID();
         AuthResult result = accountStore.login(request.getLogin(), request.getPassword(), request.getDisplayName());
         if (result.success()) {
-            pendingActions.add(() -> connectionsByPlayerId.put(playerId, connection));
+            pendingActions.add(() -> {
+                connectionsByPlayerId.put(playerId, connection);
+                loginByPlayerId.put(playerId, request.getLogin());
+            });
         }
         return new HandshakeResponse(result.success(), result.message());
     }
@@ -439,6 +496,7 @@ public class GameNetworkServer extends NetworkServer {
         pendingActions.add(() -> {
             connectionsByPlayerId.remove(playerId);
             shipTypeByPlayerId.remove(playerId);
+            loginByPlayerId.remove(playerId);
             respawnTimers.remove(playerId);
             despawnShip(playerId);
         });

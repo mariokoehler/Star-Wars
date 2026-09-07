@@ -122,4 +122,23 @@ public class AccountStore {
         }
         return AuthResult.success(existing, "Welcome back, " + displayName + ".");
     }
+
+    /**
+     * Adds XP to an existing account's running total (design.md — kill XP),
+     * persisting the change immediately. Does nothing if the login doesn't
+     * exist - shouldn't happen in practice (only ever called for a player
+     * who has already logged in this session), but there's no reason to
+     * throw over it either.
+     *
+     * @param login  the account's login name
+     * @param amount the XP to add
+     */
+    public synchronized void addXp(String login, int amount) {
+        PlayerAccount account = accountsByLogin.get(login);
+        if (account == null) {
+            return;
+        }
+        account.setXp(account.getXp() + amount);
+        save();
+    }
 }

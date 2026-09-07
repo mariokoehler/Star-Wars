@@ -1051,6 +1051,63 @@ re-kill loop. Belongs to the still-open "map/arena design" question
 actually flying against a turret-equipped ship, not just automated
 toggling) — same status as every other untuned balance number so far.
 
+### 2.10 Kill XP (2026-09-07)
+
+**Decision: `XP = BASE_XP * tierMultiplier * rankDisparityMultiplier`.**
+Every `ShipType` carries a **progression tier**, 1-4: the
+faction-neutral Snowspeeder is tier 1, then both faction branches climb
+tiers 2-4 in lockstep — TIE Fighter/A-Wing at tier 2, X-wing/TIE
+Interceptor at tier 3, Star Destroyer/Falcon at tier 4. This is the exact
+tier structure the "Ship Tree" idea (§7/6) already sketched — the two
+branches climbing together — repurposed here as a balance input rather
+than an unlock gate (the unlock gate itself still doesn't exist).
+
+- `BASE_XP` = 10.
+- `tierMultiplier` = the **killed** ship's tier — a bigger ship is worth
+  more, regardless of who killed it.
+- `rankDisparityMultiplier` = killed ship's tier ÷ killer's ship's tier —
+  rewards an underdog kill, penalizes a lopsided one. A tier-1 Snowspeeder
+  downing a tier-4 Star Destroyer earns `10 * 4 * (4/1) = 160` XP; the
+  reverse earns `10 * 1 * (1/4) = 2.5` XP, rounded to the nearest whole
+  number (3). Only the killer is rewarded — no XP penalty for the victim,
+  that was never proposed.
+
+**Implemented 2026-09-07.** `KillXp` (new, `core/.../sim/`) is the pure
+formula, unit-tested (`KillXpTest`) the same way as `ShipDamage` — same
+"standalone, testable piece of logic" convention. `ShipType` gained the
+tier as a new enum constructor parameter (single source of truth,
+alongside `resourceName`, rather than a parallel lookup table that could
+drift out of sync). `AccountStore` gained `addXp(login, amount)`
+(`AccountStoreTest` covers it, including a reload-from-disk round trip).
+
+**Killer attribution, in `GameNetworkServer#resolvePendingHits`:** a tick
+can land more than one hit on the same ship (e.g. two players' shots
+connecting the same tick), so credit goes specifically to whichever hit
+*first* tips the hull from "not destroyed" to "destroyed" — checked
+per-hit, immediately after that hit's own damage is applied — not
+whichever hit happens to be the last one processed for that ship this
+tick. A new `loginByPlayerId` map (populated on handshake, cleared on
+disconnect, alongside the existing `connectionsByPlayerId`/
+`shipTypeByPlayerId`) is what actually lets a `playerId` translate into
+an `AccountStore` login to credit. Fails soft (no XP awarded, doesn't
+throw) if the killer's login/ship type is somehow missing rather than
+risk crashing the tick loop over a kill-XP edge case — not expected to
+actually happen, since a ship can only be destroyed by a hit, and
+disconnects are themselves queued through `pendingActions` so they can't
+race a same-tick kill.
+
+Leaving a match (design.md 2.3's ESC self-destruct) still awards nothing,
+structurally — `selfDestructShip` never calls the kill-handling path at
+all, self-destructing is not a kill.
+
+**Verified:** the full test suite (`KillXpTest`, updated
+`AccountStoreTest`) and a server boot smoke test. **Not yet verified:**
+an actual live kill in a real multiplayer session — needs two players
+actually fighting, not something scriptable from here. Also still
+missing, called out explicitly by the user rather than forgotten: **no
+way for a player to see their own XP yet** — accounts accumulate it
+correctly now, there's just no UI surfacing it.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -2654,9 +2711,8 @@ once a component is actually being worked on.
 - [x] **Account system (server, 2026-09-06)** — see 3.6: JSON-file-backed
       `PlayerAccount` store, auto-register-or-validate-on-connect flow,
       salted SHA-256 password hashing, split from ship spawning into a
-      separate `SpawnRequest`. No XP-earning source yet (nothing awards
-      XP) — accounts always start and stay at 0 until a scoring system
-      exists.
+      separate `SpawnRequest`. XP is now actually earned via kills — see
+      2.10 — though there's still no UI surfacing it to the player.
 - [x] **Client local config, connection half (2026-09-06)** — see 3.7:
       load/save the four connect fields to a local JSON file. Keybinds
       (3.8) remain unbuilt - no Keybind Setup screen yet, so there's
@@ -2808,8 +2864,13 @@ once a component is actually being worked on.
       no repeat until all 23 have been shown, ESC-to-continue (the
       delivered art's own baked-in instruction, superseding this
       checklist's original ENTER assumption).
-- [ ] **XP & progression** — award XP per match/kill, unlock additional
-      ships at XP thresholds (persisted via the account system above).
+- [x] **Kill XP (2026-09-07)** — see 2.10: tier-weighted
+      `base * tierMultiplier * rankDisparityMultiplier` formula
+      (`KillXp`), awarded via `AccountStore#addXp` on a confirmed kill.
+- [ ] **XP display + ship-unlock thresholds** — still nothing shows a
+      player their own XP (explicitly deferred, not forgotten), and
+      unlocking additional ships at XP thresholds (§7's "Ship Tree" idea)
+      isn't built — every ship is still selectable unconditionally.
 
 ### 6.1 Content TODO: death screen quotes
 

@@ -100,4 +100,36 @@ class AccountStoreTest {
 
         assertTrue(store.findByLogin("anyone").isEmpty());
     }
+
+    @Test
+    void addXpIncreasesTheRunningTotal(@TempDir Path tempDir) {
+        AccountStore store = new AccountStore(tempDir.resolve("accounts.json"));
+        store.login("han", "solo123", "Han Solo");
+
+        store.addXp("han", 160);
+        store.addXp("han", 3);
+
+        assertEquals(163, store.findByLogin("han").orElseThrow().getXp());
+    }
+
+    @Test
+    void addXpForAnUnknownLoginDoesNothing(@TempDir Path tempDir) {
+        AccountStore store = new AccountStore(tempDir.resolve("accounts.json"));
+
+        store.addXp("nobody", 100);
+
+        assertTrue(store.findByLogin("nobody").isEmpty());
+    }
+
+    @Test
+    void addXpSurvivesReloadFromDisk(@TempDir Path tempDir) {
+        Path file = tempDir.resolve("accounts.json");
+        AccountStore first = new AccountStore(file);
+        first.login("han", "solo123", "Han Solo");
+        first.addXp("han", 40);
+
+        AccountStore reloaded = new AccountStore(file);
+
+        assertEquals(40, reloaded.findByLogin("han").orElseThrow().getXp());
+    }
 }
