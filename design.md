@@ -1227,6 +1227,110 @@ in-flight scoreboard still showed `DEATHS=1`, not reset, proving the fix
 survives a real reconnect, not just the Death Screen's one-shot
 snapshot. Full `mvn clean test` green throughout.
 
+### 2.12 Ship unlocks (2026-09-08)
+
+Now that XP is real and persists (2.10/2.11), the user asked to spend it
+on something: unlocking ship types. User-specified rules, implemented
+exactly as given:
+
+- {@link ShipType#SNOWSPEEDER}/`SNOWSPEEDER` is unlocked for every
+  account from the start — no cost, no padlock, ever.
+- Every other ship type costs XP to unlock, by tier (2.10's tiers):
+  **1000 for tier 2** (TIE Fighter, A-Wing), **1500 for tier 3**
+  (X-wing, TIE Interceptor), **2000 for tier 4** (Star Destroyer,
+  Falcon) — a new `unlockCostXp` field on each ship's
+  `shipdata/<name>.stats.json` (`ShipTypeConfig`/`ShipStats`).
+- **XP itself is never decremented when a ship is unlocked** — it stays
+  a lifetime-earned total, same spirit as 2.11's kills/deaths.
+  Affordability is instead computed as **available XP = total XP −
+  the summed unlock cost of every already-unlocked ship** — so
+  unlocking is really just "the (persisted) unlocked-ship set grows by
+  one, and that same subtraction now has one more term." New pure,
+  unit-tested `core.sim.ShipUnlocks` (`isUnlocked`/`availableXp`) is
+  the one place this logic lives, used identically by the client (to
+  decide which padlock to show) and the server (to actually validate a
+  request) — the same "shared pure function, not duplicated logic on
+  each end" convention as `ShipDamage`/`PowerDistribution`.
+- Persisted on the account (design.md 3.6), a new `Set<ShipType>
+  unlockedShips` field on `PlayerAccount`/`AccountStore` — mirrors how
+  XP/kills/deaths already work there. Never contains `SNOWSPEEDER`
+  itself (never needs to, since it's unconditionally unlocked).
+
+**User-provided art:** `assets-raw/menu/Padlock_Green.png` /
+`Padlock_White.png` (174×218, packed into `menu.atlas` like the rest
+of that folder) — a locked-ship overlay, drawn centered over the ship
+portrait (`DialogLayout.fitCentered`, same centering `ShipSelectionScreen`
+already uses for the portrait itself). Green ("'SPACE' to unlock") shows
+when the currently-viewed locked ship is affordable; white ("not enough
+XP") when it isn't — both messages are baked directly into the art, so
+no separate live text is needed over them. An already-unlocked ship
+shows neither.
+
+**Protocol:** `HandshakeResponse` gained `xp`/`unlockedShips` fields,
+sent whenever a login succeeds — `ShipSelectionScreen` is the first
+consumer, but any future screen needing the same account snapshot can
+read it from its own handshake too, no new message type required. Two
+new messages: `UnlockShipRequest` (ship type only) and
+`UnlockShipResponse` (success + a message + the account's current
+xp/unlockedShips — sent whether the ship ends up unlocked just now,
+was already unlocked, or the request is denied, so the client can
+just always replace its local copy with whatever comes back rather
+than branching on success/failure).
+
+**`ShipSelectionScreen` becomes the second screen (after `ConnectScreen`)
+to hold a live server connection** — previously it held none at all,
+picking a ship and browsing was fully offline until Start. Its own
+fresh handshake (design.md 3.6 — logging in again is harmless) supplies
+the account's XP/unlocked ships; the connection stays open for as long
+as the player lingers here (unlike `ConnectScreen`, which disconnects
+the moment login is validated) so an unlock request has somewhere to
+send to, and is stopped in `dispose()`. Deliberately **asynchronous**,
+unlike `ConnectScreen.attemptConnect()`'s blocking pattern — blocking
+here would freeze this screen's first frame for up to the connection
+timeout, acceptable for a screen whose entire purpose at that moment
+*is* connecting, not for one whose primary purpose is browsing ships.
+Until the handshake response arrives, every non-Snowspeeder ship simply
+shows locked (the harmless zeroed default), self-correcting within a
+frame or two on any real connection. A connection failure itself is
+still treated as fatal, matching `Client.connectToServer()`'s existing
+precedent for the same class of failure.
+
+**Server-side enforcement, not just client-side UI gating:** `SpawnRequest`
+handling now checks `ShipUnlocks.isUnlocked` against the requesting
+player's account before spawning, dropping the request harmlessly
+otherwise — the client's own padlock/Start-button gating is a UI
+convenience, never trusted on its own, same "don't trust the client"
+posture every other player action already gets here. `UnlockShipRequest`
+handling re-validates affordability server-side too, for the same reason.
+
+**A real, previously-latent gap found (and fixed) while unit-testing
+this:** `core`'s own test classpath never had `assets/shipdata/*.json`
+on it at all — only `lwjgl3`'s and `server`'s *main* resources bundle
+`assets/`, and no earlier `core` test happened to transitively touch
+`ShipStats.forType(...)` (which loads that JSON) to notice. The new
+`ShipUnlocksTest` was the first one to. Fixed by adding a
+`<testResources>` block to `core/pom.xml` (test-scoped only — `core`'s
+own packaged jar must stay exactly as it was, `lwjgl3`/`server` already
+bundle `assets/` into their own runtime classpath).
+
+**Verified live, fully end-to-end, real server + client restarts
+included:** a fresh account at 0 XP showed every non-Snowspeeder ship
+white-padlocked (confirmed both the default X-wing selection and TIE
+Fighter), Snowspeeder itself unpadlocked; seeded to 1000 XP (editing
+`data/accounts.json` directly, then restarting the server so it
+re-loads it — a legitimate way to reach a precise, deterministic XP
+value for testing without needing a real kill), TIE Fighter (cost 1000)
+showed the green padlock; pressed SPACE, padlock disappeared; A-Wing
+(also cost 1000, tier 2) immediately re-checked as white afterward
+(available XP now `1000 − 1000 = 0`), directly confirming the
+summed-cost subtraction, not just a single-ship check; Start correctly
+did nothing for a still-locked ship and correctly launched a real match
+flying the newly-unlocked TIE Fighter; **stopped both the server and
+client entirely, restarted both, logged in again, and confirmed the
+unlock was still there** (no padlock on TIE Fighter) — real persistence
+across a full restart, not just within one session. Full `mvn clean
+test` green throughout.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -2972,6 +3076,20 @@ successful login instead of being the app's start screen (2026-09-06).**
   swap) are implemented but not separately screenshotted (a static
   screenshot can't show hover); the user should try moving the mouse over
   the arrows/Start button themselves.
+
+**Addendum (2026-09-08): this screen now actually enforces the "ships
+available here are gated by the account's current XP" line from this
+section's own screen-flow bullet above** — previously every ship was
+freely selectable/flyable regardless of XP, since the flow diagram
+described the intent before the mechanism existed. Full writeup in the
+new 2.12 ("Ship unlocks"). Short version: the screen now holds its own
+live server connection (its handshake response carries the account's
+XP and unlocked-ship set) so a locked ship's portrait gets a padlock
+overlay — green ("'SPACE' to unlock") or white ("not enough XP")
+depending on affordability — and Start is disabled for a still-locked
+ship. Unlocking is a live round trip (`UnlockShipRequest`/
+`UnlockShipResponse`) over that same connection, not a purely local
+UI state change.
 
 **Death Screen — implemented 2026-09-06.** User provided all the art:
 `Dialog_Background.png` (a plain bordered panel) and 23

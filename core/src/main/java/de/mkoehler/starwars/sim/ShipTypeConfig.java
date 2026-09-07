@@ -32,6 +32,7 @@ public class ShipTypeConfig {
     private float hudShieldClipBottomPixel;
     private float hudHullClipTopPixel;
     private float hudHullClipBottomPixel;
+    private int unlockCostXp;
 
     /**
      * Returns the ship's collision/draw radius, used only for the fallback
@@ -160,5 +161,23 @@ public class ShipTypeConfig {
 
     public void setHudHullClipBottomPixel(float hudHullClipBottomPixel) {
         this.hudHullClipBottomPixel = hudHullClipBottomPixel;
+    }
+
+    /**
+     * Returns the account XP cost to unlock this ship type (design.md —
+     * ship unlocks), checked against a player's
+     * {@link ShipUnlocks#availableXp available XP}, not their raw total.
+     * Meaningless for a ship type that's always unlocked
+     * ({@link ShipType#SNOWSPEEDER}) — {@link ShipUnlocks#isUnlocked} never
+     * even reads it for that one.
+     *
+     * @return the XP cost to unlock this ship type
+     */
+    public int getUnlockCostXp() {
+        return unlockCostXp;
+    }
+
+    public void setUnlockCostXp(int unlockCostXp) {
+        this.unlockCostXp = unlockCostXp;
     }
 }

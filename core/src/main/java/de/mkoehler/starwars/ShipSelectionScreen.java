@@ -9,9 +9,23 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.utils.ScreenUtils;
+import de.mkoehler.starwars.net.NetworkClient;
+import de.mkoehler.starwars.net.NetworkConstants;
+import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.net.messages.UnlockShipRequest;
+import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.render.DialogLayout;
 import de.mkoehler.starwars.render.ScrollingBackground;
+import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
+import de.mkoehler.starwars.sim.ShipUnlocks;
+
+import java.io.IOException;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Shown right after a successful login on {@link ConnectScreen} (design.md
@@ -23,9 +37,7 @@ import de.mkoehler.starwars.sim.ShipType;
  * {@code de.mkoehler.starwars.net.messages.SpawnRequest} once {@link Client}
  * (re)establishes the connection — every ship type currently uses the same
  * performance numbers (thrust/torque/hull/shield), copied from the X-wing's
- * {@code .stats.json} until each gets its own real balancing pass. No XP
- * gating yet (design.md 3.6) — every ship type is always shown, regardless
- * of the logged-in account's XP.
+ * {@code .stats.json} until each gets its own real balancing pass.
  * <p>
  * All rendering uses pre-made dialog art at native pixel size/position (no
  * Scene2D/VisUI, matching this codebase's existing raw-{@link SpriteBatch}
@@ -33,6 +45,25 @@ import de.mkoehler.starwars.sim.ShipType;
  * (design.md 4.4) is used by {@link ConnectScreen} instead, which actually
  * needs form widgets; this screen, being entirely pre-rendered art plus two
  * arrow buttons and a start button, doesn't.
+ * <p>
+ * <b>Ship unlocks (design.md):</b> this is the first (and so far only)
+ * screen besides {@link ConnectScreen} to hold its own live server
+ * connection — established in {@link #show()} via its own fresh handshake
+ * (design.md 3.6 — logging in again is harmless), kept open (unlike
+ * {@code ConnectScreen}, which disconnects the moment it's validated login)
+ * for as long as the player lingers here, so a locked ship can actually be
+ * unlocked without leaving the screen. The handshake's {@link HandshakeResponse}
+ * carries the account's XP and unlocked-ship-types set; a locked ship shows
+ * a green ("'SPACE' to unlock", already baked into the art) or white ("not
+ * enough XP") padlock overlay depending on {@link ShipUnlocks#availableXp}
+ * versus that ship's {@link ShipStats#getUnlockCostXp()} — pressing
+ * <b>SPACE</b> over a green one sends an {@link UnlockShipRequest}; the
+ * server's {@link UnlockShipResponse} (re-validated there, never trusted
+ * from this screen's own gating alone) replaces this screen's local copy of
+ * both numbers outright rather than applying an optimistic local update.
+ * {@link ShipType#SNOWSPEEDER} never shows a padlock at all — it's always
+ * unlocked. Start/ENTER do nothing for a still-locked ship, same as this
+ * screen already does nothing for input on its very first frame.
  */
 public class ShipSelectionScreen implements Screen {
 
@@ -86,6 +117,15 @@ public class ShipSelectionScreen implements Screen {
     private TextureRegion arrowRightHoverRegion;
     private TextureRegion startButtonRegion;
     private TextureRegion startButtonHoverRegion;
+    private TextureRegion padlockGreenRegion;
+    private TextureRegion padlockWhiteRegion;
+
+    private NetworkClient networkClient;
+    private final Queue<Runnable> pendingUpdates = new ConcurrentLinkedQueue<>();
+    private int myXp;
+    private Set<ShipType> unlockedShips = new HashSet<>();
+    /** Set once an {@link UnlockShipRequest} has been sent, until the server's {@link UnlockShipResponse} arrives - guards against spamming a request every frame SPACE is held. */
+    private boolean unlockRequestInFlight;
 
     private int selectedIndex;
     /**
@@ -132,15 +172,76 @@ public class ShipSelectionScreen implements Screen {
         arrowRightHoverRegion = menuAtlas.findRegion("Arrow_Right_MouseOver");
         startButtonRegion = menuAtlas.findRegion("Start_Button");
         startButtonHoverRegion = menuAtlas.findRegion("Start_Button_MouseOver");
+        padlockGreenRegion = menuAtlas.findRegion("Padlock_Green");
+        padlockWhiteRegion = menuAtlas.findRegion("Padlock_White");
 
         // Ship hull sprites are also in this atlas, but only the portrait regions are used here.
         shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
+
+        connectToServer();
+    }
+
+    /**
+     * Establishes this screen's own live connection (see the class Javadoc's
+     * "Ship unlocks" section) and sends a fresh handshake. Asynchronous,
+     * deliberately: blocking here (the way {@code ConnectScreen.attemptConnect()}
+     * blocks) would freeze this screen's very first frame for as long as
+     * {@link NetworkConstants#CONNECTION_TIMEOUT_MILLIS} - acceptable for a
+     * screen whose entire purpose at that moment <i>is</i> connecting, not
+     * for this one, whose primary purpose is browsing ships. Until the
+     * response arrives, every non-Snowspeeder ship simply shows as locked
+     * (the harmless default {@link #myXp}{@code  = 0}/{@link #unlockedShips}
+     * {@code  = \{\}} implies), which resolves itself within a frame or two
+     * on any real connection.
+     * <p>
+     * A connection failure is fatal, same treatment as {@link Client#connectToServer()}
+     * — {@code ConnectScreen} already validated this exact host/login moments
+     * ago, so a failure this soon after is not expected in practice.
+     */
+    private void connectToServer() {
+        networkClient = new NetworkClient() {
+            @Override
+            protected void onReceived(Object object) {
+                // Runs on KryoNet's network thread - only ever enqueue here, never touch
+                // myXp/unlockedShips directly (same cross-thread rule as Client/GameNetworkServer).
+                if (object instanceof HandshakeResponse response) {
+                    if (response.isAccepted()) {
+                        pendingUpdates.add(() -> {
+                            myXp = response.getXp();
+                            unlockedShips = new HashSet<>(Arrays.asList(response.getUnlockedShips()));
+                        });
+                    } else {
+                        pendingUpdates.add(() -> {
+                            throw new IllegalStateException("Handshake rejected: " + response.getMessage());
+                        });
+                    }
+                } else if (object instanceof UnlockShipResponse response) {
+                    pendingUpdates.add(() -> {
+                        myXp = response.getXp();
+                        unlockedShips = new HashSet<>(Arrays.asList(response.getUnlockedShips()));
+                        unlockRequestInFlight = false;
+                    });
+                }
+            }
+        };
+        try {
+            networkClient.connect(NetworkConstants.CONNECTION_TIMEOUT_MILLIS, connectionInfo.serverHost(),
+                NetworkConstants.TCP_PORT, NetworkConstants.UDP_PORT);
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to connect to " + connectionInfo.serverHost(), e);
+        }
+        networkClient.sendHandshake(connectionInfo.login(), connectionInfo.password(), connectionInfo.displayName());
     }
 
     @Override
     public void render(float deltaTime) {
         ScreenUtils.clear(0f, 0f, 0f, 1f);
         background.update(deltaTime);
+
+        Runnable update;
+        while ((update = pendingUpdates.poll()) != null) {
+            update.run();
+        }
 
         float screenWidth = Gdx.graphics.getWidth();
         float screenHeight = Gdx.graphics.getHeight();
@@ -180,6 +281,7 @@ public class ShipSelectionScreen implements Screen {
         batch.draw(hoveringLeftArrow ? arrowLeftHoverRegion : arrowLeftRegion, leftArrowX, arrowY, ARROW_WIDTH, ARROW_HEIGHT);
         batch.draw(hoveringRightArrow ? arrowRightHoverRegion : arrowRightRegion, rightArrowX, arrowY, ARROW_WIDTH, ARROW_HEIGHT);
         drawPortrait(dialogScreenX, dialogScreenY);
+        drawLockOverlay(dialogScreenX, dialogScreenY);
         drawDescription(dialogScreenX, dialogScreenY);
         batch.draw(hoveringStartButton ? startButtonHoverRegion : startButtonRegion,
             startButtonX, startButtonY, START_BUTTON_WIDTH, START_BUTTON_HEIGHT);
@@ -206,8 +308,18 @@ public class ShipSelectionScreen implements Screen {
             selectedIndex = Math.floorMod(selectedIndex + 1, SHIP_TYPES.length);
         }
 
+        ShipType selectedType = SHIP_TYPES[selectedIndex];
+        if (!isUnlocked(selectedType) && !unlockRequestInFlight
+                && availableXp() >= ShipStats.forType(selectedType).getUnlockCostXp()
+                && Gdx.input.isKeyJustPressed(Input.Keys.SPACE)) {
+            unlockRequestInFlight = true;
+            networkClient.sendTCP(new UnlockShipRequest(selectedType));
+        }
+
+        // A locked ship simply can't be started - same as the padlock overlay already
+        // communicates why, no separate error message needed.
         boolean startClicked = hoveringStartButton && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
-        if (startClicked || Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) {
+        if ((startClicked || Gdx.input.isKeyJustPressed(Input.Keys.ENTER)) && isUnlocked(selectedType)) {
             startMatch();
             return true;
         }
@@ -240,6 +352,38 @@ public class ShipSelectionScreen implements Screen {
         DialogLayout.Fit fit = DialogLayout.fitCentered(PORTRAIT_AREA_SIZE, PORTRAIT_AREA_SIZE,
             portrait.getRegionWidth(), portrait.getRegionHeight());
         batch.draw(portrait, boxScreenX + fit.offsetX(), boxScreenY + fit.offsetY(), fit.width(), fit.height());
+    }
+
+    /**
+     * Draws the green ("affordable, SPACE to unlock") or white ("not enough
+     * XP") padlock overlay, centered over the portrait, for the currently-
+     * selected ship type — or nothing at all if it's already unlocked (see
+     * the class Javadoc's "Ship unlocks" section).
+     */
+    private void drawLockOverlay(float dialogScreenX, float dialogScreenY) {
+        ShipType type = SHIP_TYPES[selectedIndex];
+        if (isUnlocked(type)) {
+            return;
+        }
+        TextureRegion padlock = availableXp() >= ShipStats.forType(type).getUnlockCostXp()
+            ? padlockGreenRegion : padlockWhiteRegion;
+        if (padlock == null) {
+            return;
+        }
+        float boxScreenX = DialogLayout.toScreenX(dialogScreenX, PORTRAIT_AREA_TOP_DOWN_X);
+        float boxScreenY = DialogLayout.toScreenY(dialogScreenY, DIALOG_HEIGHT, PORTRAIT_AREA_TOP_DOWN_Y, PORTRAIT_AREA_SIZE);
+
+        DialogLayout.Fit fit = DialogLayout.fitCentered(PORTRAIT_AREA_SIZE, PORTRAIT_AREA_SIZE,
+            padlock.getRegionWidth(), padlock.getRegionHeight());
+        batch.draw(padlock, boxScreenX + fit.offsetX(), boxScreenY + fit.offsetY(), fit.width(), fit.height());
+    }
+
+    private boolean isUnlocked(ShipType type) {
+        return ShipUnlocks.isUnlocked(type, unlockedShips);
+    }
+
+    private int availableXp() {
+        return ShipUnlocks.availableXp(myXp, unlockedShips);
     }
 
     private void drawDescription(float dialogScreenX, float dialogScreenY) {
@@ -294,6 +438,9 @@ public class ShipSelectionScreen implements Screen {
 
     @Override
     public void dispose() {
+        if (networkClient != null) {
+            networkClient.stop();
+        }
         batch.dispose();
         background.dispose();
         logoTexture.dispose();

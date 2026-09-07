@@ -186,4 +186,13 @@ public final class ShipStats {
     public Optional<ShipSpriteMetadata> getSpriteMetadata() {
         return spriteMetadata;
     }
+
+    /**
+     * Returns the account XP cost to unlock this ship type.
+     *
+     * @return the XP cost to unlock this ship type, see {@link ShipTypeConfig#getUnlockCostXp()}
+     */
+    public int getUnlockCostXp() {
+        return config.getUnlockCostXp();
+    }
 }

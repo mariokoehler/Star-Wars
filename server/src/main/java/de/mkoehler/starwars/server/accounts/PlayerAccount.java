@@ -1,9 +1,15 @@
 package de.mkoehler.starwars.server.accounts;
 
+import de.mkoehler.starwars.sim.ShipType;
+
+import java.util.HashSet;
+import java.util.Set;
+
 /**
  * A persisted player account (design.md 3.6): a unique login, a hashed and
- * salted password, a separate (not-necessarily-unique) display name, and
- * accumulated XP/kills/deaths.
+ * salted password, a separate (not-necessarily-unique) display name,
+ * accumulated XP/kills/deaths, and the set of ship types unlocked (design.md
+ * - ship unlocks).
  * <p>
  * Plain mutable bean (public no-arg constructor, getters and setters) so
  * Jackson can (de)serialize it with no extra configuration, same convention
@@ -19,6 +25,16 @@ package de.mkoehler.starwars.server.accounts;
  * combat death disconnects the client (design.md 5.1's Death Screen).
  * Persisting them here, the same way {@link #xp} already was, fixed that
  * for free and needed no new infrastructure.
+ * <p>
+ * {@link #unlockedShips} never contains {@link ShipType#SNOWSPEEDER} - it's
+ * always flyable regardless of what's in the set (see
+ * {@link de.mkoehler.starwars.sim.ShipUnlocks#isUnlocked}), so it never
+ * needs to be recorded here at all. Every constructor/setter that touches
+ * this field defensively copies it into a fresh {@link HashSet}, since
+ * unlike every other field here it's mutable - {@link #copy()} in
+ * particular relies on this to give {@link AccountStore}'s background flush
+ * thread a genuinely independent snapshot, not a reference into the live,
+ * concurrently-mutable set.
  */
 public class PlayerAccount {
 
@@ -29,6 +45,7 @@ public class PlayerAccount {
     private int xp;
     private int kills;
     private int deaths;
+    private Set<ShipType> unlockedShips = new HashSet<>();
 
     /**
      * No-arg constructor required by Jackson for deserialization.
@@ -39,16 +56,17 @@ public class PlayerAccount {
     /**
      * Creates a player account.
      *
-     * @param login        the unique login name
-     * @param passwordHash the salted password hash (never the raw password)
-     * @param passwordSalt the per-account random salt the hash was computed with
-     * @param displayName  the name other players see in-game
-     * @param xp           total accumulated XP
-     * @param kills        total accumulated kills
-     * @param deaths       total accumulated deaths
+     * @param login         the unique login name
+     * @param passwordHash  the salted password hash (never the raw password)
+     * @param passwordSalt  the per-account random salt the hash was computed with
+     * @param displayName   the name other players see in-game
+     * @param xp            total accumulated XP
+     * @param kills         total accumulated kills
+     * @param deaths        total accumulated deaths
+     * @param unlockedShips the ship types unlocked so far (copied defensively, see the class Javadoc)
      */
     public PlayerAccount(String login, String passwordHash, String passwordSalt, String displayName, int xp,
-                          int kills, int deaths) {
+                          int kills, int deaths, Set<ShipType> unlockedShips) {
         this.login = login;
         this.passwordHash = passwordHash;
         this.passwordSalt = passwordSalt;
@@ -56,6 +74,7 @@ public class PlayerAccount {
         this.xp = xp;
         this.kills = kills;
         this.deaths = deaths;
+        this.unlockedShips = new HashSet<>(unlockedShips);
     }
 
     public String getLogin() {
@@ -114,15 +133,37 @@ public class PlayerAccount {
         this.deaths = deaths;
     }
 
+    public Set<ShipType> getUnlockedShips() {
+        return unlockedShips;
+    }
+
+    public void setUnlockedShips(Set<ShipType> unlockedShips) {
+        this.unlockedShips = new HashSet<>(unlockedShips);
+    }
+
+    /**
+     * Adds one ship type to this account's unlocked set - a no-op if it's
+     * already there. Callers are responsible for having already validated
+     * the unlock is affordable ({@link de.mkoehler.starwars.sim.ShipUnlocks#availableXp});
+     * this method itself just mutates the set unconditionally.
+     *
+     * @param shipType the ship type to unlock
+     */
+    public void unlockShip(ShipType shipType) {
+        unlockedShips.add(shipType);
+    }
+
     /**
      * Returns an independent copy of this account - safe to hand to
      * {@link AccountStore}'s background flush thread without racing further
-     * mutations made to the original (every field here is an immutable
-     * type, so a plain field-by-field copy is already a full deep copy).
+     * mutations made to the original. Every field except
+     * {@link #unlockedShips} is an immutable type, so a plain field-by-field
+     * copy already handles those; {@link #unlockedShips} itself is deep-
+     * copied by the constructor it's passed through (see the class Javadoc).
      *
      * @return an independent copy of this account
      */
     public PlayerAccount copy() {
-        return new PlayerAccount(login, passwordHash, passwordSalt, displayName, xp, kills, deaths);
+        return new PlayerAccount(login, passwordHash, passwordSalt, displayName, xp, kills, deaths, unlockedShips);
     }
 }

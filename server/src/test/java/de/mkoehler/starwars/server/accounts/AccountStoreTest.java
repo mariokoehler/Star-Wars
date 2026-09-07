@@ -1,5 +1,6 @@
 package de.mkoehler.starwars.server.accounts;
 
+import de.mkoehler.starwars.sim.ShipType;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -9,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -213,6 +215,51 @@ class AccountStoreTest {
         PlayerAccount account = reloaded.findByLogin("han").orElseThrow();
         assertEquals(2, account.getKills());
         assertEquals(1, account.getDeaths());
+    }
+
+    @Test
+    void newAccountStartsWithNoUnlockedShips(@TempDir Path tempDir) {
+        AccountStore store = createStore(tempDir.resolve("accounts.json"));
+
+        store.login("han", "solo123", "Han Solo");
+
+        assertTrue(store.findByLogin("han").orElseThrow().getUnlockedShips().isEmpty());
+    }
+
+    @Test
+    void unlockShipAddsToTheAccountsUnlockedSet(@TempDir Path tempDir) {
+        AccountStore store = createStore(tempDir.resolve("accounts.json"));
+        store.login("han", "solo123", "Han Solo");
+
+        store.unlockShip("han", ShipType.TIEFIGHTER);
+        store.unlockShip("han", ShipType.XWING);
+
+        Set<ShipType> unlocked = store.findByLogin("han").orElseThrow().getUnlockedShips();
+        assertEquals(2, unlocked.size());
+        assertTrue(unlocked.contains(ShipType.TIEFIGHTER));
+        assertTrue(unlocked.contains(ShipType.XWING));
+    }
+
+    @Test
+    void unlockShipForAnUnknownLoginDoesNothing(@TempDir Path tempDir) {
+        AccountStore store = createStore(tempDir.resolve("accounts.json"));
+
+        store.unlockShip("nobody", ShipType.XWING);
+
+        assertTrue(store.findByLogin("nobody").isEmpty());
+    }
+
+    @Test
+    void unlockedShipsSurviveReloadFromDisk(@TempDir Path tempDir) {
+        Path file = tempDir.resolve("accounts.json");
+        AccountStore first = createStore(file);
+        first.login("han", "solo123", "Han Solo");
+        first.unlockShip("han", ShipType.AWING);
+        first.flush();
+
+        AccountStore reloaded = createStore(file);
+
+        assertEquals(Set.of(ShipType.AWING), reloaded.findByLogin("han").orElseThrow().getUnlockedShips());
     }
 
     @Test

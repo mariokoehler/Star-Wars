@@ -20,6 +20,8 @@ import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
+import de.mkoehler.starwars.net.messages.UnlockShipRequest;
+import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipType;
@@ -76,5 +78,8 @@ public final class MessageRegistry {
         kryo.register(PlayerScoreEntry.class);
         kryo.register(PlayerScoreEntry[].class);
         kryo.register(ScoreboardMessage.class);
+        kryo.register(ShipType[].class);
+        kryo.register(UnlockShipRequest.class);
+        kryo.register(UnlockShipResponse.class);
     }
 }

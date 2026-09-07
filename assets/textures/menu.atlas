@@ -13,14 +13,14 @@ AWing_Description
   index: -1
 Arrow_Left
   rotate: false
-  xy: 1626, 129
+  xy: 1971, 977
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
   index: -1
 Arrow_Left_MouseOver
   rotate: false
-  xy: 1848, 187
+  xy: 1795, 641
   size: 49, 38
   orig: 49, 38
   offset: 0, 0
@@ -41,14 +41,14 @@ Arrow_Right_MouseOver
   index: -1
 Connect_Button
   rotate: false
-  xy: 1795, 959
+  xy: 1795, 739
   size: 220, 56
   orig: 220, 56
   offset: 0, 0
   index: -1
 Connect_Button_MouseOver
   rotate: false
-  xy: 1626, 169
+  xy: 1795, 681
   size: 220, 56
   orig: 220, 56
   offset: 0, 0
@@ -65,6 +65,20 @@ Falcon_Description
   xy: 1464, 622
   size: 329, 393
   orig: 329, 393
+  offset: 0, 0
+  index: -1
+Padlock_Green
+  rotate: false
+  xy: 1795, 797
+  size: 174, 218
+  orig: 174, 218
+  offset: 0, 0
+  index: -1
+Padlock_White
+  rotate: false
+  xy: 1626, 7
+  size: 174, 218
+  orig: 174, 218
   offset: 0, 0
   index: -1
 Select_Ship_Dialog
@@ -97,7 +111,7 @@ Start_Button
   index: -1
 Start_Button_MouseOver
   rotate: false
-  xy: 1795, 871
+  xy: 1802, 139
   size: 82, 86
   orig: 82, 86
   offset: 0, 0

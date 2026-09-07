@@ -9,5 +9,6 @@
   "hudShieldClipTopPixel": 130.0,
   "hudShieldClipBottomPixel": 437.0,
   "hudHullClipTopPixel": 191.0,
-  "hudHullClipBottomPixel": 380.0
+  "hudHullClipBottomPixel": 380.0,
+  "unlockCostXp": 1500
 }

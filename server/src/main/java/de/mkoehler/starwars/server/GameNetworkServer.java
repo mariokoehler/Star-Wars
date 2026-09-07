@@ -30,6 +30,8 @@ import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
+import de.mkoehler.starwars.net.messages.UnlockShipRequest;
+import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
@@ -40,6 +42,7 @@ import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
+import de.mkoehler.starwars.sim.ShipUnlocks;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
@@ -500,33 +503,89 @@ public class GameNetworkServer extends NetworkServer {
      * a ship - logging in only proves the account, it happens before the
      * player has even chosen a ship type on the Ship Selection screen
      * (design.md 5.1); see {@link #handleSpawnRequest} for the step that
-     * actually joins a match.
+     * actually joins a match. On acceptance, the response also carries the
+     * account's XP/unlocked ships (design.md - ship unlocks) -
+     * {@code ShipSelectionScreen} reads these from its own fresh handshake.
      */
     @Override
     protected HandshakeResponse handleHandshake(Connection connection, HandshakeRequest request) {
         int playerId = connection.getID();
         AuthResult result = accountStore.login(request.getLogin(), request.getPassword(), request.getDisplayName());
-        if (result.success()) {
-            pendingActions.add(() -> {
-                connectionsByPlayerId.put(playerId, connection);
-                loginByPlayerId.put(playerId, request.getLogin());
-            });
+        if (!result.success()) {
+            return new HandshakeResponse(false, result.message());
         }
-        return new HandshakeResponse(result.success(), result.message());
+        pendingActions.add(() -> {
+            connectionsByPlayerId.put(playerId, connection);
+            loginByPlayerId.put(playerId, request.getLogin());
+        });
+        PlayerAccount account = result.account();
+        return new HandshakeResponse(true, result.message(), account.getXp(), toArray(account.getUnlockedShips()));
     }
 
     /**
      * Spawns a ship for a player that has already logged in (see
      * {@link #handleHandshake}) and just chose a ship type on the Ship
      * Selection screen (design.md 5.1) - the actual "join the match" moment.
+     * Dropped harmlessly if the requested ship type isn't actually unlocked
+     * on this player's account (design.md - ship unlocks) - the client's
+     * own UI already prevents this in normal play (a locked ship can't be
+     * selected to Start with), this is just the same "don't trust the
+     * client" defense every other player-controlled action here already
+     * gets.
      */
     private void handleSpawnRequest(int playerId, Connection connection, ShipType shipType) {
+        String login = loginByPlayerId.get(playerId);
+        Optional<PlayerAccount> account = login != null ? accountStore.findByLogin(login) : Optional.empty();
+        if (account.isEmpty() || !ShipUnlocks.isUnlocked(shipType, account.get().getUnlockedShips())) {
+            return;
+        }
         // Fixed spawn point for now - map/arena design (design.md 7) is still an open question.
         float spawnX = 0f;
         float spawnY = 0f;
         shipTypeByPlayerId.put(playerId, shipType);
         spawnShip(playerId, spawnX, spawnY, shipType);
         connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY, shipType));
+    }
+
+    /**
+     * Handles an {@link UnlockShipRequest} (design.md - ship unlocks):
+     * re-validates affordability server-side (the client's own "green
+     * padlock" UI is only ever a convenience, never trusted on its own),
+     * and if affordable, adds the ship type to the account's unlocked set
+     * and persists it. Always replies with the account's current XP/
+     * unlocked-ships state, whether the ship ends up unlocked just now,
+     * was already unlocked (treated as a harmless success, not an error),
+     * or the request is denied for being unaffordable.
+     *
+     * @param playerId   the requesting player's id
+     * @param connection that player's connection, to reply to
+     * @param shipType   the ship type requested to unlock
+     */
+    private void handleUnlockShipRequest(int playerId, Connection connection, ShipType shipType) {
+        String login = loginByPlayerId.get(playerId);
+        Optional<PlayerAccount> maybeAccount = login != null ? accountStore.findByLogin(login) : Optional.empty();
+        if (maybeAccount.isEmpty()) {
+            return; // not logged in somehow - shouldn't happen, nothing sensible to reply with
+        }
+        PlayerAccount account = maybeAccount.get();
+        Set<ShipType> unlockedShips = account.getUnlockedShips();
+        if (ShipUnlocks.isUnlocked(shipType, unlockedShips)) {
+            connection.sendTCP(new UnlockShipResponse(true, "Already unlocked.", account.getXp(), toArray(unlockedShips)));
+            return;
+        }
+        int availableXp = ShipUnlocks.availableXp(account.getXp(), unlockedShips);
+        int cost = ShipStats.forType(shipType).getUnlockCostXp();
+        if (availableXp < cost) {
+            connection.sendTCP(new UnlockShipResponse(false, "Not enough XP.", account.getXp(), toArray(unlockedShips)));
+            return;
+        }
+        accountStore.unlockShip(login, shipType);
+        Set<ShipType> updated = accountStore.findByLogin(login).orElseThrow().getUnlockedShips();
+        connection.sendTCP(new UnlockShipResponse(true, "Unlocked.", account.getXp(), toArray(updated)));
+    }
+
+    private static ShipType[] toArray(Set<ShipType> shipTypes) {
+        return shipTypes.toArray(new ShipType[0]);
     }
 
     @Override
@@ -547,6 +606,9 @@ public class GameNetworkServer extends NetworkServer {
         } else if (object instanceof SpawnRequest spawnRequest) {
             int playerId = connection.getID();
             pendingActions.add(() -> handleSpawnRequest(playerId, connection, spawnRequest.getShipType()));
+        } else if (object instanceof UnlockShipRequest unlockRequest) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> handleUnlockShipRequest(playerId, connection, unlockRequest.getShipType()));
         }
     }
 

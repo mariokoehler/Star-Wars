@@ -1560,6 +1560,90 @@ via Tab navigation, screenshotted, confirmed no stray glyph at the
 start of any field's text anymore. Full `mvn clean test` green
 throughout.
 
+**Ship unlocks — implemented 2026-09-08.** See design.md 2.12 (full
+writeup) and 5.1's addendum for the details. Now that XP persists and
+is visible to the player (2.10/2.11), the user asked to spend it:
+every non-Snowspeeder ship costs XP to unlock, by tier — 1000/1500/2000
+for tiers 2/3/4, a new `unlockCostXp` field on each ship's
+`.stats.json`. Snowspeeder is free/unlocked for everyone from account
+creation. Affordability is never a stored/decremented balance — it's
+computed on the fly as **available XP = total XP − the summed unlock
+cost of every already-unlocked ship**, in a new pure, unit-tested
+`core.sim.ShipUnlocks` (`isUnlocked`/`availableXp`) used identically by
+the client (which padlock to show) and the server (the actual
+authoritative check) — same shared-pure-function convention as
+`ShipDamage`/`PowerDistribution`.
+
+User-provided art (`assets-raw/menu/Padlock_Green.png`/`Padlock_White.png`,
+packed into the existing `menu.atlas`) is drawn centered over the ship
+portrait on Ship Selection: green ("'SPACE' to unlock") when the
+locked ship is affordable, white ("not enough XP") when it isn't — both
+messages are baked into the art, no extra text needed. `PlayerAccount`
+gained a persisted `Set<ShipType> unlockedShips` (mirrors how XP/kills/
+deaths already work there) — its first ever *mutable collection* field,
+which needed real defensive-copying discipline (constructor, setter,
+and `copy()` all copy rather than alias) since `AccountStore`'s
+background flush thread snapshots accounts via `copy()` concurrently
+with live mutation.
+
+**`ShipSelectionScreen` becomes the second screen (after `ConnectScreen`)
+to hold a live server connection** — it previously had none at all,
+picking a ship was fully offline until Start. It does its own fresh
+handshake (logging in again is harmless, same precedent `Client`
+already relies on) to learn XP/unlocked ships, and — unlike
+`ConnectScreen`, which disconnects the instant login is validated —
+keeps that connection open for as long as the player browses ships, so
+pressing SPACE on an affordable locked ship can send a live
+`UnlockShipRequest` and get back an `UnlockShipResponse` carrying the
+account's updated state. Deliberately **asynchronous**, unlike
+`ConnectScreen.attemptConnect()`'s blocking pattern — blocking here
+would freeze this screen's first frame for up to the connection
+timeout, tolerable for a screen whose whole purpose at that moment *is*
+connecting, not for one whose primary purpose is browsing; every locked
+ship just shows white until the handshake resolves (self-corrects
+within a frame or two on localhost). New protocol pieces:
+`HandshakeResponse` gained `xp`/`unlockedShips` fields (any future
+screen needing the same account snapshot can now read it from its own
+handshake, no new message type needed); new `UnlockShipRequest`/
+`UnlockShipResponse` messages, `UnlockShipResponse` always carrying the
+account's current xp/unlockedShips regardless of outcome so the client
+can just always replace its local copy rather than branching on
+success/failure.
+
+**Server never trusts the client's own padlock/Start-button gating** —
+`SpawnRequest` handling now re-checks `ShipUnlocks.isUnlocked` against
+the requesting player's actual account before spawning (a raw/crafted
+spawn packet for a locked ship is silently dropped), and
+`UnlockShipRequest` handling re-validates affordability server-side
+too, same "don't trust the client" posture every other player action
+here already gets.
+
+**Real gap found while unit-testing this: `core`'s own test classpath
+never had `assets/shipdata/*.json` on it at all** — only `lwjgl3`'s and
+`server`'s *main* resources ever bundled `assets/`, and no earlier
+`core` test happened to transitively call `ShipStats.forType(...)` (the
+loader) to notice. The new `ShipUnlocksTest` was the first one to,
+failing with `IllegalStateException: Missing required
+shipdata/xwing.stats.json`. Fixed with a `<testResources>` block in
+`core/pom.xml` pointing at `../assets` — test-scoped only, so `core`'s
+own packaged jar is unaffected (it never needed to bundle ship data
+before, and still doesn't).
+
+**Verified live, fully end-to-end, real server + client restarts
+included:** a fresh account at 0 XP showed every non-Snowspeeder ship
+white-padlocked; seeded to 1000 XP (direct edit of `data/accounts.json`
++ server restart — a deterministic way to reach a precise XP value
+without a real kill), TIE Fighter's padlock turned green; SPACE
+unlocked it, padlock gone; immediately re-checked the A-Wing (also
+1000, tier 2) and confirmed it now showed white too — available XP
+correctly read `1000 − 1000 = 0`, proving the summed-cost subtraction
+across ships, not just a single-ship check; Start correctly refused a
+still-locked ship and correctly launched a real match flying the
+newly-unlocked TIE Fighter; **stopped both the server and client
+entirely, restarted both, logged in again, and confirmed the unlock was
+still there** — real persistence across a full restart, not just within
+one session. Full `mvn clean test` green throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

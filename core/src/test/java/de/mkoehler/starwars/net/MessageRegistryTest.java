@@ -22,6 +22,8 @@ import de.mkoehler.starwars.net.messages.TcpPongMessage;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.UdpPingMessage;
 import de.mkoehler.starwars.net.messages.UdpPongMessage;
+import de.mkoehler.starwars.net.messages.UnlockShipRequest;
+import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipType;
@@ -60,7 +62,8 @@ class MessageRegistryTest {
             PowerSystem.class, PowerAdjustMessage.class, PowerAdjustMessage.Kind.class,
             LeaveMatchRequest.class, LeaveMatchDeniedMessage.class,
             TurretToggleMessage.class, float[].class, SpawnRequest.class,
-            PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class
+            PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class,
+            ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -94,6 +97,18 @@ class MessageRegistryTest {
         HandshakeResponse copy = roundTrip(original, HandshakeResponse.class);
         assertTrue(copy.isAccepted());
         assertEquals(original.getMessage(), copy.getMessage());
+    }
+
+    @Test
+    void handshakeResponseWithAccountDataSurvivesRoundTrip() {
+        HandshakeResponse original = new HandshakeResponse(true, "Welcome back.", 2500,
+            new ShipType[] {ShipType.TIEFIGHTER, ShipType.XWING});
+        HandshakeResponse copy = roundTrip(original, HandshakeResponse.class);
+        assertTrue(copy.isAccepted());
+        assertEquals(2500, copy.getXp());
+        assertEquals(2, copy.getUnlockedShips().length);
+        assertEquals(ShipType.TIEFIGHTER, copy.getUnlockedShips()[0]);
+        assertEquals(ShipType.XWING, copy.getUnlockedShips()[1]);
     }
 
     @Test
@@ -238,6 +253,25 @@ class MessageRegistryTest {
         assertEquals(3, copy.getEntries()[0].getKills());
         assertEquals(1, copy.getEntries()[0].getDeaths());
         assertEquals("Blue Two", copy.getEntries()[1].getDisplayName());
+    }
+
+    @Test
+    void unlockShipRequestSurvivesRoundTrip() {
+        UnlockShipRequest original = new UnlockShipRequest(ShipType.AWING);
+        UnlockShipRequest copy = roundTrip(original, UnlockShipRequest.class);
+        assertEquals(ShipType.AWING, copy.getShipType());
+    }
+
+    @Test
+    void unlockShipResponseSurvivesRoundTrip() {
+        UnlockShipResponse original = new UnlockShipResponse(true, "Unlocked.", 2500,
+            new ShipType[] {ShipType.TIEFIGHTER, ShipType.AWING});
+        UnlockShipResponse copy = roundTrip(original, UnlockShipResponse.class);
+        assertTrue(copy.isSuccess());
+        assertEquals("Unlocked.", copy.getMessage());
+        assertEquals(2500, copy.getXp());
+        assertEquals(2, copy.getUnlockedShips().length);
+        assertEquals(ShipType.AWING, copy.getUnlockedShips()[1]);
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

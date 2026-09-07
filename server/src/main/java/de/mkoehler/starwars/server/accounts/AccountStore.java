@@ -3,6 +3,7 @@ package de.mkoehler.starwars.server.accounts;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
+import de.mkoehler.starwars.sim.ShipType;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -147,7 +149,7 @@ public class AccountStore {
         if (existing == null) {
             String salt = PasswordHasher.generateSalt();
             String hash = PasswordHasher.hash(password, salt);
-            PlayerAccount created = new PlayerAccount(login, hash, salt, displayName, 0, 0, 0);
+            PlayerAccount created = new PlayerAccount(login, hash, salt, displayName, 0, 0, 0, Set.of());
             accountsByLogin.put(login, created);
             dirty.set(true);
             return AuthResult.success(created, "Welcome, " + displayName + "! Account created.");
@@ -211,6 +213,25 @@ public class AccountStore {
             return;
         }
         account.setDeaths(account.getDeaths() + 1);
+        dirty.set(true);
+    }
+
+    /**
+     * Adds one ship type to an existing account's unlocked set (design.md -
+     * ship unlocks). Does nothing if the login doesn't exist, same reasoning
+     * as {@link #addXp}. Purely a mutator - the caller
+     * ({@code GameNetworkServer}) is responsible for having already checked
+     * the unlock is affordable via {@link de.mkoehler.starwars.sim.ShipUnlocks#availableXp}.
+     *
+     * @param login    the account's login name
+     * @param shipType the ship type to unlock
+     */
+    public synchronized void unlockShip(String login, ShipType shipType) {
+        PlayerAccount account = accountsByLogin.get(login);
+        if (account == null) {
+            return;
+        }
+        account.unlockShip(shipType);
         dirty.set(true);
     }
 
