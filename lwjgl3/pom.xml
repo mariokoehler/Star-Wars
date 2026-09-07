@@ -47,6 +47,30 @@
       <version>${gdxVersion}</version>
       <classifier>natives-desktop</classifier>
     </dependency>
+    <dependency>
+      <!-- Embedded dev-only MCP server, see design.md 3.13 - mcp-core alone provides the
+           stdio transport; mcp-json-jackson2 plugs in Jackson 2.x (this project already
+           depends on jackson-databind 2.x elsewhere, see design.md 3.9 - the SDK's own
+           default "mcp" bundle pulls in Jackson 3.x instead, which the docs explicitly call
+           out mcp-core + mcp-json-jackson2 as the alternative for). -->
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp-core</artifactId>
+      <version>${mcpSdkVersion}</version>
+    </dependency>
+    <dependency>
+      <groupId>io.modelcontextprotocol.sdk</groupId>
+      <artifactId>mcp-json-jackson2</artifactId>
+      <version>${mcpSdkVersion}</version>
+    </dependency>
+    <!-- The MCP SDK logs internally via SLF4J; with no binding present it silently falls back
+         to a no-op logger, which would swallow real errors (a malformed inbound message, a
+         handler exception) exactly where visibility matters most for a debug-only feature.
+         slf4j-simple logs to stderr, keeping stdout clean for the actual JSON-RPC protocol. -->
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>2.0.16</version>
+    </dependency>
     <!-- Test-scoped so it never ends up in the shaded runtime jar: used only by the
          AtlasPacker dev tool under src/test, run on demand to (re)build texture atlases
          from assets-raw/. See CLAUDE.md "Build system" for the command to run it. -->

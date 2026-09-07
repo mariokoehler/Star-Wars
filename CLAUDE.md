@@ -1433,6 +1433,61 @@ focus, i.e. clicking never actually changed Scene2D keyboard focus) —
 abandoned in favor of the Tab-based approach above rather than debugged
 further, since it worked immediately once tried.
 
+**Embedded dev-only MCP server for remote-controlling the client —
+implemented 2026-09-07, same session, right after the above.** User's
+own framing: OS-level `SendKeys`/screenshot verification (the note
+directly above is one of many examples) was a growing pain as screens
+multiplied; asked to explore whether an MCP server embedded in the
+client itself could let Claude Code drive it directly instead, then
+green-lit a minimal version scoped to just the Connect screen. Full
+writeup, architecture, and the real gotchas hit getting it working in
+design.md 3.13 — short version: new `core.remote` package
+(`RemoteControllable`/`RemoteControlRegistry`/`RemoteControlQueue`),
+`ConnectScreen` is the first screen wired up (`remoteLogin` reuses the
+existing `attemptConnect()` unchanged), new `lwjgl3.mcp.McpBridge`
+(`io.modelcontextprotocol.sdk:mcp-core`+`mcp-json-jackson2`, stdio
+transport) exposing `get_active_screen`/`connect_screen_login`, started
+only when the client is launched with `--mcp`.
+
+**Process note worth repeating for next time an SDK is this new:**
+looked up the exact Maven coordinates/API via `gh api` against the
+SDK's own GitHub repo (real source files, `docs/quickstart.md`,
+`docs/server.md`) rather than trusting a `WebFetch`-summarized example,
+after that summarized example *had* invented a wrong dependency/version
+on the first attempt. Paid off directly - the actually-verified code
+compiled clean on the first try with zero API-name guessing errors.
+
+**Verified live, fully end-to-end** by speaking raw MCP JSON-RPC
+directly to a real running client process's stdin/stdout (no Claude
+Code MCP-client wiring involved yet, just manual protocol calls) — full
+handshake, tool discovery, and a real `connect_screen_login` call
+against a real running dedicated server that actually logged in and
+transitioned the client to Ship Selection, confirmed both via the tool
+call's own JSON response and a follow-up screenshot of the live window.
+See design.md 3.13 for the two real bugs hit getting the test harness
+itself right (a UTF-8 BOM PowerShell's `Process.StandardInput` was
+prepending, and why a one-shot file-fed stdin can't validate a *slow*
+tool call) — both were test-harness issues, not bugs in this code, but
+the BOM fix was applied defensively on the Java side too since a real
+client could plausibly hit the same thing.
+
+**Registered, project-scoped, committed** — user chose this over
+local-only after the above was verified. `.mcp.json` + `start_mcp_client.cmd`
+(new, mirrors `start_client.cmd`'s "always reinstall core/repackage
+first" convention); see design.md 3.13 for the wrapper script's stdout-
+hygiene requirements (everything it and Maven print must go to stderr)
+and its one known limitation (a hardcoded absolute path — a relative
+one resolved unreliably through this exact `cmd.exe /c` spawn path,
+worth re-testing if this project ever moves to a second machine).
+Verified by running the *exact* configured command end-to-end, not
+just the underlying jar directly. **Requires a Claude Code
+restart/reconnect to actually pick up** — registering `.mcp.json`
+doesn't retroactively connect an already-running session.
+
+Only `ConnectScreen` is remote-controllable; every other screen still
+needs the old keyboard/screenshot approach until this pattern proves
+worth extending.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

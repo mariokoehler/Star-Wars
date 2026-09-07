@@ -2161,6 +2161,168 @@ Station's Update/Recreate — do this *before or alongside* publishing the
 matching client release, never after, or players who update immediately
 start failing the handshake against a server that hasn't caught up yet.
 
+### 3.13 Embedded dev-only MCP server for remote-controlling the client (2026-09-07)
+
+As screens have gotten more numerous, verifying a change by driving the
+real client from here has meant OS-level automation — `SendKeys`/
+`keybd_event` + window-focus juggling + `PrintWindow` screenshots (see
+CLAUDE.md's many "verification gotcha" notes) — which is slow, fragile,
+and only ever lets me *observe* pixels, never assert on real state. MCP
+(Model Context Protocol) is a standard way for an external process to
+expose typed "tools" that I can call directly with structured arguments
+and get structured results back, instead of guessing screen coordinates.
+User's ask: build a minimal version, starting with just the Connect
+screen (the screen this pain showed up on most).
+
+**Only ever runs in a dev build, on request** — started from
+`Lwjgl3Launcher.main` only when launched with a `--mcp` argument;
+completely absent from a normal player-facing launch. Uses the official
+`io.modelcontextprotocol.sdk` Java SDK (`mcp-core` + `mcp-json-jackson2`
+— the SDK's own default `mcp` bundle pulls in Jackson 3.x, this project
+already standardized on Jackson 2.x, design.md 3.9) over the SDK's
+built-in **stdio** transport: newline-delimited JSON-RPC over stdin/
+stdout, the same shape Claude Code's own MCP client speaks, so the
+running client process itself becomes an MCP server Claude Code can
+spawn/attach to directly.
+
+**Architecture — three pieces:**
+
+1. **`core.remote`** (plain Java, no MCP dependency — the SDK dependency
+   is `lwjgl3`-only): `RemoteControllable` is the interface a screen
+   implements to be driven this way (`screenName()` + `describeState()`);
+   `RemoteControlRegistry` tracks whichever one is currently showing (at
+   most one, same as `Game`'s own single active `Screen`) — a screen
+   registers itself in `show()`, clears itself in `dispose()`.
+   `RemoteControlQueue` is the cross-thread bridge: the MCP server runs
+   on its own thread(s), but only the render thread may touch live
+   Scene2D/libGDX state — the exact same "enqueue a Runnable, drain once
+   per frame" pattern this codebase already uses for KryoNet callbacks
+   (`Client`/`GameNetworkServer`), except a tool call needs the actual
+   *result*, so `submit(Callable)` returns a `CompletableFuture` the
+   calling MCP thread blocks on (with a timeout) instead of firing and
+   forgetting. `StarWarsGame.render()` drains it every frame, first,
+   before delegating to the current screen.
+2. **`ConnectScreen`** is the first (and so far only) screen wired up:
+   implements `RemoteControllable`, and gained `remoteLogin(host,
+   displayName, login, password)` — sets the four fields' text, then
+   calls the *existing* `attemptConnect()` unchanged, so a remote-driven
+   login exercises the exact same validation/blocking-connect/
+   transition-or-error logic a real ENTER press does, not a parallel
+   reimplementation. `describeState()` deliberately omits the password
+   field.
+3. **`lwjgl3.mcp.McpBridge`**: builds the actual `McpSyncServer` and
+   registers two tools, each just a thin wrapper that submits an action
+   to `RemoteControlQueue` and blocks for the result:
+   - `get_active_screen` — no arguments; returns which screen is active
+     (or `"NONE"`) and its `describeState()`.
+   - `connect_screen_login` — `host`/`displayName`/`login`/`password`;
+     fails with an explanation if the Connect screen isn't active,
+     otherwise logs in and reports either `{"loggedIn": true}` (the
+     registry no longer points at that screen instance — it moved on to
+     Ship Selection) or the screen's post-attempt state including
+     whatever error it's showing.
+
+**stdout hygiene:** the stdio transport requires stdout to carry
+*nothing but* JSON-RPC — libGDX's/KryoNet's own logging would corrupt
+it. `McpBridge.start()` captures the real stdout first, then redirects
+`System.out` to `System.err` for everything else, and hands the SDK the
+captured stream explicitly (`StdioServerTransportProvider`'s
+3-argument constructor takes explicit streams, confirmed straight from
+the SDK's own test fixtures — its docs page's prose actually undersells
+this, only mentioning the no-argument constructor).
+
+**Real gotchas hit verifying this (worth remembering — none were bugs
+in the SDK or this code, all were either research or test-harness
+issues):**
+
+- **Don't trust a web-summarized code example for exact API/Maven
+  coordinates on a fast-moving SDK.** An initial `WebFetch`-summarized
+  "minimal example" invented a plausible-looking but wrong artifact id
+  (`mcp-core` vs. the real `mcp-core`+`mcp-json-jackson2` pairing) and a
+  wrong version. Cross-checked against Maven Central's actual
+  `maven-metadata.xml` (ground truth for what's really published) and
+  the SDK's own `docs/quickstart.md`/`docs/server.md` plus real
+  compiling test fixtures (`StdioUtf8TestServer.java`,
+  `SyncToolSpecificationBuilderTest.java`) fetched straight from its
+  GitHub repo via `gh api` — every class/method name used here was
+  confirmed against actual source, not a summary of it, before writing
+  any code, and it compiled correctly on the first try.
+- **With no SLF4J binding present, the SDK's internal error logging
+  silently no-ops** — a malformed inbound message doesn't error back to
+  the caller at all, it just logs (to nowhere) and closes the session,
+  which looks exactly like "the server never responds to anything."
+  Added `slf4j-simple` (logs to stderr, keeping stdout clean) as a real
+  dependency, not just a debugging aid — genuinely useful for anyone
+  hitting a silent failure here later.
+- **The actual silent failure, once visible via slf4j-simple:** a
+  stray UTF-8 BOM (`EF BB BF`) at the very start of stdin broke the
+  *first* message's JSON parse (Java's `InputStreamReader` doesn't
+  auto-strip a BOM, unlike some other language runtimes) — sent by this
+  session's own PowerShell test harness (`Process.StandardInput`
+  reliably prepending one, confirmed via a `cmd.exe < file` redirection
+  test that had none). Fixed defensively on the Java side regardless
+  (`McpBridge.stripLeadingUtf8Bom`, a 3-byte `PushbackInputStream`
+  check) rather than only in the test script — other real MCP clients
+  on Windows could plausibly do the same thing, and tolerating one
+  costs nothing.
+- **A one-shot "feed a file to stdin" test can't validate a *slow* tool
+  call.** `connect_screen_login` blocks for a real network round trip;
+  reading from a plain file hits genuine EOF the instant the file's
+  been fully read (regardless of how long the process then runs), which
+  the transport treats as "the client disconnected" and starts closing
+  down — so the tool's eventual response fails to send
+  (`Failed to enqueue message`), even though the actual login already
+  completed correctly server-side. Not a bug — a real stdin *pipe*
+  (kept open) never hits this, and that's exactly what Claude Code's
+  own MCP client is. Confirmed by switching the test harness to a live
+  `System.Diagnostics.Process` with the pipe kept open for the whole
+  exchange.
+
+**Verified live, fully end-to-end, both fast and slow tool calls, no
+keyboard/mouse/screenshot automation involved:** spoke raw MCP JSON-RPC
+directly over a real client process's stdin/stdout (`initialize` →
+`notifications/initialized` → `tools/list` → `tools/call`), confirmed
+correct protocol negotiation and tool schemas; then, against a real
+running dedicated server, called `get_active_screen` (confirmed
+`"CONNECT"` plus its field state), `connect_screen_login` with real
+credentials (confirmed `{"loggedIn": true}`), and `get_active_screen`
+again (confirmed `"NONE"` — `ConnectScreen` had unregistered itself,
+Ship Selection isn't remote-controllable yet) — then screenshotted the
+actual window and visually confirmed it had genuinely reached Ship
+Selection. Full `mvn clean test` green throughout, unaffected (no new
+JUnit tests added for this — the two-thread queue/registry classes are
+thin, and the real risk surface is the protocol wiring, which the live
+test above already exercises end-to-end).
+
+**Registered as a project-scoped MCP server, committed to the repo:**
+`.mcp.json` (repo root) points Claude Code at `cmd.exe /c
+"<absolute path>\start_mcp_client.cmd"` — that wrapper script always
+reinstalls `core` and repackages `lwjgl3` first (same "no safe way to
+skip it" reasoning as `start_client.cmd`/`start_server.cmd`, jgitver),
+then launches the freshly-built jar with `--mcp`. Every line the
+wrapper (and Maven itself, via `-q` plus explicit `1>&2` redirects)
+prints goes to stderr, never stdout — verified by running the *exact*
+configured command end-to-end (not just the jar directly) and
+confirming stdout carried nothing but the two expected JSON-RPC
+responses. **Known limitation:** `.mcp.json` hardcodes this machine's
+absolute path (`C:\Users\mario\StarWars\...`) rather than a portable
+variable — a relative path failed unreliably through this exact spawn
+path (`cmd.exe /c <relative-name>` did not consistently search the
+working directory despite `ProcessStartInfo.WorkingDirectory` being set
+correctly; absolute path sidesteps it), and no verified
+`.mcp.json`-variable-substitution syntax was confirmed to fall back on.
+Fine for a single-developer machine; would need revisiting if this
+project is ever worked on from a second machine/path.
+
+**Deliberately out of scope for this minimal pass** (see how this
+feels before extending it, per the user's own framing): only
+`ConnectScreen` is remote-controllable — Ship Selection, the gameplay
+screen, and the Death Screen aren't yet, and there's no generic
+"press this key"/"click this point" escape hatch, only screen-specific
+typed actions. Extend the same `RemoteControllable` pattern to more
+screens once this one has proven useful in practice, rather than
+building the rest speculatively now.
+
 ## 4. Rendering & presentation
 
 ### 4.1 Camera

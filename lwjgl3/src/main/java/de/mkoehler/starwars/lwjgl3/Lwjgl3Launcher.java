@@ -3,11 +3,22 @@ package de.mkoehler.starwars.lwjgl3;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
 import de.mkoehler.starwars.StarWarsGame;
+import de.mkoehler.starwars.lwjgl3.mcp.McpBridge;
+
+import java.util.Arrays;
 
 /** Launches the desktop (LWJGL3) application. */
 public class Lwjgl3Launcher {
     public static void main(String[] args) {
+        // Captured from the original args, before the possible relaunch below - only matters on
+        // Windows in practice (this project's only dev platform, CLAUDE.md), where that relaunch
+        // never fires anyway.
+        boolean mcpMode = Arrays.asList(args).contains("--mcp");
         if (StartupHelper.startNewJvmIfRequired()) return; // This handles macOS support and helps on Windows.
+        // Dev-only remote control (design.md 3.13) - never runs in a normal player-facing launch.
+        if (mcpMode) {
+            McpBridge.start();
+        }
         createApplication();
     }
 

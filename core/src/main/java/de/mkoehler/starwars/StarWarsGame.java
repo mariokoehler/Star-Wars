@@ -3,6 +3,7 @@ package de.mkoehler.starwars;
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.audio.Music;
+import de.mkoehler.starwars.remote.RemoteControlQueue;
 import de.mkoehler.starwars.render.QuoteDeck;
 
 import java.util.Random;
@@ -61,9 +62,15 @@ public class StarWarsGame extends Game {
      * specifically so a fade keeps playing across a screen transition
      * instead of being cut off by whichever screen started it disposing
      * itself.
+     * <p>
+     * Also drains {@link RemoteControlQueue} first, before delegating to the
+     * current screen — the embedded dev-only MCP server (design.md 3.13)
+     * queues its actions there from its own thread(s), same reasoning as
+     * every other cross-thread queue in this codebase.
      */
     @Override
     public void render() {
+        RemoteControlQueue.drain();
         super.render();
         if (fadingMusic != null) {
             fadingMusicElapsedSeconds += Gdx.graphics.getDeltaTime();

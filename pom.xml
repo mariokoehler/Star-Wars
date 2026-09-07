@@ -37,6 +37,9 @@
     <jacksonVersion>2.22.2</jacksonVersion>
     <!-- Menu-style screens' UI toolkit, see design.md 4.4 - first real usage: Connect Dialog. -->
     <visUiVersion>1.5.9</visUiVersion>
+    <!-- Embedded dev-only MCP server (design.md 3.13) letting Claude Code remote-control the
+         running client instead of OS-level keyboard/screenshot automation. -->
+    <mcpSdkVersion>2.0.1</mcpSdkVersion>
   </properties>
 
   <!-- The KryoNet fork is only published on JitPack, not Maven Central. -->

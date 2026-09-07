@@ -28,11 +28,15 @@ import de.mkoehler.starwars.net.ConnectionConfigStore;
 import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
+import de.mkoehler.starwars.remote.RemoteControlRegistry;
+import de.mkoehler.starwars.remote.RemoteControllable;
 import de.mkoehler.starwars.render.DialogLayout;
 import de.mkoehler.starwars.render.GameFonts;
 import de.mkoehler.starwars.render.ScrollingBackground;
 
 import java.io.IOException;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -73,8 +77,14 @@ import java.util.concurrent.atomic.AtomicReference;
  * first, {@link StarWarsGame#fadeOutAndDisposeMusic} fades it out over a
  * second or two rather than cutting it off mid-note the instant this
  * screen is disposed.
+ * <p>
+ * Remote-controllable (design.md 3.13): registers itself with
+ * {@link RemoteControlRegistry} in {@link #show()}/{@link #dispose()}, and
+ * exposes {@link #remoteLogin} + {@link #describeState()} for the embedded
+ * MCP server to fill in the form and press Connect without real keyboard/
+ * mouse input — the first (and so far only) screen wired up this way.
  */
-public class ConnectScreen implements Screen {
+public class ConnectScreen implements Screen, RemoteControllable {
 
     private static final float DIALOG_WIDTH = 640f;
     private static final float DIALOG_HEIGHT = 580f;
@@ -263,6 +273,8 @@ public class ConnectScreen implements Screen {
 
         stage.setKeyboardFocus(hostField);
         Gdx.input.setInputProcessor(stage);
+
+        RemoteControlRegistry.setActive(this);
     }
 
     /**
@@ -442,6 +454,52 @@ public class ConnectScreen implements Screen {
         errorLabel.setText(message);
     }
 
+    /**
+     * Remote-control entry point (design.md 3.13): fills in the four fields
+     * and submits, exactly as {@link #attemptConnect()} does for a real
+     * ENTER/Connect-button press — reuses that method as-is rather than
+     * duplicating its validation/blocking-connect/transition logic, so a
+     * remote-driven login behaves identically to a real one. Must be called
+     * from the render thread, like any other method here that touches
+     * {@link #hostField} etc. — the MCP bridge enforces this by only ever
+     * calling it from inside a {@code RemoteControlQueue.submit} action.
+     *
+     * @param host        server hostname to fill into the Server field
+     * @param displayName display name to fill into the Display Name field
+     * @param login       login name to fill into the Login field
+     * @param password    password to fill into the Password field
+     */
+    public void remoteLogin(String host, String displayName, String login, String password) {
+        hostField.setText(host);
+        displayNameField.setText(displayName);
+        loginField.setText(login);
+        passwordField.setText(password);
+        attemptConnect();
+    }
+
+    @Override
+    public String screenName() {
+        return "CONNECT";
+    }
+
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Deliberately omits the password field's contents — see
+     * {@link RemoteControllable#describeState()}'s own warning about never
+     * returning sensitive values.
+     */
+    @Override
+    public Map<String, Object> describeState() {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("host", hostField.getText());
+        state.put("displayName", displayNameField.getText());
+        state.put("login", loginField.getText());
+        state.put("error", errorLabel.getText().toString());
+        state.put("connecting", connecting);
+        return state;
+    }
+
     @Override
     public void resize(int width, int height) {
         camera.setToOrtho(false, width, height);
@@ -462,6 +520,7 @@ public class ConnectScreen implements Screen {
 
     @Override
     public void dispose() {
+        RemoteControlRegistry.clearIfActive(this);
         batch.dispose();
         background.dispose();
         logoTexture.dispose();

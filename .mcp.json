@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "starwars-client": {
+      "command": "cmd.exe",
+      "args": ["/c", "C:\\Users\\mario\\StarWars\\start_mcp_client.cmd"]
+    }
+  }
+}
