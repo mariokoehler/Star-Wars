@@ -1,0 +1,42 @@
+# Builds the dedicated server's Docker image (design.md 3.12) and pushes it
+# to GitHub Container Registry whenever a version tag is pushed - same
+# trigger as release-client.yml, but a separate workflow since it needs a
+# Linux runner (Docker build) rather than Windows (jpackage).
+#
+# The image inherits this repo's visibility (private for now, see design.md
+# 3.11/3.12's "known limitation" notes) - Container Station on the NAS needs
+# a GitHub Personal Access Token with read:packages to pull it, since a
+# workflow-scoped GITHUB_TOKEN only works from inside Actions runs.
+name: Release server image
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  release-server:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          # jgitver (design.md 3.10) computes the version from git tags/
+          # history - a shallow, tag-less checkout would break that.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build and push the server image
+        env:
+          IMAGE: ghcr.io/mariokoehler/starwars-server
+        run: |
+          docker build -f server/Dockerfile -t "$IMAGE:$GITHUB_REF_NAME" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$GITHUB_REF_NAME"
+          docker push "$IMAGE:latest"

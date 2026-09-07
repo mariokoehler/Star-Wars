@@ -1629,10 +1629,21 @@ Considered and rejected:
 
 **How the computed version behaves, with jgitver's defaults (nothing
 configured beyond the extension itself):**
-- HEAD exactly on a tag `vX.Y.Z` → version is exactly `X.Y.Z`.
+- HEAD exactly on a tag `vX.Y.Z`, working tree clean → version is exactly
+  `X.Y.Z`.
 - Any commit after that tag with no new tag yet → `X.Y.(Z+1)-SNAPSHOT`
   (patch auto-incremented, `-SNAPSHOT` appended) — every ordinary dev
   build already looks like a pre-release of the next patch.
+- **A dirty working tree also triggers this, even with HEAD exactly on a
+  tag** (found 2026-09-07 testing 3.12's Docker build locally, uncommitted
+  server/deploy files in the tree at the time): jgitver's default
+  `useDirty=false` only controls whether a `-dirty` *qualifier* gets
+  appended to the string, not whether uncommitted changes count as "not
+  the clean tagged release" in the first place — they do, and bump to the
+  next-patch `-SNAPSHOT` exactly like an actual commit past the tag
+  would. A `git describe --tags` showing HEAD is literally on the tag is
+  **not** the same question jgitver answers; don't use one to predict the
+  other. Commit everything before expecting a clean `X.Y.Z` build.
 - No tag reachable at all → `0.0.0-SNAPSHOT` (confirmed by running `mvn
   -N validate` before `v0.0.1`, the first tag, existed).
 - Cutting a release is therefore just `git tag vX.Y.Z` (or drafting a
@@ -1760,10 +1771,19 @@ with no missing-module errors — the jlink/jdeps auto-detection risk
 path both exercised for real (no release exists yet, so the download
 genuinely 404s) — correct banner output, correct error message, correct
 `pause`, correct non-zero exit, and critically nothing in the install
-folder was touched. **Not yet exercised**: the actual successful
-download/extract/staged-swap/rollback path, since that needs a real
-published release to download — deferred to whenever the first real
-`StarWars-Client.zip` release exists.
+folder was touched.
+
+**`v0.0.2` (2026-09-07) was the first real release-workflow run** — tag
+pushed, `.github/workflows/release-client.yml` fired, built, and
+published a real non-prerelease `StarWars-Client.zip` (~87 MB) in under
+two minutes, confirmed via `gh run watch`/`gh release view`. The user
+then downloaded that actual release asset, unzipped it, and ran the real
+`StarWars.exe` outside any scratch/CI environment — the whole tag → CI →
+GitHub Release → manual download → working game chain confirmed end to
+end on the first try. **Still not exercised**: `update.cmd`'s actual
+successful download/extract/staged-swap/rollback path specifically (as
+opposed to a plain manual browser download) — that needs an *existing*
+install to run `update.cmd` against, which hasn't been set up yet.
 
 **`update.cmd`** (`lwjgl3/src/main/dist/update.cmd`) design, in order:
 self-relaunch a copy of itself from `%TEMP%` first (it's one of the files
@@ -1820,12 +1840,119 @@ distribution mechanism to work for anyone else. Worth remembering before
 assuming "the release pipeline works" means "a friend could use it
 today" - it doesn't yet.
 
-**Still open:** the successful-update path is untested until a real
-release exists; no code-signing certificate is planned, so first run
-will trigger Windows SmartScreen's "protected your PC" warning (accepted
+**Still open:** `update.cmd`'s actual swap path (see the `v0.0.2` note
+above); no code-signing certificate is planned, so first run will
+trigger Windows SmartScreen's "protected your PC" warning (accepted
 trade-off, not a bug); the icon is a single 32×32 image, not a
 multi-resolution `.ico` (fine for now, could look sharper at other
 sizes - e.g. the taskbar - later).
+
+### 3.12 Dedicated server deployment: Docker via QNAP Container Station (2026-09-07)
+
+The user runs the dedicated server on a QNAP TS-451+ NAS (Intel Celeron
+J1900, 4 cores @ 1.9GHz, 8GB RAM) behind a FritzBox router, using QNAP's
+Container Station (a GUI over a real Docker engine) — confirmed on QTS
+5.2.10.3577 / Container Station 3.1.2.1742, comfortably above Container
+Station 3's published minimum (QTS 5.1.0+ on an x86 NAS).
+
+**Decision: GitHub Actions builds and pushes a Docker image to GHCR on
+every `v*` tag push; Container Station pulls it directly and runs it as a
+single-service Docker Compose "Application"** — chosen over QNAP's manual
+`docker save` → transfer → Import-tar path after researching how Container
+Station actually works. Since the NAS is an *authenticated puller*, not an
+anonymous public downloader (unlike the client zip's problem, 3.11),
+keeping the image private alongside the private repo is completely
+workable — this half of distribution doesn't force anything public.
+
+**Container Station's four sidebar sections**, for future reference: they
+map directly onto Docker's own concepts — Images/Containers/Applications/
+Volumes = Image/Container/Compose-stack/Volume. "Applications" is
+Compose-based, but a compose file with exactly **one** service is
+perfectly valid — not exclusively for multi-container stacks, contrary to
+first impression. Chosen over the quicker "Create Container" wizard
+specifically because the whole config (ports, volume, restart policy)
+lives in one YAML file worth keeping in this repo (`deploy/docker-
+compose.yml`), matching this project's habit of writing decisions down
+rather than leaving them as one-off GUI clicks nobody can reconstruct
+later.
+
+**`server/Dockerfile`** — multi-stage:
+1. `maven:3.9-eclipse-temurin-25` build stage, `mvn -pl server -am
+   package` (tests run, not skipped — a broken build shouldn't ship as an
+   image). Build context is the **whole repo root**, not a hand-picked
+   subset of directories — Maven has to parse *every* module the root
+   `pom.xml` declares (`lwjgl3`/`dev-tools` included) to build its reactor
+   graph before `-pl`/`-am` can even apply; a context missing either
+   directory fails at that parse step, not the build step `-pl` would
+   otherwise restrict to. Found this the hard way on the first build
+   attempt (`Child module .../lwjgl3 ... does not exist`) — fixed by
+   `COPY . .` instead of copying `core`/`server`/`assets` individually,
+   relying on `.dockerignore` (repo root) to keep `target/` etc. out.
+2. `eclipse-temurin:25-jre` runtime stage — deliberately **not** the
+   `-alpine` variant: libGDX's native libraries (its own core native plus
+   Box2D, both pulled in via `natives-desktop`) are built against glibc,
+   not Alpine's musl.
+3. `ENTRYPOINT` passes `--enable-native-access=ALL-UNNAMED` explicitly
+   (the README's documented flag for running this jar directly) — unlike
+   `lwjgl3`'s shade config, `server/pom.xml`'s doesn't bake this into the
+   manifest.
+
+**`.github/workflows/release-server.yml`** — a separate workflow from
+`release-client.yml` (different runner: `ubuntu-latest` for a plain
+Docker build vs. `windows-latest` for jpackage), same `push: tags: v*`
+trigger, running independently/in parallel. Pushes both the exact tag and
+a floating `latest` to `ghcr.io/mariokoehler/starwars-server`;
+authenticates to GHCR via the workflow's own `GITHUB_TOKEN`
+(`permissions: packages: write`) — no separate secret needed for the
+*push* side, since that's GitHub Actions pushing to GitHub's own registry
+from inside a run.
+
+**`deploy/docker-compose.yml`** — the actual Container Station
+"Application" YAML. Deliberately pins an **exact version tag**, never
+`latest` — the version check (3.10) is an exact-string match, so which
+server build is actually running has to be a conscious edit-and-redeploy
+action, not whatever `latest` happened to resolve to at pull time.
+Bind-mounts a real NAS folder (`/share/Container/starwars-server/data`,
+the QNAP-idiomatic convention over a Docker-managed named volume) onto
+`/app/data`, since `GameNetworkServer` resolves the account store as
+`Gdx.files.local("data/accounts.json")` relative to the container's
+working directory (`server/GameNetworkServer.java`) — without this
+mount, every redeploy would silently wipe every player's account.
+
+**Verified locally 2026-09-07** (via `podman build`/`podman run` — no
+NAS/Container Station access from here): the image builds successfully
+end to end and the container starts, binds both published ports, and
+reaches `[GameServer] Listening on TCP 45625 / UDP 45626` with no
+missing-native-library errors — same "did libGDX/Box2D's natives
+actually load on Linux" risk class as the earlier CLAUDE.md gotchas,
+confirmed by actually running it, not just a successful `docker build`
+exit code. One real build bug found and fixed this way: the first attempt
+copied only `core`/`server`/`assets` into the build stage and failed
+Maven's reactor parsing (see the Dockerfile note above) - only surfaced
+by actually building the image, `docker build`'s own success/failure on
+a syntactically-fine Dockerfile wouldn't have caught it any earlier.
+
+**Not yet done or verified** (tracked here so it isn't lost): actually
+deploying to the real NAS (Container Station registry credentials,
+creating the Application, creating the bind-mount folder first); FritzBox
+port forwarding (TCP 45625 + UDP 45626
+→ the NAS's LAN IP); whether Container Station's restart policy actually
+survives a crash and not just a clean reboot — community reports found
+during research were inconsistent on this, don't trust either mechanism
+(the GUI's "Auto Start" toggle vs. a real `restart:` policy) without
+testing it by deliberately killing the process inside a running
+container; the exact GitHub PAT scope Container Station needs for
+registry login (a **classic** PAT with `read:packages` is the
+well-documented, reliable choice — fine-grained PAT support for GHCR
+looked mixed/uncertain across current sources, not confidently
+recommendable).
+
+**Release-process reminder** (3.11 already flagged the coupling; this is
+the concrete mechanism for it): redeploying the server for a new tag
+means editing `deploy/docker-compose.yml`'s image tag and using Container
+Station's Update/Recreate — do this *before or alongside* publishing the
+matching client release, never after, or players who update immediately
+start failing the handshake against a server that hasn't caught up yet.
 
 ## 4. Rendering & presentation
 
@@ -2520,17 +2647,29 @@ once a component is actually being worked on.
       --type app-image` (native `StarWars.exe` + jlink runtime, no
       committed `jre/`) via `lwjgl3`'s new `release-client` Maven profile,
       zipped as `StarWars-Client.zip`; `update.cmd` self-updates a local
-      install without touching `connection-config.json`. Built and
-      smoke-tested (packaged exe launches, update.cmd's self-relaunch and
-      download-failure paths both exercised for real) but the
-      successful-download/swap path is still unverified - no release
-      exists yet to download. See 3.11.
+      install without touching `connection-config.json`. `update.cmd`'s
+      self-relaunch and download-failure paths both exercised for real;
+      its actual successful-swap path remains unverified (needs an
+      existing install to update). See 3.11.
 - [x] **Tag-triggered GitHub Actions release workflow (2026-09-07)** —
       `.github/workflows/release-client.yml` runs the `release-client`
       profile and publishes `StarWars-Client.zip` to a GitHub Release on
-      `v*` tag push. Not yet triggered for a real release; repo is still
-      private (see 3.11's "known limitation"), so the published asset
-      isn't downloadable by anyone outside this GitHub account yet.
+      `v*` tag push. **Confirmed working end to end with a real release,
+      `v0.0.2` (2026-09-07)**: tagged, pushed, workflow built and
+      published a real non-prerelease asset in under two minutes, and the
+      user downloaded, unzipped, and ran it successfully. Repo is still
+      private, so this only worked for the authenticated repo owner —
+      not yet reachable by anyone else (3.11's "known limitation").
+- [x] **Server Docker image + QNAP deployment plumbing (2026-09-07)** —
+      `server/Dockerfile` (multi-stage, `eclipse-temurin:25-jre` runtime,
+      not `-alpine`), `.github/workflows/release-server.yml` (pushes to
+      GHCR on `v*` tag push), `deploy/docker-compose.yml` (the Container
+      Station "Application" YAML, pinned image tag, bind-mounted account
+      data). Built and run locally via Podman - starts cleanly, both
+      ports bind, no missing-native-library errors. **Not yet deployed to
+      the real NAS or verified over a real network** - see 3.12's "not
+      yet done" list and the TODO given to the user directly for the
+      NAS/router-side steps.
 - [x] **Entity/component model (first pass, server-side)** — Ashley set
       up in `core` under `de.mkoehler.starwars.sim`, used by
       `GameNetworkServer`: `PhysicsBodyComponent`, `PlayerControlledComponent`,

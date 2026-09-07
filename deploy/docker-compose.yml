@@ -1,0 +1,26 @@
+# StarWars dedicated server - QNAP Container Station "Application" (design.md
+# 3.12). Deploy: Container Station > Applications > Create Application, paste
+# this file's contents (or Import it), review, Create.
+#
+# The image tag below is pinned deliberately, not "latest" - the version
+# check (design.md 3.10) is an exact-string match between client and server,
+# so which tag is actually running here has to be a conscious choice, not
+# whatever "latest" happened to resolve to at pull time. To update: edit the
+# tag below to the new release, then Update/Recreate the application in
+# Container Station. See the repo's README/design.md for the matching
+# client release to pair it with.
+services:
+  starwars-server:
+    image: ghcr.io/mariokoehler/starwars-server:v0.0.2
+    container_name: starwars-server
+    restart: unless-stopped
+    ports:
+      - "45625:45625/tcp"
+      - "45626:45626/udp"
+    volumes:
+      # Bind-mounts a real NAS shared-folder path rather than a Docker-
+      # managed named volume - the QNAP-idiomatic choice, since it means
+      # accounts.json (design.md 3.6) shows up as a normal folder QTS can
+      # browse/back up/snapshot, and survives container recreation. Create
+      # this folder on the NAS (e.g. via File Station) before first deploy.
+      - /share/Container/starwars-server/data:/app/data
