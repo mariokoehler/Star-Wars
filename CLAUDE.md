@@ -2051,6 +2051,45 @@ ship and confirming the rings/cone/blips look right and scale
 correctly, plus a real pulse producing a visible chevron on someone
 else's scope.
 
+**First real play-test, same day: two fixes.** See design.md 2.14's
+second addendum for the full writeup. (1) User reported the Snowspeeder
+showing all three rings/the cone despite "supposed to have only the
+base radar" — not a bug, this session's own uniform-baseline-for-now
+default was still in effect; **implemented the actual tiered loadout**
+the original request described (tier 1 base only, tier 2/3 base+cone,
+tier 4 all three), by ship type tier. (2) Widget "too small," moved
+from the bottom-left row to its own top-right corner and doubled in
+size (220→440px).
+
+**Network investigation update, same day, unprompted by the user's
+current ask:** the user is now at home (moved from the office session
+that started this investigation), still on the same laptop, and
+**confirmed the long screen-transition pauses are still there** —
+ruling out the office network/VPN specifically as the (sole) cause,
+same conclusion this session's own build output kept independently
+reaching anyway (`connect()`/`stop()` still showing multi-second,
+wildly variable timings during this very session's `mvn clean install`
+runs, e.g. 3066ms/5371ms just now, at home). **Explicitly told not to
+investigate further right now** — they'll test on a genuinely different
+machine next and report back before this gets picked up again. Next
+session: check whether they found anything on the other machine before
+assuming the "office security software" theory is fully dead — it could
+still be something environment-wide (this same laptop, any network) or
+something that always was going to require a different machine to
+actually isolate.
+
+**Radar play-tested successfully after the tiering/resize fixes above
+— confirmed working by the user.** Two more pieces of feedback for
+later, **not started, the user is planning to do the first one
+themselves in Photoshop:** (1) `hud_radar_background.png` has a lot of
+unused "real estate" around the actual circular scope area, wasting
+space now that the widget is 440px; (2) the widget could use a visual
+indicator for whether the active pulse is off cooldown —
+`ShipState#getRadarPulseCooldownRemaining()` (design.md 2.14) already
+carries exactly the data this would need, kept in sync for this
+reason even before there was a consumer for it. Both explicitly
+deferred, not blocking anything.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

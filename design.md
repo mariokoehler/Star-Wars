@@ -1673,6 +1673,28 @@ user is testing this themselves once given the go-ahead; this session
 did not launch the client/server (a standing instruction for this
 whole work session, unrelated to this specific feature).
 
+**Addendum — first real play-test feedback, same day.** Two fixes:
+
+1. **Actually implemented the tiered radar loadout** the original ask
+   described but this session's first pass deliberately deferred
+   ("every ship gets all three uniformly for now" — see above). Not a
+   bug fix; every ship type's `.stats.json` really did have all three
+   mechanisms enabled, exactly as designed at the time. Now tiered by
+   `ShipType#getTier()`: tier 1 (Snowspeeder) base only; tier 2/3 (TIE
+   Fighter, A-Wing, X-wing, TIE Interceptor) base + cone; tier 4
+   (Falcon, Star Destroyer) all three, unchanged. Only the three
+   `radar*Enabled` flags differ per ship now — every range/angle/
+   cooldown/duration number stays the same for every ship, still no
+   real per-ship balancing pass.
+2. **Moved from the bottom-left status/power row to its own top-right
+   corner, and doubled in size** (220→440px) — found too small/cramped
+   to read at a glance sharing that row with the other two widgets.
+   `Client.HUD_RADAR_MARGIN` replaces the old `HUD_RADAR_GAP` (it's no
+   longer positioned relative to the power-distribution widget, just
+   inset from its own corner using `Gdx.graphics.getWidth()/getHeight()`,
+   same technique `drawWarningMessage()` already uses for its own
+   screen-relative centering).
+
 ## 3. Architecture
 
 ### 3.1 High-level shape

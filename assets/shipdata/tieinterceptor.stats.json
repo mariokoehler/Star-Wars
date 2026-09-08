@@ -16,7 +16,7 @@
   "radarConeEnabled": true,
   "radarConeRangeMeters": 120.0,
   "radarConeHalfAngleDegrees": 30.0,
-  "radarPulseEnabled": true,
+  "radarPulseEnabled": false,
   "radarPulseRangeMeters": 200.0,
   "radarPulseCooldownSeconds": 30.0,
   "radarPulseRevealDurationSeconds": 5.0

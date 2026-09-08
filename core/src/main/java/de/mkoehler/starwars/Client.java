@@ -158,10 +158,15 @@ public class Client implements Screen {
     private static final float HUD_POWER_SIZE = 220f;
     /** Horizontal gap, in screen pixels, between the ship-status and power-distribution HUD widgets. */
     private static final float HUD_POWER_GAP = 16f;
-    /** Size, in screen pixels, of the radar/minimap HUD widget (design.md 2.14) - placeholder until tuned by feel. */
-    private static final float HUD_RADAR_SIZE = 220f;
-    /** Horizontal gap, in screen pixels, between the power-distribution and radar HUD widgets. */
-    private static final float HUD_RADAR_GAP = 16f;
+    /**
+     * Size, in screen pixels, of the radar/minimap HUD widget (design.md
+     * 2.14) - top-right corner, not part of the bottom-left status/power
+     * row, so it's sized independently; doubled from its original 220 after
+     * the first play-test found it too small to read at a glance.
+     */
+    private static final float HUD_RADAR_SIZE = 440f;
+    /** Screen-pixel margin from the top-right corner for the radar HUD widget. */
+    private static final float HUD_RADAR_MARGIN = 24f;
     /** How long a power-distribution keybind must be held before it maximizes its system instead of just incrementing it - untuned placeholder. */
     private static final float HOLD_TO_MAXIMIZE_SECONDS = 0.4f;
 
@@ -695,9 +700,12 @@ public class Client implements Screen {
             contactPositionsMeters.add(new Vector2(
                 ship.renderX / PhysicsConstants.PIXELS_PER_METER, ship.renderY / PhysicsConstants.PIXELS_PER_METER));
         }
-        radarHud.render(batch, ShipStats.forType(myShipType),
-            HUD_STATUS_MARGIN + HUD_STATUS_SIZE + HUD_POWER_GAP + HUD_POWER_SIZE + HUD_RADAR_GAP, HUD_STATUS_MARGIN,
-            HUD_RADAR_SIZE, myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters);
+        // Top-right corner, not part of the bottom-left status/power row (design.md 2.14) - the
+        // first play-test found it too small/cramped down there to actually read at a glance.
+        float radarX = Gdx.graphics.getWidth() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
+        float radarY = Gdx.graphics.getHeight() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
+        radarHud.render(batch, ShipStats.forType(myShipType), radarX, radarY, HUD_RADAR_SIZE,
+            myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters);
     }
 
     /**
