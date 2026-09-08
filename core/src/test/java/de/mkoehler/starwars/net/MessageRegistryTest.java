@@ -160,7 +160,7 @@ class MessageRegistryTest {
                     new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f)
             },
             new ProjectileState[]{
-                new ProjectileState(100, 1, 11f, 20f, 0.5f)
+                new ProjectileState(100, 1, 11f, 20f, 3f, 48f)
             });
         WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
         assertEquals(2, copy.getShips().length);
@@ -183,6 +183,8 @@ class MessageRegistryTest {
         assertEquals(100, copy.getProjectiles()[0].getProjectileId());
         assertEquals(1, copy.getProjectiles()[0].getOwnerPlayerId());
         assertEquals(11f, copy.getProjectiles()[0].getX());
+        assertEquals(3f, copy.getProjectiles()[0].getVelocityX());
+        assertEquals(48f, copy.getProjectiles()[0].getVelocityY());
     }
 
     @Test

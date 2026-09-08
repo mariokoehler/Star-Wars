@@ -807,7 +807,8 @@ public class GameNetworkServer extends NetworkServer {
             ProjectileComponent projectile = entity.getComponent(ProjectileComponent.class);
             Body body = entity.getComponent(PhysicsBodyComponent.class).getBody();
             projectileStates[j] = new ProjectileState(projectile.getProjectileId(), projectile.getOwnerPlayerId(),
-                body.getPosition().x, body.getPosition().y, body.getAngle());
+                body.getPosition().x, body.getPosition().y,
+                body.getLinearVelocity().x, body.getLinearVelocity().y);
         }
 
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {

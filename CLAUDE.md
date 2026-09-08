@@ -2314,6 +2314,141 @@ log, not a client launched this side; note that the *original*
 live confirmation of its own — this `ConnectScreen` fix is independent
 evidence-wise, not a substitute for testing that one.
 
+**Projectiles appearing to spawn behind the ship's attachment points —
+root-caused and fixed, 2026-09-08, same day.** See design.md 2.4's
+addendum for the full writeup. User report from live play-testing: flying
+the Snowspeeder east while holding "W" and SPACE, shots appeared to
+originate from behind the ship, worse at speed, correcting back to normal
+as the ship slowed to a stop. Root cause: `RemoteProjectile` (client-side
+dead reckoning) extrapolated every projectile forward using
+`WeaponStats.BLASTER.getProjectileSpeed()` alone — a leftover assumption
+from before shots inherited the firing ship's own velocity (the
+2026-09-06 fix, design.md 2.4). That earlier fix only ever reached the
+server's own simulation; nothing updated how the client extrapolated a
+projectile's *rendered* position, so the client was structurally
+under-extrapolating by the shooter's own velocity component the whole
+time, reset back to the true position every time a fresh snapshot
+arrived — a sawtooth error scaling directly with ship speed, exactly the
+reported symptom.
+
+**Fix:** `ProjectileState` gained `velocityX`/`velocityY` (the
+projectile body's real `Body.getLinearVelocity()`, already correct
+server-side), same shape as `ShipState`'s existing velocity fields —
+and dropped its `angle` field entirely, since nothing needs a
+projectile's *fired* angle once its actual *travel* direction is
+available directly (and those two can now genuinely differ, which is
+exactly what caused this bug). `Client.drawProjectiles`'s sprite
+rotation, which used to just reuse that same angle field, now derives
+its rotation from the velocity vector instead — otherwise the visible
+fix would have introduced a fresh bug (an oval pointing the wrong way
+whenever fired while moving off-axis), caught before it ever ran by
+re-reading the draw call rather than by seeing it live.
+
+**A staleness-compensation tweak on top of the velocity fix — same
+"seed elapsed time instead of resetting to zero" idea as the terminal-
+velocity-jitter fix above — went through three rounds of live testing
+before landing on the actual root cause. Worth the full trail, since
+the middle two rounds each genuinely looked like the answer at the
+time.** With the seed in place: the user confirmed the property that
+matters ("the projectiles now spawn consistently from the same
+position, regardless of speed or direction of travel") but also
+reported the spawn point looked "quite a distance away, maybe 2/3rds of
+the ship width." Removed the seed on a theory that turned out wrong
+(that seeding breaks specifically on a brand-new projectile's first
+render) — that brought back the *original*, smaller symptom: a spawn
+point lagging visibly behind the ship, worse with speed. **What
+actually settled it: the user sent a Photoshop mockup marking the exact
+pixel position where two shots first became visible, lined up against a
+background star for precision.** Cross-checked against the
+Snowspeeder's real `snowspeeder.meta.json` (`PROJECTILE` at y=59px,
+right at the hull's own y=60px front edge — the true spawn point is at
+the nose, not floating ahead of it), the marked crosses sat roughly
+2.3m past that point — very close to `shipSpeed × one tick interval`.
+The seed genuinely was overshooting. **Why the same idea works for ship
+reconciliation but not here:** `mySnapshotElapsedSeconds` isn't really
+a staleness estimate — it works because it aligns two
+*independently-integrating* quantities (the locally-predicted body, and
+the server state extrapolated by the same real-world duration) over the
+same window, so they converge regardless of the actual duration used.
+`RemoteProjectile` has no local integration to align with; every
+frame's render position is recomputed from scratch as
+`base + velocity × elapsed`, where the *correct* elapsed really is the
+data's true age — near-zero on localhost, not a full tick interval.
+Same mechanism, two different quantities. **Seed removed for good.**
+
+**A second, genuinely separate bug found and fixed alongside it:**
+`extrapolateProjectiles` runs every frame after the snapshot drain,
+including the very frame a projectile is created in — that first call
+added a full frame's `deltaTime` (covering the interval *before* this
+projectile existed) on top of an already-correct spawn position.
+`RemoteProjectile` now skips exactly one `extrapolate` call right after
+creation (`skipNextExtrapolate`), so its constructor-set position
+survives untouched for that first visible frame. This is a real
+off-by-one-frame bug, not another staleness estimate — deliberately
+scoped to the one-time creation case, not generalized to every
+snapshot update the way the reverted seed was.
+
+**Deliberately still not extended to `RemoteShip`** — no one has
+reported remote ships rendering wrong, so there's no evidence pulling
+either change there.
+
+**Also confirms, not just repeats, an existing flagged note:**
+`TurretAiming.computeLeadAngle`'s Javadoc already flagged that its
+intercept solve assumes shot speed equals bare muzzle speed as
+"negligible since a turret's platform is normally far slower than its
+shots" — this bug is direct proof the underlying assumption (shooter
+velocity meaningfully changes a shot's true speed) is real, not just
+theoretical, since the exact same server-side velocity addition is what
+broke here. Still not worth fixing preemptively — the Falcon/Star
+Destroyer's turrets just haven't been reported as visibly mis-aiming
+yet.
+
+**Wire-compatibility gotcha, same class already flagged twice
+elsewhere in this file:** `ProjectileState`'s constructor shape changed
+(angle dropped, velocity added). Registration order is unchanged, so
+ids still line up, but a client and server built from different commits
+will silently disagree on this message's field layout — rebuild and
+restart both ends together, same rule as every other wire-shape change
+here. Full `mvn clean test` green throughout (including
+`MessageRegistryTest`'s updated `ProjectileState` round-trip).
+**Live-tested three times this session** — velocity fix confirmed;
+seed-overshoot confirmed via the marked screenshot cross-checked
+against real attachment-point data.
+
+**Fourth live test, 2026-09-09: `skipNextExtrapolate` confirmed fixed
+at rest, but a distinct residual bug surfaced under motion.** At rest,
+shots now spawn exactly at the attachment point — that fix holds. But
+flying east, shot spawn points drift west (behind the ship) again,
+worse with more speed — same shape as the original report, just
+smaller. The at-rest test could never have ruled this out:
+`gap = shipVelocity × staleness` is zero at rest for *any* staleness
+value, not just zero, so "localhost staleness ≈ 0" was never actually
+validated, only the old tick-interval-sized overshoot was.
+
+**Root cause, found by re-checking the server's tick ordering against
+this exact question — not a `RemoteProjectile` bug at all.**
+`GameNetworkServer.tick()`'s ordering (weapons fire after physics
+stepping, broadcast reads that same tick's fresh positions) is
+confirmed correct — a shot's spawn position is exactly right the tick
+it's created, no extra-tick delay server-side. The real mismatch is
+structural: the local player's **own ship** renders from client-side
+prediction (always "now," zero perceived input lag by design), but a
+**shot fired from that ship** only exists once the server has
+processed the fire input and broadcast it back — a full input round
+trip of latency, small but nonzero even on localhost. So the ship the
+player sees is always some distance ahead of where the server's shot
+was actually spawned, by `shipVelocity × roundTripLatency`. This isn't
+a new bug so much as the exact tradeoff design.md 2.4 already named and
+flagged "revisit if it ever feels laggy" back when projectiles were
+first built as server-only/never-predicted — it's now visibly laggy.
+**Not yet fixed.** Recommended fix: local shot prediction for the
+player's own shots only (draw a cosmetic projectile immediately from
+the local ship's own live attachment point on SPACE, hand off to the
+server-confirmed projectile once its id arrives) — a new small
+milestone (getting the handoff not to visibly pop/double-image), not a
+one-line fix, so it needs the user's go-ahead before starting. Full
+`mvn clean test` green throughout this session's work either way.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

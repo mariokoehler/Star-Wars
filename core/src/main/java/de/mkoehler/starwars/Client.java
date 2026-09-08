@@ -553,8 +553,10 @@ public class Client implements Screen {
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
             RemoteProjectile projectile = projectiles.computeIfAbsent(state.getProjectileId(), id ->
-                new RemoteProjectile(state.getOwnerPlayerId(), x, y, state.getAngle()));
-            projectile.updateFromSnapshot(x, y, state.getAngle());
+                new RemoteProjectile(state.getOwnerPlayerId(), x, y));
+            projectile.updateFromSnapshot(x, y,
+                state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
+                state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER);
         }
         projectiles.keySet().removeIf(id -> !presentIds.contains(id));
     }
@@ -851,13 +853,8 @@ public class Client implements Screen {
     }
 
     private void extrapolateProjectiles(float deltaTime) {
-        // Projectiles fly in a fixed direction at a fixed known speed for their whole flight
-        // (no thrust/torque, no prediction) - so unlike ships, velocity doesn't need to come
-        // from the server at all, it's fully determined by the weapon's stats and the angle
-        // already in each snapshot.
-        float speedPixels = WeaponStats.BLASTER.getProjectileSpeed() * PhysicsConstants.PIXELS_PER_METER;
         for (RemoteProjectile projectile : projectiles.values()) {
-            projectile.extrapolate(deltaTime, speedPixels);
+            projectile.extrapolate(deltaTime);
         }
     }
 
@@ -990,12 +987,17 @@ public class Client implements Screen {
             // (design.md 3.5), the server treats every projectile identically.
             TextureRegion region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
             float heightPixels = widthPixels * region.getRegionHeight() / (float) region.getRegionWidth();
+            // Rotated to its actual travel direction (velocity), not the angle it was fired at -
+            // those differ once the firing ship's own velocity is added on top of muzzle velocity
+            // (design.md 2.4's addendum). Inverse of this project's angle-to-direction convention,
+            // same formula TurretAiming already uses for the same reason.
+            float travelAngle = MathUtils.atan2(-projectile.velocityX, projectile.velocityY);
             batch.draw(region,
                 projectile.renderX - widthPixels / 2f, projectile.renderY - heightPixels / 2f,
                 widthPixels / 2f, heightPixels / 2f,
                 widthPixels, heightPixels,
                 1f, 1f,
-                projectile.angle * MathUtils.radiansToDegrees);
+                travelAngle * MathUtils.radiansToDegrees);
         }
     }
 
@@ -1108,40 +1110,62 @@ public class Client implements Screen {
 
     /**
      * A projectile (anyone's, including the local player's own). Rendered by
-     * dead reckoning, same reasoning as {@link RemoteShip} — extrapolated
-     * along its fixed travel direction at the weapon's known constant speed,
-     * rather than eased toward the latest snapshot.
+     * dead reckoning, same reasoning and same shape as {@link RemoteShip} —
+     * extrapolated forward using its actual reported world-frame velocity
+     * (muzzle speed plus whatever velocity the firing ship had, {@code
+     * ProjectileState}/{@code ProjectileFactory}), <b>not</b> a fixed weapon
+     * speed along its facing angle: a fast-moving shooter's own velocity
+     * measurably changes a shot's true speed, and assuming bare muzzle speed
+     * under-extrapolated it — most visibly as a newly-fired projectile
+     * appearing to spawn behind its ship's own attachment point, worse the
+     * faster the ship was moving (design.md 2.4's addendum).
      */
     private static final class RemoteProjectile {
-        private static final Vector2 DIRECTION = new Vector2();
-
         final int ownerPlayerId;
         float baseX;
         float baseY;
-        float angle;
+        float velocityX;
+        float velocityY;
         float elapsedSinceUpdate;
         float renderX;
         float renderY;
+        /**
+         * True for exactly one {@link #extrapolate} call: the first one after
+         * this projectile is created. That call's {@code deltaTime} covers the
+         * interval since the *previous* render frame — before this projectile
+         * existed — so applying it would advance the projectile's very first
+         * visible position by up to one frame's worth of travel past its true
+         * spawn point (already correct in {@link #renderX}/{@link #renderY},
+         * set directly from the snapshot in the constructor) for no reason.
+         * Confirmed live: a user-provided screenshot marking exactly where a
+         * shot first became visible measured it consistently past its
+         * ship-type's authored {@code PROJECTILE} attachment point by close to
+         * this margin (design.md 2.4's addendum).
+         */
+        boolean skipNextExtrapolate = true;
 
-        RemoteProjectile(int ownerPlayerId, float x, float y, float angle) {
+        RemoteProjectile(int ownerPlayerId, float x, float y) {
             this.ownerPlayerId = ownerPlayerId;
             baseX = renderX = x;
             baseY = renderY = y;
-            this.angle = angle;
         }
 
-        void updateFromSnapshot(float x, float y, float angle) {
+        void updateFromSnapshot(float x, float y, float velocityX, float velocityY) {
             baseX = x;
             baseY = y;
-            this.angle = angle;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
             elapsedSinceUpdate = 0f;
         }
 
-        void extrapolate(float deltaTime, float speedPixels) {
+        void extrapolate(float deltaTime) {
+            if (skipNextExtrapolate) {
+                skipNextExtrapolate = false;
+                return;
+            }
             elapsedSinceUpdate += deltaTime;
-            DIRECTION.set(0, 1).rotateRad(angle).scl(speedPixels * elapsedSinceUpdate);
-            renderX = baseX + DIRECTION.x;
-            renderY = baseY + DIRECTION.y;
+            renderX = baseX + velocityX * elapsedSinceUpdate;
+            renderY = baseY + velocityY * elapsedSinceUpdate;
         }
     }
 

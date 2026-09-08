@@ -1,7 +1,7 @@
 package de.mkoehler.starwars.net.messages;
 
 /**
- * One projectile's position and orientation at the moment a
+ * One projectile's position and velocity at the moment a
  * {@link WorldSnapshotMessage} was built. Not sent on its own, only as an
  * element of that message's projectile list.
  * <p>
@@ -16,7 +16,8 @@ public class ProjectileState {
     private int ownerPlayerId;
     private float x;
     private float y;
-    private float angle;
+    private float velocityX;
+    private float velocityY;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -31,14 +32,24 @@ public class ProjectileState {
      * @param ownerPlayerId the id of the player who fired it
      * @param x             the projectile's position, in meters
      * @param y             the projectile's position, in meters
-     * @param angle         the projectile's facing/travel angle, in radians
+     * @param velocityX     the projectile's actual world-frame velocity, in meters/second —
+     *                      muzzle speed plus whatever velocity the firing ship had at the
+     *                      moment of firing ({@link de.mkoehler.starwars.sim.ProjectileFactory}),
+     *                      not derivable client-side from a fixed weapon speed alone. Also doubles
+     *                      as the client's render rotation (design.md 2.4's addendum) — a
+     *                      projectile's true travel direction, unlike a ship's, can differ from
+     *                      whatever angle it was fired at, once the firing ship's own velocity is
+     *                      added on top of muzzle velocity.
+     * @param velocityY     the projectile's actual world-frame velocity, in meters/second
      */
-    public ProjectileState(int projectileId, int ownerPlayerId, float x, float y, float angle) {
+    public ProjectileState(int projectileId, int ownerPlayerId, float x, float y,
+                            float velocityX, float velocityY) {
         this.projectileId = projectileId;
         this.ownerPlayerId = ownerPlayerId;
         this.x = x;
         this.y = y;
-        this.angle = angle;
+        this.velocityX = velocityX;
+        this.velocityY = velocityY;
     }
 
     /**
@@ -78,11 +89,20 @@ public class ProjectileState {
     }
 
     /**
-     * Returns the projectile's facing/travel angle.
+     * Returns the projectile's actual world-frame X velocity.
      *
-     * @return the angle, in radians
+     * @return the velocity, in meters/second
      */
-    public float getAngle() {
-        return angle;
+    public float getVelocityX() {
+        return velocityX;
+    }
+
+    /**
+     * Returns the projectile's actual world-frame Y velocity.
+     *
+     * @return the velocity, in meters/second
+     */
+    public float getVelocityY() {
+        return velocityY;
     }
 }
