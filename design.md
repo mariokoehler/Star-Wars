@@ -584,18 +584,17 @@ decisions on both ends (the client's local prediction, not just the
 server), so a mismatched pair could predict differently from what the
 server actually does even without any wire incompatibility.
 
-**Verification status — build/tests only, NOT yet live-tested.** Full
-`mvn clean test` green, and both the client and server jars build clean.
-But the entire point of this feature is whether the handoff is visually
-invisible, which can't be confirmed by a test suite or a build log —
-needs a real play session. What to watch for specifically: a shot
-appearing correctly at the nose and then popping/jumping backward would
-mean the elapsed-seeding fix is wrong; a stray extra shot flying
-alongside a confirmed one (or a shot that visibly "restarts" partway)
-would mean spawn-to-spawn matching failed to find its predicted
-counterpart. Also worth re-confirming the earlier, separately-already-
-tested pieces still hold with prediction layered on top (constant spawn
-point regardless of ship speed, no residual westward drift while flying).
+**Verified live, 2026-09-09, same day — user confirmed:** "this seems to
+have fixed it. it looks good now regardless of speed or direction." Full
+`mvn clean test` green throughout, both jars build clean, and now real
+play-test confirmation on top — the handoff is visually invisible (no
+backward pop, no stray duplicate shots), and the whole projectile-spawn
+investigation from earlier this session (velocity fix, off-by-one-frame
+fix, local shot prediction) is genuinely closed: correct at rest, correct
+at any tested speed/direction. This closes out the "Projectiles —
+server-simulated, never predicted... revisit only if it ever feels laggy"
+line from this section's original 2026-09-05 writeup — it did, and now
+it's fixed.
 
 ### 2.5 Ship sprite metadata: polygon hitboxes & attachment points (2026-09-05)
 

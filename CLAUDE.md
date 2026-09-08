@@ -2496,15 +2496,13 @@ the previous one — but rebuild and restart both ends together anyway,
 since `WeaponStats.BLASTER` now drives real firing decisions on both
 ends, not just the server.
 
-**Verification status: build/tests only, NOT live-tested yet.** Full
-`mvn clean test` green, both jars build clean — but the entire point of
-this feature is whether the handoff is visually invisible, which needs a
-real play session to confirm, not a build log. Watch for: a shot popping/
-jumping backward right after spawning (elapsed-seeding wrong), or a
-stray extra shot flying alongside a confirmed one (spawn-to-spawn
-matching failed to find its counterpart). Also worth re-confirming the
-already-tested pieces (constant spawn point regardless of speed, no
-residual westward drift) still hold with prediction layered on top.
+**Verified live, 2026-09-09, same day.** User: "this seems to have fixed
+it. it looks good now regardless of speed or direction." No pop, no
+stray duplicate shots, no residual drift at any tested speed/direction —
+the full projectile-spawn investigation from this session (velocity fix,
+off-by-one-frame fix, local shot prediction) is genuinely closed. Full
+`mvn clean test` green throughout. Committed as `ebc0d16`/`4963df2`,
+pushed.
 
 ## Build system
 
