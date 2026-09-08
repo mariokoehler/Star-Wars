@@ -248,17 +248,19 @@ cooldown between shots (0.25s, i.e. 4 shots/sec hard cap) **and** the
 real weapon capacitor mechanic from 2.2, implemented alongside power
 distribution itself — see 2.8 for the full writeup.
 
-**Projectiles — server-simulated, never predicted:** each shot is a small,
-fast Box2D body (bullet/CCD enabled to avoid tunneling through a ship in
-one physics step) simulated authoritatively on the server exactly like
-ships are, broadcast every tick via `WorldSnapshotMessage` alongside ship
-states. Unlike ships, **projectiles are never predicted locally, not even
-the shooter's own** — they're drawn purely from received snapshots
-(eased toward the latest target, same technique as other players' ships),
-accepting a small, barely-noticeable network-round-trip delay before a
-shot visually appears. Deliberate simplification, consistent with how
-ship movement itself started as snapshot-only before prediction was added
-— revisit only if it ever feels laggy in practice.
+**Projectiles — server-simulated; the local player's own shots are also
+client-predicted (superseded 2026-09-09, see this section's addenda).**
+Each shot is a small, fast Box2D body (bullet/CCD enabled to avoid
+tunneling through a ship in one physics step) simulated authoritatively on
+the server exactly like ships are, broadcast every tick via
+`WorldSnapshotMessage` alongside ship states — every projectile, including
+the local player's own, is still drawn from received snapshots as the
+authoritative source of truth. **Originally** projectiles were never
+predicted locally at all, not even the shooter's own, deliberately, "revisit
+only if it ever feels laggy in practice" — it did (see the addenda), so the
+local player's own shots are now *additionally* drawn from a client-side
+prediction ahead of server confirmation, closing that round-trip gap; other
+players' shots are still snapshot-only, unchanged.
 - **Visual distinction — decided:** the local player's own shots draw
   red, every other player's shots draw blue. Purely a client-side
   rendering choice — the server treats every projectile identically
@@ -498,35 +500,102 @@ together on screen:
 So the ship the player sees is always some distance *ahead* of where
 the server's shot was actually spawned from, by
 `shipVelocity × roundTripLatency` — not a bug in the extrapolation math,
-which is now correct, but the designed consequence of predicting one
-entity (the ship) and never predicting the other (its own shots) noted,
-and explicitly flagged as revisit-if-it-feels-laggy, all the way back
-when this section was first written (see "Projectiles — server-
-simulated, never predicted" above). It's now visibly laggy. **Not yet
-fixed — recommended fix is local shot prediction for the player's own
-shots specifically** (draw a cosmetic projectile immediately from the
-local ship's own live attachment point on SPACE, hand off to the
-server-confirmed projectile once its id arrives; only the local
-player's own shots need this, nobody has a precise enough reference to
-notice the same gap on anyone else's). Deferred pending the user's
-go-ahead — this is a new small milestone (getting the local→server
-handoff to not visibly pop/double-image), not a one-line bug fix.
+which is correct, but the designed consequence of predicting one entity
+(the ship) and never predicting the other (its own shots) noted, and
+explicitly flagged as revisit-if-it-feels-laggy, all the way back when
+this section was first written (see the now-superseded "Projectiles —
+server-simulated, never predicted" paragraph above). It became visibly
+laggy — fixed the same day by adding local shot prediction, below.
+
+**Local shot prediction for the player's own shots — implemented
+2026-09-09, same day, right after the root cause above.** User asked
+for the real fix over living with the residual. New client-side
+`Client#predictLocalWeapon`/`#spawnPredictedProjectile` mirror
+`WeaponSystem#processEntity`'s exact cooldown/capacitor/attachment-point
+firing logic locally — a client-owned `WeaponComponent` (reused directly,
+it's a plain state holder, not Ashley-specific) ticks cooldown and
+recharges its capacitor every frame using the same local
+`myPowerDistribution` mirror already driving engine-thrust prediction —
+so a held SPACE press spawns a cosmetic projectile from the local ship's
+own live attachment point(s) the instant the local capacitor/cooldown
+say it's allowed to fire, not once the server round trip confirms it.
+`WeaponStats` gained a shared `PROJECTILE_ATTACHMENT_NAME` public
+constant (was private to `WeaponSystem`) so the two copies of this logic
+can't silently name the attachment point differently — same reasoning as
+`TurretConfig.ATTACHMENT_NAME` already being public/shared.
+
+**The handoff — a predicted shot becoming the real, id-tracked one once
+the server confirms it — is the part that actually had to be gotten
+right, not just spawning it early.** Two problems found and fixed before
+ever asking for a live test (advisor review caught both from reading the
+code, not from playing it):
+- **A backward pop on confirmation.** Naively resetting the adopted
+  object's elapsed-since-update to zero on confirmation (the normal
+  behavior for an ordinary snapshot update) would snap it backward: the
+  confirmed `ProjectileState` reports the shot's position *at the server
+  tick that created it*, which is already however-long-ago (round-trip
+  latency) by the time it's received — while the predicted object's
+  current render position already reflects that shot's true elapsed
+  flight time. Fixed by seeding the confirmed object's elapsed-since-
+  update with the *predicted* object's own already-accumulated elapsed
+  time on adoption only (`RemoteProjectile#updateFromSnapshot`'s new
+  5-arg overload) — the same "align two independently-integrating
+  estimates of the same event using the same real-world duration for
+  both" trick 3.5's `reconcileWithServer` already uses, not a network-
+  latency estimate.
+- **A meaningless match-distance threshold.** Matching a predicted shot
+  to its confirmation by comparing the predicted object's *current*
+  (already-extrapolated) render position against the confirmed spawn
+  position would make the match distance grow with round-trip latency ×
+  velocity — exactly what the threshold needs to be latency-independent
+  of. Fixed by giving `RemoteProjectile` an immutable `spawnX`/`spawnY`
+  set once at construction and matching spawn-to-spawn instead
+  (`Client#takeMatchingPredicted`) — two independent spawn-position
+  estimates of the same fire event should only ever differ by ordinary
+  prediction/authority drift, not by anything latency-dependent.
+
+An unmatched predicted shot (dropped input packet, a hit destroying the
+real projectile before it's ever broadcast, etc.) simply expires after
+`PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS` (0.5s — a UI-feel choice, a
+few multiples of a snapshot interval, deliberately much shorter than the
+weapon's own multi-second projectile lifetime) rather than lingering as a
+ghost with nothing left to ever correct it.
+
+**The `myWeapon` local mirror is best-effort, not guaranteed-in-sync the
+way `myPowerDistribution` is.** Power distribution rides the reliable/
+ordered TCP channel and applies a deterministic transition to both
+copies, so the two structurally can't diverge (2.8's writeup). Fire
+input rides the *unreliable* UDP channel (3.5) — a dropped packet means
+the server never sees a fire the client predicted, or vice versa. Left
+this way deliberately rather than adding reconciliation for it: the
+existing unmatched-expiry above already degrades gracefully, and the
+server remains the sole source of truth for whether a shot actually
+fires/deals damage regardless of what the local mirror predicted.
 
 **Wire-compatibility note, same class of gotcha CLAUDE.md already
 flags twice:** `ProjectileState`'s constructor shape changed (angle
-dropped, velocity added) — Kryo's registration *order* is unchanged (no
-new registered type), so ids still line up, but a client and server
-built from different commits will silently disagree on this message's
-field layout. Rebuild and restart both ends together.
+dropped, velocity added), and separately `WeaponStats` gained a public
+constant while `WeaponSystem` lost the equivalent private one — neither
+changes Kryo's registration *order* (no new registered type, no message
+shape change from the constant move), so this build is wire-compatible
+with the previous one bit-for-bit. Still rebuild and restart both ends
+together regardless: `WeaponStats.BLASTER`'s values now drive real firing
+decisions on both ends (the client's local prediction, not just the
+server), so a mismatched pair could predict differently from what the
+server actually does even without any wire incompatibility.
 
-**Live-tested three times in this same session** — velocity fix
-confirmed (constant spawn point regardless of ship speed/direction);
-seed-magnitude overshoot confirmed via the marked screenshot cross-
-checked against real attachment-point data; the off-by-one-frame fix
-above hasn't itself had a dedicated re-test yet (no reason to expect it
-behaves differently from the reasoning above, but worth a quick
-confirmation next play session, same "verify before calling it closed"
-standard as the rest of this investigation).
+**Verification status — build/tests only, NOT yet live-tested.** Full
+`mvn clean test` green, and both the client and server jars build clean.
+But the entire point of this feature is whether the handoff is visually
+invisible, which can't be confirmed by a test suite or a build log —
+needs a real play session. What to watch for specifically: a shot
+appearing correctly at the nose and then popping/jumping backward would
+mean the elapsed-seeding fix is wrong; a stray extra shot flying
+alongside a confirmed one (or a shot that visibly "restarts" partway)
+would mean spawn-to-spawn matching failed to find its predicted
+counterpart. Also worth re-confirming the earlier, separately-already-
+tested pieces still hold with prediction layered on top (constant spawn
+point regardless of ship speed, no residual westward drift while flying).
 
 ### 2.5 Ship sprite metadata: polygon hitboxes & attachment points (2026-09-05)
 

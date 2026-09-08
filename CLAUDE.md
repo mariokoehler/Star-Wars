@@ -2441,13 +2441,70 @@ was actually spawned, by `shipVelocity × roundTripLatency`. This isn't
 a new bug so much as the exact tradeoff design.md 2.4 already named and
 flagged "revisit if it ever feels laggy" back when projectiles were
 first built as server-only/never-predicted — it's now visibly laggy.
-**Not yet fixed.** Recommended fix: local shot prediction for the
-player's own shots only (draw a cosmetic projectile immediately from
-the local ship's own live attachment point on SPACE, hand off to the
-server-confirmed projectile once its id arrives) — a new small
-milestone (getting the handoff not to visibly pop/double-image), not a
-one-line fix, so it needs the user's go-ahead before starting. Full
-`mvn clean test` green throughout this session's work either way.
+
+**User chose to build the real fix rather than live with the residual —
+local shot prediction implemented same day.** See design.md 2.4's
+addendum for the full writeup. `Client#predictLocalWeapon`/
+`#spawnPredictedProjectile` mirror `WeaponSystem#processEntity`'s exact
+cooldown/capacitor/attachment-point logic locally, via a client-owned
+`WeaponComponent` (a plain state holder, reused directly — no Ashley
+entity needed) ticked every frame using the same `myPowerDistribution`
+mirror already driving thrust prediction. `WeaponStats` gained a shared
+`PROJECTILE_ATTACHMENT_NAME` public constant (was private to
+`WeaponSystem`) so client and server can't silently disagree on the
+attachment point name — same pattern as `TurretConfig.ATTACHMENT_NAME`.
+
+**The handoff (predicted shot → real, id-tracked shot on confirmation)
+needed two real fixes before it could work invisibly — both caught by
+advisor review of the code, before ever asking for a live test:**
+- **Backward pop, fixed by seeding elapsed time instead of resetting
+  it.** A confirmed `ProjectileState` reports the shot's position as of
+  the server tick that created it — already stale by round-trip latency
+  once received — while the predicted object's current render position
+  already reflects that shot's true elapsed flight time. Resetting
+  elapsed-since-update to zero on adoption (the normal snapshot-update
+  behavior) would snap the shot backward. Fixed by seeding it with the
+  *predicted* object's own already-accumulated elapsed time instead, on
+  the adoption path only (`RemoteProjectile#updateFromSnapshot`'s new
+  5-arg overload) — same "align two independently-integrating estimates
+  of one event using the same real-world duration" trick 3.5's
+  `reconcileWithServer` already uses, not a latency guess.
+- **A meaningless match threshold, fixed by matching spawn-to-spawn.**
+  Matching a predicted shot to its confirmation by comparing the
+  predicted object's *current* (already-extrapolated) position against
+  the confirmed spawn position would make the match distance grow with
+  latency × velocity, defeating a fixed threshold. Fixed by giving
+  `RemoteProjectile` an immutable `spawnX`/`spawnY` and matching those
+  instead — two estimates of the same fire event's spawn point should
+  only differ by ordinary prediction drift, never by latency.
+
+An unmatched prediction (dropped UDP input packet, or a hit destroying
+the real projectile before it's ever broadcast) expires after 0.5s
+(`PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS`) rather than lingering as
+a ghost — deliberately much shorter than the weapon's own multi-second
+projectile lifetime, since an unmatched prediction past a handful of
+ticks isn't coming. **`myWeapon`'s local mirror is best-effort, not
+guaranteed-in-sync the way `myPowerDistribution` is** — fire input rides
+UDP (unreliable), unlike power distribution's TCP; left this way
+deliberately, the unmatched-expiry above already degrades gracefully and
+the server remains sole authority over whether a shot actually fires.
+
+**Wire-compatibility note:** neither the `ProjectileState` shape change
+nor the `WeaponStats`/`WeaponSystem` constant move touches Kryo
+registration order, so this build is wire-compatible bit-for-bit with
+the previous one — but rebuild and restart both ends together anyway,
+since `WeaponStats.BLASTER` now drives real firing decisions on both
+ends, not just the server.
+
+**Verification status: build/tests only, NOT live-tested yet.** Full
+`mvn clean test` green, both jars build clean — but the entire point of
+this feature is whether the handoff is visually invisible, which needs a
+real play session to confirm, not a build log. Watch for: a shot popping/
+jumping backward right after spawning (elapsed-seeding wrong), or a
+stray extra shot flying alongside a confirmed one (spawn-to-spawn
+matching failed to find its counterpart). Also worth re-confirming the
+already-tested pieces (constant spawn point regardless of speed, no
+residual westward drift) still hold with prediction layered on top.
 
 ## Build system
 

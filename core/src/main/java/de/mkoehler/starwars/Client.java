@@ -50,6 +50,7 @@ import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.TurnResponseCurve;
 import de.mkoehler.starwars.sim.WeaponStats;
+import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
 import de.mkoehler.starwars.sim.metadata.TurretConfig;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
@@ -62,6 +63,7 @@ import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
@@ -76,8 +78,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * Third networked milestone: weapons/combat. The client sends its held fire
  * input alongside movement input; the server is the sole simulator of
  * projectiles and hit detection (design.md 3.5/2.3-adjacent — see
- * {@code GameNetworkServer}). Projectiles are never predicted, even the
- * local player's own — they're drawn purely from
+ * {@code GameNetworkServer}). Every projectile is drawn from
  * {@link WorldSnapshotMessage#getProjectiles()}, extrapolated (dead-reckoned)
  * from the last snapshot using known velocity rather than eased toward it —
  * easing lags behind anything moving at real speed (a 50m/s projectile eased
@@ -87,6 +88,21 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * the same extrapolation, using the velocity already carried in
  * {@link ShipState}. Local ship movement prediction/reconciliation is
  * unchanged from the previous milestone.
+ * <p>
+ * <b>The local player's own shots are additionally client-predicted</b>
+ * (design.md 2.4's addendum, added once server-only shots proved to lag a
+ * fast-moving shooter's own visibly-ahead-of-server-truth predicted ship
+ * position, proportional to round-trip latency): {@link #predictLocalWeapon}
+ * mirrors {@code WeaponSystem}'s cooldown/capacitor/attachment-point firing
+ * logic locally, spawning a cosmetic {@link RemoteProjectile} into
+ * {@link #predictedProjectiles} immediately rather than waiting for server
+ * confirmation. {@link #onWorldSnapshot} hands that same object off to become
+ * the real, id-tracked entry in {@link #projectiles} once a matching
+ * {@code ProjectileState} arrives ({@link #takeMatchingPredicted}), so it
+ * keeps rendering continuously rather than popping between two different
+ * objects. Other players' shots are never predicted this way — nobody else
+ * has a precise enough reference to notice the same gap on someone else's
+ * shot, and predicting it would need guessing another player's own input.
  * <p>
  * Power distribution (design.md 2.2): {@link #myPowerDistribution} is a
  * locally-mirrored copy of this ship's server-authoritative power split,
@@ -150,6 +166,34 @@ public class Client implements Screen {
 
     /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
     private static final Vector2 TURRET_OFFSET = new Vector2();
+    /** Scratch vector for {@link #predictLocalWeapon}'s spawn-offset math - avoids an allocation per shot. */
+    private static final Vector2 PREDICTED_SPAWN_OFFSET = new Vector2();
+    /** Scratch vector for {@link #spawnPredictedProjectile}'s velocity math - avoids an allocation per shot. */
+    private static final Vector2 PREDICTED_VELOCITY = new Vector2();
+    /**
+     * How close (in meters) an incoming, server-confirmed {@code ProjectileState}
+     * must be to an outstanding predicted shot's current extrapolated
+     * position to be treated as the same shot ({@link #takeMatchingPredicted}),
+     * rather than spawning a brand-new, unpredicted {@link RemoteProjectile}.
+     * Generously larger than the actual expected gap (local prediction and
+     * the server's own simulation should agree to well under a meter for a
+     * shot fired moments ago) so a real match isn't missed over ordinary
+     * prediction/authority drift, while still ruling out matching against a
+     * clearly-unrelated shot.
+     */
+    private static final float PREDICTED_MATCH_DISTANCE_METERS = 3f;
+    /**
+     * How long an outstanding predicted shot ({@link #predictedProjectiles})
+     * is kept waiting for server confirmation before it's given up on and
+     * removed ({@link #extrapolateProjectiles}) — deliberately much shorter
+     * than {@link WeaponStats#getProjectileLifetimeSeconds()}, see that
+     * method's Javadoc for why. A generous few multiples of a snapshot
+     * interval ({@code NetworkConstants.SIMULATION_TICK_RATE_HZ}, ~33ms),
+     * not tied to that constant directly since this is a UI-feel choice
+     * (how long a wrong local guess is allowed to visibly linger), not a
+     * protocol-correctness one.
+     */
+    private static final float PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS = 0.5f;
 
     /** Size, in screen pixels, of the ship status HUD widget - placeholder until tuned by feel. */
     private static final float HUD_STATUS_SIZE = 220f;
@@ -214,6 +258,19 @@ public class Client implements Screen {
     private final Queue<Runnable> pendingUpdates = new ConcurrentLinkedQueue<>();
     private final Map<Integer, RemoteShip> ships = new HashMap<>();
     private final Map<Integer, RemoteProjectile> projectiles = new HashMap<>();
+    /**
+     * Locally-predicted shots (design.md 2.4's addendum) that this client has
+     * already spawned and started rendering, but that the server hasn't
+     * confirmed with a real {@code projectileId} yet - drawn and extrapolated
+     * the same as any {@link RemoteProjectile}, just not yet keyed into
+     * {@link #projectiles} since there's no id to key it by until
+     * {@link #onWorldSnapshot} matches it ({@link #takeMatchingPredicted})
+     * against an incoming {@code ProjectileState}. An entry that's never
+     * matched (e.g. local capacitor prediction drifted from the server's own)
+     * simply expires on its own simulated lifetime instead of lingering
+     * forever - see {@link #extrapolateProjectiles}.
+     */
+    private final List<RemoteProjectile> predictedProjectiles = new ArrayList<>();
     private int myPlayerId = -1;
 
     private World localWorld;
@@ -248,6 +305,19 @@ public class Client implements Screen {
     /** Latest scoreboard from the server (design.md 2.11) - only drawn while TAB is held. */
     private PlayerScoreEntry[] scoreboardEntries = NO_SCORES;
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
+    /**
+     * A local mirror of the server's own {@code WeaponComponent} for this
+     * ship (design.md 2.4's addendum) - reset alongside every spawn/respawn
+     * ({@link #onShipSpawned}, same as {@link #myPowerDistribution}), ticked
+     * every frame in {@link #predictLocalWeapon} using the identical
+     * cooldown/capacitor math {@code WeaponSystem} runs server-side, purely
+     * to decide when the local player's own held fire input should spawn a
+     * cosmetic predicted shot ahead of server confirmation. Never sent over
+     * the network and never itself authoritative - the server always has the
+     * real say over whether a shot actually fires and deals damage; this
+     * only decides what to draw a little early.
+     */
+    private WeaponComponent myWeapon;
     private final PowerKeyHold shieldsHold = new PowerKeyHold();
     private final PowerKeyHold weaponsHold = new PowerKeyHold();
     private final PowerKeyHold enginesHold = new PowerKeyHold();
@@ -432,6 +502,14 @@ public class Client implements Screen {
         shieldsHold.reset();
         weaponsHold.reset();
         enginesHold.reset();
+
+        // A fresh ship also gets a fresh WeaponComponent server-side (ShipFactory.createShip,
+        // full capacitor) - mirror that here too, same reasoning as the power-distribution reset
+        // above. Any shots predicted under the old body (already destroyed above on a respawn)
+        // are meaningless now - drop them rather than let them keep extrapolating from a stale
+        // position with no server projectile left to ever confirm them.
+        myWeapon = new WeaponComponent(WeaponStats.BLASTER);
+        predictedProjectiles.clear();
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -552,13 +630,86 @@ public class Client implements Screen {
             presentIds.add(state.getProjectileId());
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
-            RemoteProjectile projectile = projectiles.computeIfAbsent(state.getProjectileId(), id ->
-                new RemoteProjectile(state.getOwnerPlayerId(), x, y));
+            RemoteProjectile projectile = projectiles.get(state.getProjectileId());
+            if (projectile == null) {
+                // First time this real projectile id has appeared - if it's the local player's
+                // own and a locally-predicted shot is still outstanding for it (design.md 2.4's
+                // addendum), adopt that predicted object instead of starting a fresh one, so its
+                // already-rendering, already-extrapolating position/velocity carries over rather
+                // than popping to a brand-new object at the same spot.
+                float adoptedElapsedSeconds = 0f;
+                if (state.getOwnerPlayerId() == myPlayerId) {
+                    projectile = takeMatchingPredicted(x, y);
+                    if (projectile != null) {
+                        // Seed with this object's own already-accumulated flight time instead of
+                        // resetting to zero below - see the 5-arg updateFromSnapshot's Javadoc for
+                        // why: this state's x/y is this same shot's true spawn point, already
+                        // however-long-ago by the time it's received, and the predicted object's
+                        // own elapsed time is exactly that "how long ago," no network-latency
+                        // estimate needed.
+                        adoptedElapsedSeconds = projectile.elapsedSinceUpdate;
+                    }
+                }
+                if (projectile == null) {
+                    projectile = new RemoteProjectile(state.getOwnerPlayerId(), x, y);
+                }
+                projectiles.put(state.getProjectileId(), projectile);
+                projectile.updateFromSnapshot(x, y,
+                    state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
+                    state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
+                    adoptedElapsedSeconds);
+                continue;
+            }
             projectile.updateFromSnapshot(x, y,
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
                 state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER);
         }
         projectiles.keySet().removeIf(id -> !presentIds.contains(id));
+    }
+
+    /**
+     * Finds and removes whichever {@link #predictedProjectiles} entry is
+     * closest to {@code (xPixels, yPixels)} — the true spawn position of a
+     * just-confirmed real projectile — within {@link #PREDICTED_MATCH_DISTANCE_METERS},
+     * so {@link #onWorldSnapshot} can hand that predicted object off to
+     * become the real, id-tracked {@link RemoteProjectile} instead of
+     * creating a new one. Nearest-position matching rather than plain FIFO
+     * order, since a single volley can fire more than one shot at once (one
+     * per {@code PROJECTILE} attachment point) with no other way to tell
+     * which predicted entry corresponds to which real one.
+     * <p>
+     * Compares against each candidate's own immutable {@link RemoteProjectile#spawnX}/
+     * {@link RemoteProjectile#spawnY}, not its current, already-extrapolated
+     * render position — the render position drifts further from the true
+     * spawn point the longer the shot has been flying (round-trip latency ×
+     * velocity), which would make {@link #PREDICTED_MATCH_DISTANCE_METERS}
+     * meaningless as a fixed threshold. Two independent spawn-position
+     * estimates of the *same* fire event — one from local prediction, one
+     * from the server — should only ever differ by ordinary prediction/
+     * authority drift, not by anything latency-dependent.
+     *
+     * @param xPixels the confirmed projectile's true spawn X, in screen pixels
+     * @param yPixels the confirmed projectile's true spawn Y, in screen pixels
+     * @return the matched predicted projectile, already removed from
+     * {@link #predictedProjectiles}; {@code null} if none was close enough
+     */
+    private RemoteProjectile takeMatchingPredicted(float xPixels, float yPixels) {
+        float maxDistancePixels = PREDICTED_MATCH_DISTANCE_METERS * PhysicsConstants.PIXELS_PER_METER;
+        RemoteProjectile best = null;
+        float bestDistanceSq = maxDistancePixels * maxDistancePixels;
+        for (RemoteProjectile candidate : predictedProjectiles) {
+            float dx = candidate.spawnX - xPixels;
+            float dy = candidate.spawnY - yPixels;
+            float distanceSq = dx * dx + dy * dy;
+            if (distanceSq <= bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                best = candidate;
+            }
+        }
+        if (best != null) {
+            predictedProjectiles.remove(best);
+        }
+        return best;
     }
 
     /**
@@ -661,6 +812,7 @@ public class Client implements Screen {
 
             networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight, firing));
             predictLocalShip(thrustForward, thrustReverse, turnLeft, turnRight, deltaTime);
+            predictLocalWeapon(firing, deltaTime);
             handlePowerDistributionInput(deltaTime);
 
             if (Gdx.input.isKeyJustPressed(Input.Keys.ESCAPE) && !leavingMatch) {
@@ -846,15 +998,121 @@ public class Client implements Screen {
         });
     }
 
+    /**
+     * Predicts the local player's own shots (design.md 2.4's addendum),
+     * mirroring {@code WeaponSystem#processEntity}'s exact
+     * cooldown/capacitor/attachment-point logic so this local decision
+     * matches the server's own as closely as possible: only a genuine
+     * divergence (e.g. a dropped/reordered packet briefly desyncing
+     * {@link #myWeapon} from the server's real capacitor) shows up as a
+     * predicted shot that's never matched (harmless — it just expires,
+     * {@link #extrapolateProjectiles}) or a server shot with no predicted
+     * counterpart (harmless — it's drawn as a normal, not-locally-predicted
+     * {@link RemoteProjectile} instead, {@link #onWorldSnapshot}). This
+     * exists purely to close the round-trip-latency gap between the local
+     * player's own (always up-to-date, client-predicted) ship and their own
+     * shots (previously only ever drawn once the server round trip
+     * confirmed them) — see the class Javadoc and design.md 2.4's addendum
+     * for the full "why."
+     *
+     * @param firing    whether the fire key is currently held
+     * @param deltaTime time since the last frame, in seconds
+     */
+    private void predictLocalWeapon(boolean firing, float deltaTime) {
+        if (myWeapon == null) {
+            return;
+        }
+        myWeapon.tickCooldown(deltaTime);
+        float weaponsMultiplier = myPowerDistribution.multiplierFor(PowerSystem.WEAPONS);
+        myWeapon.rechargeCapacitor(deltaTime, weaponsMultiplier);
+
+        if (!firing || !myWeapon.canFire()) {
+            return;
+        }
+
+        ShipStats myStats = ShipStats.forType(myShipType);
+        List<PixelPoint> spawnPoints = myStats.getSpriteMetadata()
+            .map(metadata -> metadata.getAttachmentPoints().get(WeaponStats.PROJECTILE_ATTACHMENT_NAME))
+            .orElse(null);
+
+        if (spawnPoints == null || spawnPoints.isEmpty()) {
+            float spawnDistance = myStats.getRadiusMeters() + WeaponStats.BLASTER.getProjectileRadiusMeters() + 0.1f;
+            PREDICTED_SPAWN_OFFSET.set(0, 1).rotateRad(myBody.getAngle()).scl(spawnDistance);
+            spawnPredictedProjectile(PREDICTED_SPAWN_OFFSET.x, PREDICTED_SPAWN_OFFSET.y);
+        } else {
+            float pixelsPerMeter = myStats.getPixelsPerMeter();
+            for (PixelPoint point : spawnPoints) {
+                PREDICTED_SPAWN_OFFSET.set(point.getX() / pixelsPerMeter, point.getY() / pixelsPerMeter)
+                    .rotateRad(myBody.getAngle());
+                spawnPredictedProjectile(PREDICTED_SPAWN_OFFSET.x, PREDICTED_SPAWN_OFFSET.y);
+            }
+        }
+
+        myWeapon.consumeShot();
+    }
+
+    /**
+     * Spawns one cosmetic predicted shot at {@code myBody}'s current position
+     * plus the given local-frame offset (already rotated to the ship's
+     * current facing by the caller), travelling at the same true world-frame
+     * velocity {@code ProjectileFactory} computes server-side (muzzle speed
+     * along the ship's facing, plus the ship's own current velocity) — added
+     * to {@link #predictedProjectiles}, not {@link #projectiles}, since it
+     * has no real {@code projectileId} yet.
+     *
+     * @param offsetXMeters the spawn offset from {@code myBody}'s position, in meters
+     * @param offsetYMeters the spawn offset from {@code myBody}'s position, in meters
+     */
+    private void spawnPredictedProjectile(float offsetXMeters, float offsetYMeters) {
+        float spawnXMeters = myBody.getPosition().x + offsetXMeters;
+        float spawnYMeters = myBody.getPosition().y + offsetYMeters;
+        PREDICTED_VELOCITY.set(0, 1).rotateRad(myBody.getAngle()).scl(WeaponStats.BLASTER.getProjectileSpeed())
+            .add(myBody.getLinearVelocity());
+
+        float xPixels = spawnXMeters * PhysicsConstants.PIXELS_PER_METER;
+        float yPixels = spawnYMeters * PhysicsConstants.PIXELS_PER_METER;
+        RemoteProjectile projectile = new RemoteProjectile(myPlayerId, xPixels, yPixels);
+        projectile.updateFromSnapshot(xPixels, yPixels,
+            PREDICTED_VELOCITY.x * PhysicsConstants.PIXELS_PER_METER,
+            PREDICTED_VELOCITY.y * PhysicsConstants.PIXELS_PER_METER);
+        predictedProjectiles.add(projectile);
+    }
+
     private void extrapolateRemoteShips(float deltaTime) {
         for (RemoteShip ship : ships.values()) {
             ship.extrapolate(deltaTime);
         }
     }
 
+    /**
+     * Extrapolates every confirmed projectile the same as always, plus every
+     * still-unconfirmed {@link #predictedProjectiles} entry — and expires any
+     * predicted entry that's gone unmatched for longer than
+     * {@link #PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS}, so a prediction
+     * that never gets confirmed doesn't linger on screen. Deliberately a much
+     * shorter window than the weapon's own full projectile lifetime: an
+     * unconfirmed prediction can mean either the shot simply hasn't been
+     * broadcast back yet (normal, resolves within a snapshot or two) or it
+     * hit something and was destroyed server-side almost immediately (never
+     * broadcast at all, since a destroyed projectile just stops appearing in
+     * snapshots — design.md 3.5's {@code ProjectileState} note) — either way,
+     * a confirmation that hasn't arrived within a handful of ticks isn't
+     * coming, and there's no reason to keep a phantom shot flying for the
+     * weapon's full multi-second lifetime waiting for one.
+     *
+     * @param deltaTime time since the last frame, in seconds
+     */
     private void extrapolateProjectiles(float deltaTime) {
         for (RemoteProjectile projectile : projectiles.values()) {
             projectile.extrapolate(deltaTime);
+        }
+        Iterator<RemoteProjectile> predictedIterator = predictedProjectiles.iterator();
+        while (predictedIterator.hasNext()) {
+            RemoteProjectile projectile = predictedIterator.next();
+            projectile.extrapolate(deltaTime);
+            if (projectile.elapsedSinceUpdate > PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS) {
+                predictedIterator.remove();
+            }
         }
     }
 
@@ -983,22 +1241,33 @@ public class Client implements Screen {
         float widthPixels = WeaponStats.BLASTER.getProjectileRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
 
         for (RemoteProjectile projectile : projectiles.values()) {
-            // Own shots draw red, everyone else's draw blue - purely a rendering choice
-            // (design.md 3.5), the server treats every projectile identically.
-            TextureRegion region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
-            float heightPixels = widthPixels * region.getRegionHeight() / (float) region.getRegionWidth();
-            // Rotated to its actual travel direction (velocity), not the angle it was fired at -
-            // those differ once the firing ship's own velocity is added on top of muzzle velocity
-            // (design.md 2.4's addendum). Inverse of this project's angle-to-direction convention,
-            // same formula TurretAiming already uses for the same reason.
-            float travelAngle = MathUtils.atan2(-projectile.velocityX, projectile.velocityY);
-            batch.draw(region,
-                projectile.renderX - widthPixels / 2f, projectile.renderY - heightPixels / 2f,
-                widthPixels / 2f, heightPixels / 2f,
-                widthPixels, heightPixels,
-                1f, 1f,
-                travelAngle * MathUtils.radiansToDegrees);
+            drawProjectile(projectile, widthPixels);
         }
+        // Locally-predicted shots (design.md 2.4's addendum) not yet confirmed by the server -
+        // drawn exactly like any other of the local player's own shots (same red tint, same
+        // travel-direction rotation), just sourced from predictedProjectiles instead of the
+        // id-keyed projectiles map.
+        for (RemoteProjectile projectile : predictedProjectiles) {
+            drawProjectile(projectile, widthPixels);
+        }
+    }
+
+    private void drawProjectile(RemoteProjectile projectile, float widthPixels) {
+        // Own shots draw red, everyone else's draw blue - purely a rendering choice
+        // (design.md 3.5), the server treats every projectile identically.
+        TextureRegion region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
+        float heightPixels = widthPixels * region.getRegionHeight() / (float) region.getRegionWidth();
+        // Rotated to its actual travel direction (velocity), not the angle it was fired at -
+        // those differ once the firing ship's own velocity is added on top of muzzle velocity
+        // (design.md 2.4's addendum). Inverse of this project's angle-to-direction convention,
+        // same formula TurretAiming already uses for the same reason.
+        float travelAngle = MathUtils.atan2(-projectile.velocityX, projectile.velocityY);
+        batch.draw(region,
+            projectile.renderX - widthPixels / 2f, projectile.renderY - heightPixels / 2f,
+            widthPixels / 2f, heightPixels / 2f,
+            widthPixels, heightPixels,
+            1f, 1f,
+            travelAngle * MathUtils.radiansToDegrees);
     }
 
     @Override
@@ -1122,6 +1391,20 @@ public class Client implements Screen {
      */
     private static final class RemoteProjectile {
         final int ownerPlayerId;
+        /**
+         * This object's own true spawn position — set once, in the
+         * constructor, and never touched again (unlike {@link #baseX}/
+         * {@link #baseY}, which move to each new snapshot). Used purely as a
+         * stable identity for {@link #takeMatchingPredicted} to match a
+         * locally-predicted shot against its later server confirmation by
+         * spawn-to-spawn distance — comparing the *current*, already-
+         * extrapolated {@link #renderX}/{@link #renderY} instead would grow
+         * with however long the shot has already been flying (round-trip
+         * latency × velocity), making a fixed match-distance threshold
+         * meaningless.
+         */
+        final float spawnX;
+        final float spawnY;
         float baseX;
         float baseY;
         float velocityX;
@@ -1146,16 +1429,65 @@ public class Client implements Screen {
 
         RemoteProjectile(int ownerPlayerId, float x, float y) {
             this.ownerPlayerId = ownerPlayerId;
-            baseX = renderX = x;
-            baseY = renderY = y;
+            spawnX = baseX = renderX = x;
+            spawnY = baseY = renderY = y;
         }
 
-        void updateFromSnapshot(float x, float y, float velocityX, float velocityY) {
+        /**
+         * Updates this projectile's known base position/velocity from a fresh
+         * snapshot (or, for a just-adopted predicted shot, from its first-ever
+         * real confirmation).
+         *
+         * @param x                      new base X, in screen pixels
+         * @param y                      new base Y, in screen pixels
+         * @param velocityX              new velocity, in screen pixels/second
+         * @param velocityY              new velocity, in screen pixels/second
+         * @param startingElapsedSeconds what {@link #elapsedSinceUpdate} should
+         *                               resume from, instead of the usual zero
+         *                               — see {@link #updateFromSnapshot(float, float, float, float)}'s
+         *                               Javadoc for why a plain snapshot update
+         *                               and a predicted-shot adoption need
+         *                               different values here
+         */
+        void updateFromSnapshot(float x, float y, float velocityX, float velocityY, float startingElapsedSeconds) {
             baseX = x;
             baseY = y;
             this.velocityX = velocityX;
             this.velocityY = velocityY;
-            elapsedSinceUpdate = 0f;
+            elapsedSinceUpdate = startingElapsedSeconds;
+        }
+
+        /**
+         * Updates this projectile's known base position/velocity from an
+         * ordinary fresh snapshot of an already-confirmed projectile —
+         * {@link #elapsedSinceUpdate} resets to zero, since {@code x}/{@code y}
+         * are "now" as far as this object's own render state is concerned.
+         * <p>
+         * <b>Not used when {@link #takeMatchingPredicted} adopts a predicted
+         * shot into its first real confirmation</b> — that path calls
+         * {@link #updateFromSnapshot(float, float, float, float, float)}
+         * directly with the predicted object's own already-accumulated
+         * {@link #elapsedSinceUpdate} instead of zero. Resetting to zero there
+         * would snap {@link #renderX}/{@link #renderY} backward: the confirmed
+         * {@code ProjectileState} reports this shot's position as of the
+         * server tick that created it, which by the time it's received is
+         * already however-long-ago (design.md 2.4's addendum, "round-trip
+         * latency" — the whole reason local shot prediction exists), while
+         * this object's current, already-rendering position reflects that
+         * same shot's true elapsed flight time. Seeding with that real elapsed
+         * time instead of resetting keeps the two aligned, the same
+         * "align two independently-integrating estimates of the same thing by
+         * using the same real-world duration for both" trick already used by
+         * {@code Client#reconcileWithServer} — not a network-staleness
+         * estimate.
+         *
+         * @param x         new base X, in screen pixels
+         * @param y         new base Y, in screen pixels
+         * @param velocityX new velocity, in screen pixels/second
+         * @param velocityY new velocity, in screen pixels/second
+         */
+        void updateFromSnapshot(float x, float y, float velocityX, float velocityY) {
+            updateFromSnapshot(x, y, velocityX, velocityY, 0f);
         }
 
         void extrapolate(float deltaTime) {

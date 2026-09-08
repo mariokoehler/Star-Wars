@@ -11,6 +11,7 @@ import com.badlogic.gdx.physics.box2d.World;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ProjectileFactory;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.WeaponStats;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
@@ -27,9 +28,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Fires a projectile for every ship whose fire input is held and whose
  * weapon {@link WeaponComponent#canFire()} — cooldown expired and capacitor
  * charged enough — drawing that shot's energy cost from the capacitor each
- * time. A ship with multiple {@value #PROJECTILE_ATTACHMENT_NAME} attachment
- * points authored in its sprite metadata (design.md 2.4) fires one
- * projectile per point per shot instead of a single one from a fixed
+ * time. A ship with multiple {@value WeaponStats#PROJECTILE_ATTACHMENT_NAME}
+ * attachment points authored in its sprite metadata (design.md 2.4) fires
+ * one projectile per point per shot instead of a single one from a fixed
  * offset, but still draws only one shot's energy cost for the whole volley.
  * Also recharges every ship's capacitor each tick, scaled by its current
  * {@link PowerSystem#WEAPONS} power allocation (design.md 2.2), regardless
@@ -42,16 +43,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * continuous force Box2D would clear between steps, so it doesn't need the
  * {@link PhysicsSystem#update(float, Runnable)} per-step treatment
  * {@link ShipControlSystem} needs.
+ * <p>
+ * The client (design.md 2.4's addendum) mirrors this exact
+ * cooldown/capacitor/attachment-point logic to predict the local player's
+ * own shots cosmetically ahead of server confirmation — see {@code
+ * Client#predictLocalWeapon} — so any change to this method's firing logic
+ * (the cooldown/capacitor gate, the attachment-point vs. default-offset
+ * choice, or the spawn offset/velocity formula) needs the identical change
+ * made there too, or the two will visibly diverge.
  */
 public class WeaponSystem extends IteratingSystem {
-
-    /**
-     * Attachment point name convention (design.md 2.4) for where projectiles
-     * spawn — a ship can define more than one, e.g. an X-wing's four
-     * cannons, and one projectile is fired per point each time the weapon is
-     * off cooldown.
-     */
-    private static final String PROJECTILE_ATTACHMENT_NAME = "PROJECTILE";
 
     private static final Vector2 SPAWN_OFFSET = new Vector2();
 
@@ -102,7 +103,7 @@ public class WeaponSystem extends IteratingSystem {
         ShipStats shipStats = ShipStats.forType(shipTypeMapper.get(entity).getShipType());
 
         List<PixelPoint> spawnPoints = shipStats.getSpriteMetadata()
-            .map(metadata -> metadata.getAttachmentPoints().get(PROJECTILE_ATTACHMENT_NAME))
+            .map(metadata -> metadata.getAttachmentPoints().get(WeaponStats.PROJECTILE_ATTACHMENT_NAME))
             .orElse(null);
 
         if (spawnPoints == null || spawnPoints.isEmpty()) {

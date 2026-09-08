@@ -21,6 +21,18 @@ package de.mkoehler.starwars.sim;
 public final class WeaponStats {
 
     /**
+     * Attachment point name convention (design.md 2.4) for where projectiles
+     * spawn — a ship can define more than one, e.g. an X-wing's four
+     * cannons, and one projectile is fired per point each time the weapon is
+     * off cooldown. Shared between {@link de.mkoehler.starwars.sim.systems.WeaponSystem}
+     * (server, authoritative firing) and {@code Client} (client-side shot
+     * prediction, design.md 2.4's addendum) so the two can't quietly drift
+     * apart the way two independently-typed copies of this string could —
+     * same reasoning as {@link de.mkoehler.starwars.sim.metadata.TurretConfig#ATTACHMENT_NAME}.
+     */
+    public static final String PROJECTILE_ATTACHMENT_NAME = "PROJECTILE";
+
+    /**
      * The (currently only) weapon: a simple blaster cannon. Capacitor sized
      * for 5.5 shots at full charge; base recharge (at the even power
      * baseline) sustains 2 shots/sec indefinitely, well under the 4 shots/sec
