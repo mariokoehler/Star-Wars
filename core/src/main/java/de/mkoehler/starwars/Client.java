@@ -22,6 +22,7 @@ import de.mkoehler.starwars.net.NetworkConstants;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
@@ -42,6 +43,7 @@ import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.RadarHud;
 import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipStatusHud;
+import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
 import de.mkoehler.starwars.sim.PowerSystem;
@@ -50,6 +52,7 @@ import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.TurnResponseCurve;
 import de.mkoehler.starwars.sim.WeaponStats;
+import de.mkoehler.starwars.sim.components.ProjectileComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
 import de.mkoehler.starwars.sim.metadata.TurretConfig;
@@ -215,6 +218,20 @@ public class Client implements Screen {
     /** How long a power-distribution keybind must be held before it maximizes its system instead of just incrementing it - untuned placeholder. */
     private static final float HOLD_TO_MAXIMIZE_SECONDS = 0.4f;
 
+    /**
+     * The missile lock reticle's base on-screen size, as a multiple of the
+     * locked ship's own diameter (design.md — missiles) - untuned placeholder,
+     * picked to comfortably ring the ship rather than exactly hug it.
+     */
+    private static final float MISSILE_LOCK_RETICLE_SCALE = 1.6f;
+    /** The outer reticle ring's sine-wave scale pulse: 100%-110% (design.md — missiles). */
+    private static final float MISSILE_LOCK_RETICLE_PULSE_MIN_SCALE = 1.0f;
+    private static final float MISSILE_LOCK_RETICLE_PULSE_AMPLITUDE = 0.05f;
+    /** How fast the pulse cycles - untuned placeholder (one full cycle every ~2 seconds). */
+    private static final float MISSILE_LOCK_RETICLE_PULSE_RADIANS_PER_SECOND = MathUtils.PI2 / 2f;
+    /** The inner reticle ring's constant rotation rate (design.md — missiles: "90 degrees per second", clockwise). */
+    private static final float MISSILE_LOCK_RETICLE_INNER_ROTATION_DEGREES_PER_SECOND = 90f;
+
     /** How long the combat-lock warning banner stays on screen - untuned placeholder. */
     private static final float WARNING_MESSAGE_DURATION_SECONDS = 2.5f;
     /** On-screen width of the combat-lock warning banner - height follows from the source art's aspect ratio. */
@@ -244,6 +261,10 @@ public class Client implements Screen {
     private TextureAtlas projectilesAtlas;
     private TextureRegion ownProjectileRegion;
     private TextureRegion enemyProjectileRegion;
+    private TextureRegion missileRegion;
+    private TextureRegion missileLockReticleOuterRegion;
+    private TextureRegion missileLockReticleInnerRegion;
+    private TextureRegion missileLockReticleCenterRegion;
     private ParallaxBackground background;
     private ShipStatusHud statusHud;
     private PowerDistributionHud powerHud;
@@ -280,6 +301,9 @@ public class Client implements Screen {
     private float myPreviousX;
     private float myPreviousY;
     private float myPreviousAngle;
+    /** This frame's interpolated on-screen position of the local player's own ship, cached by {@link #drawLocalShip()} for {@link #drawMissileLockReticle()}. */
+    private float myRenderScreenX;
+    private float myRenderScreenY;
     /**
      * Wall-clock seconds elapsed since the local player's own last
      * {@link WorldSnapshotMessage} entry was reconciled — accumulated every
@@ -302,6 +326,35 @@ public class Client implements Screen {
      * {@code <= 0}, red otherwise.
      */
     private float myRadarPulseCooldownRemaining;
+    /**
+     * This ship's current missile lock target (design.md — missiles), read
+     * from the local player's own {@code ShipState} each snapshot — drives
+     * the lock-reticle HUD ({@link #drawMissileLockReticle}). Sentinel
+     * {@link ShipState#NO_MISSILE_LOCK_TARGET} for no current lock.
+     */
+    private int myMissileLockTargetPlayerId = ShipState.NO_MISSILE_LOCK_TARGET;
+    /** Whether {@link #myMissileLockTargetPlayerId}'s lock is fully acquired (vs. still acquiring). */
+    private boolean myMissileLockAcquired;
+    /**
+     * Whether any enemy currently has *this* ship as their own missile lock
+     * target (design.md — missiles' addendum) — the victim's side of the
+     * same reticle, read from the local player's own {@code ShipState} each
+     * snapshot, same as {@link #myMissileLockTargetPlayerId} above but
+     * facing the other way. Without this, only the attacker ever saw the
+     * lock building on their target; the target had no idea.
+     */
+    private boolean myTargetedByMissileLock;
+    /** Whether any lock on this ship (see {@link #myTargetedByMissileLock}) is fully acquired. */
+    private boolean myTargetedByMissileLockAcquired;
+    /**
+     * Free-running clock driving the lock reticle's animation (design.md —
+     * missiles: the outer ring's sine-wave scale pulse, the inner ring's
+     * constant-rate rotation) - incremented unconditionally every
+     * {@link #render(float)} call, not reset per-target, since both
+     * animations are simple periodic functions with no meaningful "start
+     * phase" to reset.
+     */
+    private float missileReticleAnimationSeconds;
     /** Latest scoreboard from the server (design.md 2.11) - only drawn while TAB is held. */
     private PlayerScoreEntry[] scoreboardEntries = NO_SCORES;
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
@@ -372,6 +425,10 @@ public class Client implements Screen {
         projectilesAtlas = game.getAssets().get(GameAssets.PROJECTILES_ATLAS, TextureAtlas.class);
         ownProjectileRegion = projectilesAtlas.findRegion("red_oval");
         enemyProjectileRegion = projectilesAtlas.findRegion("blue_oval");
+        missileRegion = projectilesAtlas.findRegion("missile");
+        missileLockReticleOuterRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Outer");
+        missileLockReticleInnerRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Inner");
+        missileLockReticleCenterRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Center");
 
         background = new ParallaxBackground(
             // false: this texture is owned by StarWarsGame#getAssets() (design.md - asset
@@ -494,6 +551,13 @@ public class Client implements Screen {
         myHullMax = myHullCurrent = myStats.getMaxHealth();
         myShieldMax = myShieldCurrent = myStats.getShieldMaxCapacity();
         myTurretAimAngles = new float[0];
+        // A fresh ship also gets a fresh MissileLockComponent server-side, if its type has one -
+        // mirror that here too, so the reticle doesn't briefly show a stale lock from before a
+        // death/respawn.
+        myMissileLockTargetPlayerId = ShipState.NO_MISSILE_LOCK_TARGET;
+        myMissileLockAcquired = false;
+        myTargetedByMissileLock = false;
+        myTargetedByMissileLockAcquired = false;
 
         // A fresh ship (spawn or respawn) always gets a fresh PowerDistributionComponent on the
         // server too (ShipFactory.createShip), so resetting the local mirror here keeps the two in
@@ -607,6 +671,10 @@ public class Client implements Screen {
                 myShieldMax = state.getShieldMax();
                 myTurretAimAngles = state.getTurretAimAngles();
                 myRadarPulseCooldownRemaining = state.getRadarPulseCooldownRemaining();
+                myMissileLockTargetPlayerId = state.getMissileLockTargetPlayerId();
+                myMissileLockAcquired = state.isMissileLockAcquired();
+                myTargetedByMissileLock = state.isTargetedByMissileLock();
+                myTargetedByMissileLockAcquired = state.isTargetedByMissileLockAcquired();
                 continue;
             }
             presentShipIds.add(state.getPlayerId());
@@ -638,7 +706,12 @@ public class Client implements Screen {
                 // already-rendering, already-extrapolating position/velocity carries over rather
                 // than popping to a brand-new object at the same spot.
                 float adoptedElapsedSeconds = 0f;
-                if (state.getOwnerPlayerId() == myPlayerId) {
+                // Missiles are never locally predicted (design.md — missiles: firing only sends a
+                // MissileFireRequest and waits for confirmation, same as a turret) - only attempt
+                // to adopt a predicted object for an ordinary blaster bolt, or a missile could in
+                // theory match against a stray unmatched predicted shot at a similar spawn point.
+                if (state.getOwnerPlayerId() == myPlayerId
+                    && state.getTrackedTargetPlayerId() == ProjectileComponent.NO_TRACKED_TARGET) {
                     projectile = takeMatchingPredicted(x, y);
                     if (projectile != null) {
                         // Seed with this object's own already-accumulated flight time instead of
@@ -651,7 +724,7 @@ public class Client implements Screen {
                     }
                 }
                 if (projectile == null) {
-                    projectile = new RemoteProjectile(state.getOwnerPlayerId(), x, y);
+                    projectile = new RemoteProjectile(state.getOwnerPlayerId(), x, y, state.getTrackedTargetPlayerId());
                 }
                 projectiles.put(state.getProjectileId(), projectile);
                 projectile.updateFromSnapshot(x, y,
@@ -830,11 +903,20 @@ public class Client implements Screen {
             if (Gdx.input.isKeyJustPressed(Input.Keys.R)) {
                 networkClient.sendTCP(new RadarPulseRequest());
             }
+
+            // Missile fire (design.md — missiles, "M") - same "no local gating, let the server
+            // just drop an invalid request harmlessly" treatment as the radar pulse above: the
+            // client never predicts a lock or a missile shot, only sends the request and waits for
+            // confirmation via the next ShipState/ProjectileState (same as a turret).
+            if (Gdx.input.isKeyJustPressed(Input.Keys.M)) {
+                networkClient.sendTCP(new MissileFireRequest());
+            }
         }
 
         extrapolateRemoteShips(deltaTime);
         extrapolateProjectiles(deltaTime);
         updateCamera(deltaTime);
+        missileReticleAnimationSeconds += deltaTime;
 
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
@@ -842,6 +924,7 @@ public class Client implements Screen {
         drawRemoteShips();
         drawLocalShip();
         drawProjectiles();
+        drawMissileLockReticle();
         batch.end();
 
         // Separate begin/end pair with the HUD's own screen-space camera - SpriteBatch doesn't
@@ -1216,6 +1299,11 @@ public class Client implements Screen {
         float x = MathUtils.lerp(myPreviousX, myBody.getPosition().x, alpha) * PhysicsConstants.PIXELS_PER_METER;
         float y = MathUtils.lerp(myPreviousY, myBody.getPosition().y, alpha) * PhysicsConstants.PIXELS_PER_METER;
         float angle = MathUtils.lerpAngle(myPreviousAngle, myBody.getAngle(), alpha);
+        // Cached so drawMissileLockReticle can anchor the victim-side reticle (design.md —
+        // missiles' addendum) to the exact same screen position this frame's own ship sprite was
+        // just drawn at, without recomputing the interpolation itself.
+        myRenderScreenX = x;
+        myRenderScreenY = y;
 
         ShipStats myStats = ShipStats.forType(myShipType);
         TextureRegion region = shipRegionsByType.get(myShipType);
@@ -1254,10 +1342,22 @@ public class Client implements Screen {
     }
 
     private void drawProjectile(RemoteProjectile projectile, float widthPixels) {
-        // Own shots draw red, everyone else's draw blue - purely a rendering choice
-        // (design.md 3.5), the server treats every projectile identically.
-        TextureRegion region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
-        float heightPixels = widthPixels * region.getRegionHeight() / (float) region.getRegionWidth();
+        TextureRegion region;
+        float heightPixels;
+        if (projectile.trackedTargetPlayerId != ProjectileComponent.NO_TRACKED_TARGET) {
+            // A missile (design.md — missiles): its own art/size, not the blaster oval - sized the
+            // same way a ship is (region pixel size / this entity's own pixels-per-meter), same
+            // convention as every other authored-sprite entity in this project.
+            region = missileRegion;
+            float screenScale = PhysicsConstants.PIXELS_PER_METER / MissileStats.INSTANCE.getPixelsPerMeter();
+            widthPixels = region.getRegionWidth() * screenScale;
+            heightPixels = region.getRegionHeight() * screenScale;
+        } else {
+            // Own shots draw red, everyone else's draw blue - purely a rendering choice
+            // (design.md 3.5), the server treats every projectile identically.
+            region = projectile.ownerPlayerId == myPlayerId ? ownProjectileRegion : enemyProjectileRegion;
+            heightPixels = widthPixels * region.getRegionHeight() / (float) region.getRegionWidth();
+        }
         // Rotated to its actual travel direction (velocity), not the angle it was fired at -
         // those differ once the firing ship's own velocity is added on top of muzzle velocity
         // (design.md 2.4's addendum). Inverse of this project's angle-to-direction convention,
@@ -1269,6 +1369,121 @@ public class Client implements Screen {
             widthPixels, heightPixels,
             1f, 1f,
             travelAngle * MathUtils.radiansToDegrees);
+    }
+
+    /**
+     * Draws the local player's missile lock reticle(s), three stages layered
+     * on top of each other (design.md — missiles): the outer ring alone
+     * while a lock is being acquired, plus the inner ring once acquired,
+     * plus the static center mark once a missile is actually in flight at
+     * that target. Two independent, simultaneously-possible cases, both
+     * driven purely by this player's own latest {@code ShipState} (never a
+     * separate lookup per enemy):
+     * <ul>
+     *   <li><b>Attacker side</b> ({@link #myMissileLockTargetPlayerId}) —
+     *   drawn over the target's own {@link RemoteShip#renderX}/{@link RemoteShip#renderY}
+     *   in {@code ships}. A lock target is always radar-detected by
+     *   definition (missile lock only ever acquires within this ship's own
+     *   cone radar), so it's guaranteed to already be tracked there; simply
+     *   not drawn on the rare frame it isn't (e.g. the very last snapshot
+     *   before the target's ship state expires).</li>
+     *   <li><b>Victim side</b> ({@link #myTargetedByMissileLock}) — drawn
+     *   over this player's <em>own</em> ship instead, at
+     *   {@link #myRenderScreenX}/{@link #myRenderScreenY} (cached by
+     *   {@link #drawLocalShip()} this same frame), so the targeted player
+     *   sees the same lock building on themselves that their attacker sees —
+     *   added after the first pass only showed the attacker's side, per
+     *   direct user feedback ("the targeted player is totally unaware...
+     *   which seems unfair").</li>
+     * </ul>
+     * Both cases can be true in the same frame (locking one enemy while
+     * being locked by another) — they're independent draws, not mutually
+     * exclusive.
+     */
+    private void drawMissileLockReticle() {
+        if (myMissileLockTargetPlayerId != ShipState.NO_MISSILE_LOCK_TARGET) {
+            RemoteShip target = ships.get(myMissileLockTargetPlayerId);
+            if (target != null) {
+                float baseSizePixels = ShipStats.forType(target.shipType).getRadiusMeters() * 2f
+                    * PhysicsConstants.PIXELS_PER_METER * MISSILE_LOCK_RETICLE_SCALE;
+                boolean missileInFlight = hasInFlightMissileAt(myMissileLockTargetPlayerId, true);
+                drawMissileLockReticleStages(target.renderX, target.renderY, baseSizePixels,
+                    myMissileLockAcquired, missileInFlight);
+            }
+        }
+
+        if (myTargetedByMissileLock && myBody != null) {
+            float baseSizePixels = ShipStats.forType(myShipType).getRadiusMeters() * 2f
+                * PhysicsConstants.PIXELS_PER_METER * MISSILE_LOCK_RETICLE_SCALE;
+            // Any owner, not just myPlayerId - the victim cares whether *someone's* missile is
+            // inbound, not who fired it.
+            boolean missileInFlight = hasInFlightMissileAt(myPlayerId, false);
+            drawMissileLockReticleStages(myRenderScreenX, myRenderScreenY, baseSizePixels,
+                myTargetedByMissileLockAcquired, missileInFlight);
+        }
+    }
+
+    /**
+     * Draws the outer/inner/center reticle stages at one screen position,
+     * shared by both {@link #drawMissileLockReticle}'s attacker and victim
+     * cases so the animation math (sine-wave pulse, constant-rate rotation)
+     * lives in exactly one place.
+     *
+     * @param x              screen X to center every stage on
+     * @param y              screen Y to center every stage on
+     * @param baseSizePixels the un-pulsed on-screen size, common to all three stages
+     * @param acquired       whether to also draw the inner ring (lock fully acquired)
+     * @param missileInFlight whether to also draw the static center mark
+     */
+    private void drawMissileLockReticleStages(float x, float y, float baseSizePixels,
+                                               boolean acquired, boolean missileInFlight) {
+        float pulseScale = MISSILE_LOCK_RETICLE_PULSE_MIN_SCALE + MISSILE_LOCK_RETICLE_PULSE_AMPLITUDE
+            + MISSILE_LOCK_RETICLE_PULSE_AMPLITUDE * MathUtils.sin(missileReticleAnimationSeconds * MISSILE_LOCK_RETICLE_PULSE_RADIANS_PER_SECOND);
+        drawReticleStage(missileLockReticleOuterRegion, x, y, baseSizePixels * pulseScale, 0f);
+
+        if (acquired) {
+            // Clockwise, per design.md — missiles: libGDX's positive rotation is counter-clockwise,
+            // so a clockwise spin needs a decrementing angle.
+            float innerRotationDegrees = -missileReticleAnimationSeconds * MISSILE_LOCK_RETICLE_INNER_ROTATION_DEGREES_PER_SECOND;
+            drawReticleStage(missileLockReticleInnerRegion, x, y, baseSizePixels, innerRotationDegrees);
+        }
+
+        if (missileInFlight) {
+            drawReticleStage(missileLockReticleCenterRegion, x, y, baseSizePixels, 0f);
+        }
+    }
+
+    /**
+     * Returns whether a live in-flight missile is currently tracking
+     * {@code targetPlayerId}.
+     *
+     * @param targetPlayerId the tracked target's player id to look for
+     * @param ownedByMeOnly  {@code true} to only count missiles this player fired themselves
+     *                       (the attacker's own stage-3 check); {@code false} to count any
+     *                       owner's (the victim's — they care whether one is inbound at all,
+     *                       not who fired it)
+     * @return {@code true} if a matching in-flight missile exists
+     */
+    private boolean hasInFlightMissileAt(int targetPlayerId, boolean ownedByMeOnly) {
+        for (RemoteProjectile projectile : projectiles.values()) {
+            if (projectile.trackedTargetPlayerId != targetPlayerId) {
+                continue;
+            }
+            if (ownedByMeOnly && projectile.ownerPlayerId != myPlayerId) {
+                continue;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private void drawReticleStage(TextureRegion region, float x, float y, float sizePixels, float rotationDegrees) {
+        batch.draw(region,
+            x - sizePixels / 2f, y - sizePixels / 2f,
+            sizePixels / 2f, sizePixels / 2f,
+            sizePixels, sizePixels,
+            1f, 1f,
+            rotationDegrees);
     }
 
     @Override
@@ -1393,6 +1608,14 @@ public class Client implements Screen {
     private static final class RemoteProjectile {
         final int ownerPlayerId;
         /**
+         * The enemy player id this projectile is tracking (a missile), or
+         * {@link ProjectileComponent#NO_TRACKED_TARGET} for an ordinary
+         * blaster bolt (design.md — missiles) — fixed at construction, drives
+         * both which sprite to draw ({@link #drawProjectile}) and the
+         * lock-reticle's "in flight" stage ({@link #drawMissileLockReticle}).
+         */
+        final int trackedTargetPlayerId;
+        /**
          * This object's own true spawn position — set once, in the
          * constructor, and never touched again (unlike {@link #baseX}/
          * {@link #baseY}, which move to each new snapshot). Used purely as a
@@ -1429,7 +1652,12 @@ public class Client implements Screen {
         boolean skipNextExtrapolate = true;
 
         RemoteProjectile(int ownerPlayerId, float x, float y) {
+            this(ownerPlayerId, x, y, ProjectileComponent.NO_TRACKED_TARGET);
+        }
+
+        RemoteProjectile(int ownerPlayerId, float x, float y, int trackedTargetPlayerId) {
             this.ownerPlayerId = ownerPlayerId;
+            this.trackedTargetPlayerId = trackedTargetPlayerId;
             spawnX = baseX = renderX = x;
             spawnY = baseY = renderY = y;
         }

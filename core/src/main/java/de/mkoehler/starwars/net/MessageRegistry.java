@@ -5,6 +5,7 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
@@ -83,5 +84,6 @@ public final class MessageRegistry {
         kryo.register(UnlockShipRequest.class);
         kryo.register(UnlockShipResponse.class);
         kryo.register(RadarPulseRequest.class);
+        kryo.register(MissileFireRequest.class);
     }
 }

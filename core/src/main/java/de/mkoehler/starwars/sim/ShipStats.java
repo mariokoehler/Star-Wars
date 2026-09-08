@@ -313,4 +313,31 @@ public final class ShipStats {
         }
         return max;
     }
+
+    /**
+     * Returns whether this ship type can fire missiles at all.
+     *
+     * @return {@code true} if missiles are enabled, see {@link ShipTypeConfig#isMissileEnabled()}
+     */
+    public boolean isMissileEnabled() {
+        return config.isMissileEnabled();
+    }
+
+    /**
+     * Returns how many missiles this ship type spawns with.
+     *
+     * @return the starting missile count, see {@link ShipTypeConfig#getMissileStartingCount()}
+     */
+    public int getMissileStartingCount() {
+        return config.getMissileStartingCount();
+    }
+
+    /**
+     * Returns how long an uninterrupted cone-radar lock takes to acquire.
+     *
+     * @return the lock-acquisition duration, in seconds, see {@link ShipTypeConfig#getMissileLockDurationSeconds()}
+     */
+    public float getMissileLockDurationSeconds() {
+        return config.getMissileLockDurationSeconds();
+    }
 }

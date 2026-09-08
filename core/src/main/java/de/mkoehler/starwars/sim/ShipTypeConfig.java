@@ -43,6 +43,9 @@ public class ShipTypeConfig {
     private float radarPulseRangeMeters;
     private float radarPulseCooldownSeconds;
     private float radarPulseRevealDurationSeconds;
+    private boolean missileEnabled;
+    private int missileStartingCount;
+    private float missileLockDurationSeconds;
 
     /**
      * Returns the ship's collision/draw radius, used only for the fallback
@@ -342,5 +345,54 @@ public class ShipTypeConfig {
 
     public void setRadarPulseRevealDurationSeconds(float radarPulseRevealDurationSeconds) {
         this.radarPulseRevealDurationSeconds = radarPulseRevealDurationSeconds;
+    }
+
+    /**
+     * Returns whether this ship type can fire missiles at all (design.md —
+     * missiles; currently the two tier-3 ships, X-wing and TIE Interceptor).
+     * When {@code false}, the ship never gets a
+     * {@link de.mkoehler.starwars.sim.components.MissileLockComponent} and
+     * every other missile field on this class is meaningless.
+     *
+     * @return {@code true} if this ship type can fire missiles
+     */
+    public boolean isMissileEnabled() {
+        return missileEnabled;
+    }
+
+    public void setMissileEnabled(boolean missileEnabled) {
+        this.missileEnabled = missileEnabled;
+    }
+
+    /**
+     * Returns how many missiles this ship type spawns with, meaningless if
+     * {@link #isMissileEnabled()} is {@code false}. Future power-pickups
+     * (design.md — missiles, an open point) will let a ship replenish beyond
+     * this starting count.
+     *
+     * @return the starting missile count
+     */
+    public int getMissileStartingCount() {
+        return missileStartingCount;
+    }
+
+    public void setMissileStartingCount(int missileStartingCount) {
+        this.missileStartingCount = missileStartingCount;
+    }
+
+    /**
+     * Returns how long a target must stay uninterrupted within this ship's
+     * own {@link #getRadarConeRangeMeters() cone radar} before a missile lock
+     * is acquired, meaningless if {@link #isMissileEnabled()} is
+     * {@code false}.
+     *
+     * @return the lock-acquisition duration, in seconds
+     */
+    public float getMissileLockDurationSeconds() {
+        return missileLockDurationSeconds;
+    }
+
+    public void setMissileLockDurationSeconds(float missileLockDurationSeconds) {
+        this.missileLockDurationSeconds = missileLockDurationSeconds;
     }
 }

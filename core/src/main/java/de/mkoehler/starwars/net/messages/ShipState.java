@@ -36,6 +36,25 @@ import de.mkoehler.starwars.sim.ShipType;
  * reasoning as hull/shield/turret aim above — a future "can I pulse again"
  * HUD readout needs it, even though nothing reads it yet.
  * <p>
+ * {@link #getMissileLockTargetPlayerId()}/{@link #isMissileLockAcquired()}
+ * (design.md — missiles) carry a missile-capable ship's current lock state,
+ * same broadcast-for-every-ship-even-if-only-locally-meaningful convention —
+ * only the local player's own entry actually drives their lock-reticle HUD,
+ * but it costs nothing to send for everyone and avoids a protocol change
+ * later. Sentinel {@code -1}/{@code false} for a ship with no current lock,
+ * or no missiles enabled at all.
+ * <p>
+ * {@link #isTargetedByMissileLock()}/{@link #isTargetedByMissileLockAcquired()}
+ * are the mirror image, from the victim's side: whether *any* enemy ship
+ * currently has this ship as their lock target, and whether any of those
+ * locks is fully acquired — aggregated across every attacker rather than
+ * naming one, since more than one enemy could in principle be locking the
+ * same target at once. Lets the targeted player see the same lock-reticle
+ * animation on their own ship that the attacker sees on them, rather than
+ * being caught completely unaware a missile is coming (design.md —
+ * missiles' addendum; the original pass only rendered the reticle for the
+ * attacker).
+ * <p>
  * This ship state's own presence in a {@link WorldSnapshotMessage} is
  * itself meaningful now (design.md 2.14): the server only ever includes a
  * ship here if the receiving player's radar currently detects it (or it's
@@ -43,6 +62,12 @@ import de.mkoehler.starwars.sim.ShipType;
  * unconditionally, the way it was before radar existed.
  */
 public class ShipState {
+
+    /**
+     * Sentinel {@link #getMissileLockTargetPlayerId()} value for "no current
+     * lock target."
+     */
+    public static final int NO_MISSILE_LOCK_TARGET = -1;
 
     private int playerId;
     private float x;
@@ -58,6 +83,10 @@ public class ShipState {
     private ShipType shipType;
     private float[] turretAimAngles;
     private float radarPulseCooldownRemaining;
+    private int missileLockTargetPlayerId;
+    private boolean missileLockAcquired;
+    private boolean targetedByMissileLock;
+    private boolean targetedByMissileLockAcquired;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -84,11 +113,19 @@ public class ShipState {
      *                        {@code "TURRET"} attachment point in authored order; empty if none
      * @param radarPulseCooldownRemaining how much longer until this ship's radar pulse (design.md
      *                                    2.14) can be triggered again; {@code <= 0} means ready
+     * @param missileLockTargetPlayerId   the player id of this ship's current missile lock target,
+     *                                    or {@link #NO_MISSILE_LOCK_TARGET} if none
+     * @param missileLockAcquired         whether that lock is fully acquired (vs. still being acquired)
+     * @param targetedByMissileLock       whether any enemy ship currently has this ship as their
+     *                                    lock target (acquiring or acquired)
+     * @param targetedByMissileLockAcquired whether any such lock on this ship is fully acquired
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
                       float hullCurrent, float hullMax, float shieldCurrent, float shieldMax,
-                      ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining) {
+                      ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining,
+                      int missileLockTargetPlayerId, boolean missileLockAcquired,
+                      boolean targetedByMissileLock, boolean targetedByMissileLockAcquired) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -103,6 +140,10 @@ public class ShipState {
         this.shipType = shipType;
         this.turretAimAngles = turretAimAngles;
         this.radarPulseCooldownRemaining = radarPulseCooldownRemaining;
+        this.missileLockTargetPlayerId = missileLockTargetPlayerId;
+        this.missileLockAcquired = missileLockAcquired;
+        this.targetedByMissileLock = targetedByMissileLock;
+        this.targetedByMissileLockAcquired = targetedByMissileLockAcquired;
     }
 
     /**
@@ -231,5 +272,44 @@ public class ShipState {
      */
     public float getRadarPulseCooldownRemaining() {
         return radarPulseCooldownRemaining;
+    }
+
+    /**
+     * Returns the player id of this ship's current missile lock target.
+     *
+     * @return the target's player id, or {@link #NO_MISSILE_LOCK_TARGET} if none
+     */
+    public int getMissileLockTargetPlayerId() {
+        return missileLockTargetPlayerId;
+    }
+
+    /**
+     * Returns whether this ship's current missile lock is fully acquired
+     * (vs. still being acquired, or there being no lock at all).
+     *
+     * @return {@code true} if a lock is fully acquired
+     */
+    public boolean isMissileLockAcquired() {
+        return missileLockAcquired;
+    }
+
+    /**
+     * Returns whether any enemy ship currently has this ship as their
+     * missile lock target (acquiring or already acquired).
+     *
+     * @return {@code true} if this ship is currently targeted
+     */
+    public boolean isTargetedByMissileLock() {
+        return targetedByMissileLock;
+    }
+
+    /**
+     * Returns whether any lock on this ship (see {@link #isTargetedByMissileLock()})
+     * is fully acquired.
+     *
+     * @return {@code true} if at least one enemy has fully acquired a lock on this ship
+     */
+    public boolean isTargetedByMissileLockAcquired() {
+        return targetedByMissileLockAcquired;
     }
 }

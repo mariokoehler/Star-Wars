@@ -2052,6 +2052,340 @@ it.
 **Verified live, 2026-09-09, same day.** User: "i tested it and
 everything looks very good!" Full `mvn clean test` green throughout.
 
+### 2.15 Missiles (2026-09-09)
+
+Both tier-3 ships (X-wing, TIE Interceptor) can fire missiles: spawn with 2,
+fired with **M**, but only once a **lock** is acquired. A lock requires an
+enemy to stay inside the firing ship's own forward-facing **cone radar**
+(2.14) for 5 uninterrupted seconds; leaving the cone at any point — during
+acquisition or after — immediately drops the lock back to nothing. With more
+than one enemy in the cone, the missile locks onto whichever is closest
+*when acquisition starts* and stays sticky on that one even if another gets
+closer mid-acquisition. A fired missile has 5 seconds of fuel: it
+self-destructs if it hasn't hit anything by then. It tracks its target with
+limited turning torque (tunable, `missile.stats.json`) — a target can
+potentially out-turn a missile once fired. Missile damage is 10x a blaster
+hit (100, vs. `WeaponStats.BLASTER`'s 10) — also in `missile.stats.json` so
+it can be tuned. No player-visible missile-count indicator yet — explicitly
+flagged by the user as an open point for later (power-pickups, not built).
+
+**Data model.** `ShipTypeConfig` gained three fields: `missileEnabled`
+(bool), `missileStartingCount` (int), `missileLockDurationSeconds` (float) —
+`true`/`2`/`5.0` for `xwing`/`tieinterceptor.stats.json` only, explicit
+`false`/`0`/`0.0` on every other ship type's `.stats.json` (same "spell out
+the disabled defaults" convention already used for the radar fields). New
+`MissileConfig`/`MissileStats` (`core.sim`) mirror `ShipTypeConfig`/
+`ShipStats`'s split, but as a **single cached instance**, not a per-type
+map — there's only one missile — loading `assets/projectiles/missile.stats.json`
+(`pixelsPerMeter: 19`, `thrustForce: 15`, `turnTorque: 1.0`, `damage: 100`,
+`flightSeconds: 5` — thrust/torque sized, via a rough mass/moment-of-inertia
+sanity check against the missile's own small polygon, so an unopposed
+5-second burn reaches roughly 150 m/s (faster than a ship's own top speed,
+but not literally instantaneous across a typical engagement range) and the
+bang-bang steering settles toward roughly 130°/s rather than snapping
+instantly — still an untuned placeholder, just not a pathological one) and
+the user's own
+`assets/projectiles/missile.meta.json` (hitbox polygon + single `ENGINE`
+attachment point, authored with the same `dev-tools` sprite editor used for
+ships — confirmed `ShipSpriteMetadataLoader.loadFromClasspath` works with
+this non-`shipdata/` path unchanged, no code/tooling change needed).
+`pixelsPerMeter: 19` was picked so the missile's 38px sprite comes out to a
+real 2m length — proportionate to a ~4m ship diameter, not derived from any
+other constant.
+
+`ProjectileComponent` gained one new field, `trackedTargetPlayerId`
+(sentinel `NO_TRACKED_TARGET = -1` for an ordinary blaster bolt) — this is
+the **only** thing that distinguishes a missile from a blaster bolt on the
+wire and in components; a separate `ProjectileType` enum was considered and
+dropped (see "Rejected" below). Fixed at launch, never reassigned even if
+the target dies mid-flight — the missile keeps flying at (and rendering as
+tracking) that same id.
+
+New per-ship `MissileLockComponent` (added only to missile-enabled ship
+types, same conditional-add pattern as `TurretComponent`): current lock
+target entity, lock progress seconds, whether the lock is fully acquired,
+and remaining missile count. New per-missile `MissileComponent`: just the
+target entity, fixed at launch.
+
+**New server systems**, both added to the engine but (like every other
+system in this project) invoked manually from `GameNetworkServer.tick()`,
+not via `engine.update(...)`:
+- `MissileLockSystem` — once per tick, after `radarSystem.update(...)`
+  (order between the two doesn't matter, neither reads the other's output).
+  Drives the acquire/hold/lose state machine described above, reusing a new
+  public `RadarDetection.isWithinCone(...)` entry point (extracted from the
+  existing private `isWithinForwardArc` helper `detects(...)` already used)
+  — missile lock cares about the cone mechanism specifically, not "detected
+  by any mechanism," so the existing merged `detects(...)` wasn't reusable
+  as-is.
+- `MissileGuidanceSystem` — runs inside `physicsSystem.update(deltaTime,
+  () -> { shipControlSystem.update(0f); missileGuidanceSystem.update(0f);
+  })`'s per-physics-step callback, not once per tick — a missile's steering
+  torque and forward thrust are continuously-applied forces, and Box2D
+  clears applied forces after every `world.step()` (the same "Important
+  Box2D gotcha" §3.5 already documents for `ShipControlSystem`). Steering is
+  a simple bang-bang controller aiming at the target's **current** position
+  — plain pursuit, not a lead/intercept solve like `TurretAiming
+  .computeLeadAngle` — deliberately simplified, since the missile's own
+  limited torque already makes overshoot a real risk and a lead solve would
+  only sharpen that. If the target dies mid-flight, the missile just stops
+  steering and flies straight until its own fuel runs out — no early
+  self-destruct, no retargeting.
+
+**Reused almost entirely for free**, no new code needed:
+`ProjectileLifetimeSystem` expires a missile once its `ProjectileComponent`
+lifetime (set to `missile.stats.json`'s `flightSeconds`) runs out — the
+"5 seconds of fuel, then self-destruct" requirement, for free, by simply
+reusing the same field ordinary projectiles use for their own lifetime.
+`GameNetworkServer.resolvePendingHits`/the `ContactListener`/`ContactFilter`
+all operate purely off `ProjectileComponent` + `HullComponent`/
+`ShieldComponent`, entirely projectile-type-agnostic — a missile's fixture
+just needs `CollisionCategories.PROJECTILE`'s category/mask (same as a
+blaster bolt) to get full hit-detection/damage/kill-credit support with
+zero server changes.
+
+**New `MissileFactory`** (parallel to `ProjectileFactory`, not built on top
+of it — the body differs enough, own hitbox polygon instead of a plain
+circle, no muzzle-speed boost since the missile accelerates under its own
+thrust instead, `linearDamping: 0f`/`angularDamping: 3f` instead of a
+blaster bolt's near-frictionless flight) — initial velocity is the
+shooter's own velocity only, same "inherits the platform's velocity" rule
+2.4 established for blaster bolts.
+
+**Tick-ordering, same family of bug already fixed once for weapons/turrets
+(§3.5, 2026-09-05).** The "M" keypress only records *intent* during the
+`pendingActions` drain (`pendingMissileFireRequests.add(playerId)`) — the
+actual `MissileFactory` call happens later in `tick()`, in the same section
+as `weaponSystem.update(...)`/`turretSystem.update(...)`, i.e. **after**
+`physicsSystem.update(...)` has already run that tick. Building the missile
+directly inside the `pendingActions` runnable (the same shape
+`applyRadarPulse`/`applyTurretToggle` use) would have reintroduced the
+exact "projectile swept forward before its first broadcast" bug the weapon
+system's own fire-after-physics fix already solved once.
+`processMissileFireRequests()` re-validates server-side (ship exists, lock
+acquired, missile count > 0) before creating anything — never trusting the
+client's own "M is available" gating, same posture as every other
+player-triggered action here. On success it consumes one missile and fully
+resets the lock, so a second missile starts a fresh 5-second acquisition
+rather than instantly refiring at the same target. **No authored `"MISSILE"`
+attachment point exists yet** — neither missile-capable ship has one, so
+missiles spawn from a fixed just-ahead-of-the-hull default offset (same
+`fireFromDefaultOffset` shape `WeaponSystem` uses), not an attachment point;
+adding one later (mirroring `WeaponStats.PROJECTILE_ATTACHMENT_NAME`) is a
+drop-in follow-up, not blocking.
+
+**Network wire.** `MissileFireRequest` — empty payload, exact copy of
+`RadarPulseRequest`'s shape, reliable TCP, appended to `MessageRegistry`
+after the existing final entry. `ShipState` gained
+`missileLockTargetPlayerId`/`missileLockAcquired` (sentinel `-1`/`false`),
+broadcast for every ship same as `radarPulseCooldownRemaining` — cheap now,
+only the owning player's own entry is currently consumed.
+`ProjectileState` gained `trackedTargetPlayerId`, populated generically off
+`ProjectileComponent` in the existing projectile broadcast loop (no
+`instanceof` branching needed).
+
+**Rejected: a separate `ProjectileType` wire enum.** Considered alongside
+`trackedTargetPlayerId`, since a missile's target id is set once at launch
+and never cleared even after the target dies — `trackedTargetPlayerId !=
+NO_TRACKED_TARGET` unambiguously means "this is a missile" for the whole
+flight, for both sprite selection and reticle stage-3. Adding the enum
+too would have meant a new `kryo.register()` entry for no discriminating
+power gained — dropped in favor of the one field doing both jobs.
+
+**Client rendering.** `missile.png` and the three
+`Missile_Lock_Reticle_{Outer,Inner,Center}.png` sprites pack automatically
+into the existing `projectiles.atlas` (flat `assets-raw/projectiles/`
+folder, region name = filename, no `AtlasPacker.java` change needed — same
+mechanism `red_oval`/`blue_oval` already use). `Client.drawProjectile`
+branches on `trackedTargetPlayerId != NO_TRACKED_TARGET`: draws the missile
+sprite at its own size (`MissileStats.INSTANCE.getPixelsPerMeter()`,
+same "region pixels ÷ this entity's own pixels-per-meter" formula every
+authored sprite in this project uses) instead of the blaster oval,
+otherwise unchanged (still rotated to actual travel direction).
+
+Reticle rendering is **attacker-perspective only** — nothing is drawn for
+anyone else's lock, since the spec frames this as HUD awareness for the
+player doing the locking, not a victim-facing warning (never requested).
+Three additive stages, all anchored to the target's `RemoteShip.renderX/Y`
+(a lock target is, by construction, always radar-detected and therefore
+already tracked in `ships` — no separate lookup needed): outer ring alone
+while `myMissileLockTargetPlayerId != -1` (acquiring or already acquired),
+scaled `1.00`–`1.10` via `1.05 + 0.05·sin(t·ω)`; inner ring additionally
+once `myMissileLockAcquired`, rotating at a constant 90°/second
+**clockwise** (a *decrementing* angle, since libGDX's positive rotation is
+counter-clockwise); center mark additionally, static, whenever any of the
+local player's own in-flight `ProjectileState`s has
+`trackedTargetPlayerId` equal to the current lock target's id (covers the
+brief window after firing, before the lock is reset, where both an
+in-flight missile and a fresh acquisition could in principle coexist).
+Reticle base size is `1.6×` the target ship's own on-screen diameter — an
+untuned placeholder, not derived from the art's own native size, so it
+scales sensibly across ship types of different sizes.
+
+**No tweening library added**, despite the new animation — user asked
+mid-request whether it was time to add one (libGDX has a few available).
+Declined: both effects needed (a sine-wave scale pulse, a constant-rate
+rotation) are one-line formulas using libGDX's already-bundled
+`MathUtils`, consistent with this project's standing avoidance of
+Scene2D/animation frameworks for gameplay rendering (raw `SpriteBatch`
+throughout, §3.3/§4). Revisit only if a genuinely complex chained/
+sequenced animation (e.g. an explosion with callbacks) comes up later.
+
+**Flagged interpretations/defaults (per this project's own "propose +
+flag, don't stall on `AskUserQuestion` for non-foundational choices"
+convention) — none of these were explicitly confirmed by the user, all
+open to revision on feedback:**
+1. **An already-*acquired* lock is fully lost, not just paused, the
+   instant the target leaves the cone** — read the spec's "the lock is
+   immediately lost if the enemy manages to leave the radar cone" as
+   applying at every pre-fire stage, not only during the 5-second
+   acquisition window. **Known risk, flagged by design review before this
+   ever got play-tested:** cone membership is a hard boolean recomputed
+   every tick from real (if noisy) positions — a target hovering at the
+   cone's edge could flicker in/out across consecutive ticks, resetting a
+   4.9-second lock to zero repeatedly. If this feels flaky in play,
+   the fix is a short grace period (e.g. 0.25s) before a cone exit
+   actually resets progress, not a redesign — noted here so that's the
+   first thing to try.
+2. Missiles do **not** draw from the shared weapon capacitor
+   (`WeaponComponent`) the main gun/turret uses — gated purely by
+   lock-acquired + missile count, a separate resource. The spec never
+   mentions a capacitor/cooldown for missiles.
+3. Missile guidance uses plain pursuit (aim at the target's current
+   position), not `TurretAiming`'s lead/intercept solve — see
+   `MissileGuidanceSystem`'s own Javadoc for the reasoning.
+4. A missile whose target is destroyed mid-flight flies straight (no
+   steering) until its own fuel naturally expires — no special-case
+   removal or retarget.
+5. No authored `"MISSILE"` attachment point yet — missiles spawn from a
+   fixed default offset ahead of the hull. See "Tick-ordering" above.
+6. No missile-vs-projectile collision — a missile can't be shot down.
+   Out of scope, never requested.
+7. Fuel-out self-destruct is silent removal, no splash/AoE damage — only
+   a direct hit deals damage, via the same generic hit-resolution path
+   every projectile already uses.
+
+**New `.stats.json`/asset files:** `assets/projectiles/missile.stats.json`
+(new); `xwing.stats.json`/`tieinterceptor.stats.json` gained the three
+missile fields (enabled); every other ship type's `.stats.json` gained them
+too, explicitly disabled. `assets-raw/projectiles/` gained `missile.png` +
+three `Missile_Lock_Reticle_*.png` files (user-provided); `assets-raw/psd/`
+gained `Missile_Lock_Reticle.psd` (left untouched, same standing
+instruction as every other file in that folder).
+
+**Verification status: build/tests only, explicitly NOT live-verified —
+the user asked to handle play-testing for this feature themselves**
+("since this is gonna be complex to test, you can leave the play testing
+to me"), so no `SendKeys`/screenshot verification was attempted here.
+`RadarDetection.isWithinCone` has 3 new unit tests (reusing the existing
+`RadarDetectionTest`); `MessageRegistryTest` covers `MissileFireRequest`'s
+round trip and the extended `ShipState`/`ProjectileState` fields. Full
+`mvn clean test` green (119 core + 30 server + 4 dev-tools tests) and a
+full `mvn clean install` (all 4 modules, packaging included) succeed. The
+texture atlas was regenerated (`AtlasPacker`) and the four new regions
+(`missile`, `Missile_Lock_Reticle_{Outer,Inner,Center}`) confirmed present
+in the packed `projectiles.atlas`. Watch for during play-testing: lock
+flicker at the cone boundary (see flagged point 1 above), the missile's
+untuned thrust/turn-torque feel, and the reticle's base size/scale.
+
+**Thrust/torque rescaled and the reticle made victim-visible, 2026-09-09,
+after the user's first play-test.** "everything works as expected!"
+confirmed the system as a whole; two follow-ups from that same message.
+
+**Thrust/torque rescaled before the numbers were even handed over** — an
+advisor review flagged (before any live test) that the original untuned
+placeholders (`thrustForce: 40`, `turnTorque: 15`) against the missile's
+own small polygon mass (~0.47kg, from its authored hitbox) would have
+produced a ~500 m/s unopposed-burn missile with an effectively instant
+snap-turn — undodgeable, defeating the spec's own "limited turning torque
+so a target can potentially outmaneuver it." Rescaled to `thrustForce: 15`,
+`turnTorque: 1.0` (a rough mass/moment-of-inertia sanity check, not a
+tuned value) — reaches roughly 150 m/s over the 5s burn and settles toward
+roughly 130°/s of turn rate, fast but not literally instantaneous. Still
+explicitly a placeholder, per the user's own "it sure needs some tweaking
+of the parameters but that's to be expected."
+
+**Victim-side lock reticle — new, same day, direct user request:** "it
+would be cool if the targeted player would see the missile lock reticle
+on himself as well... right now only the player who's about to shoot the
+missile can see the missile lock reticle. the targeted player is totally
+unaware." The original pass only ever read the *attacker's* own lock
+state; the target had no server-side signal at all that they were being
+locked onto — not just a missing client feature, an actual protocol gap.
+
+`ShipState` gained two more fields, from the victim's side:
+`targetedByMissileLock`/`targetedByMissileLockAcquired` — whether *any*
+enemy ship currently has this ship as their lock target, and whether any
+of those locks is fully acquired. Aggregated across every attacker
+(booleans, not a named attacker id) rather than singular, since more than
+one enemy could in principle be locking the same target at once, and
+the victim only needs to know "am I in danger," not "by whom."
+`GameNetworkServer.broadcastSnapshot()` builds this with a small
+pre-pass — for every ship with an active `MissileLockComponent.getLockTarget()`,
+merge `true`/`false` (OR'd) into a `Map<Entity, Boolean>` keyed by the
+*target* entity — before the existing per-ship loop, since a ship has no
+way to know it's being targeted just from its own components; it
+requires scanning every *other* ship's lock state. A ship's own entry is
+always included in its personalized `WorldSnapshotMessage` regardless of
+radar (existing behavior, design.md 2.14), so the victim reliably learns
+this even if their own radar doesn't currently detect the attacker back —
+important, since cone detection isn't symmetric.
+
+**Client:** `Client` gained the mirror-image local fields
+(`myTargetedByMissileLock`/`myTargetedByMissileLockAcquired`), set from
+the local player's own `ShipState` entry exactly like the existing
+attacker-side fields, reset on spawn/respawn. `drawMissileLockReticle()`
+now draws up to *two* independent reticle instances per frame — the
+existing attacker-side one (anchored to the target's `RemoteShip`
+position) and a new victim-side one, anchored to the local player's own
+ship instead. Since the local player's own ship isn't tracked in the
+`ships` map (it's rendered separately via `drawLocalShip()`'s own
+prediction/interpolation), `drawLocalShip()` now caches its final
+interpolated screen position (`myRenderScreenX`/`myRenderScreenY`) each
+frame for the reticle draw to reuse, rather than recomputing the
+alpha-lerp a second time. The shared outer-pulse/inner-rotation/center-
+mark math was factored into one `drawMissileLockReticleStages(...)`
+helper called from both cases, so the animation logic lives in exactly
+one place. Stage-3 (center mark, "missile in flight") for the victim
+checks `hasInFlightMissileAt(myPlayerId, ownedByMeOnly=false)` — *any*
+owner's missile tracking me, not just my own — reusing `ProjectileState`
+data every client already receives unfiltered (design.md 2.14's scope
+boundary: projectiles were never radar-filtered), so no new wire data
+was needed for this stage.
+
+Both reticles can be visible in the same frame (locking one enemy while
+being locked by another) — independent draws, not mutually exclusive.
+
+**Verification status: build/tests only, same standing instruction as the
+rest of this feature** ("you can leave the play testing to me"). Full
+`mvn clean test` green (still 119 core + 30 server + 4 dev-tools — no new
+tests added, this is wiring on top of already-tested pure functions, not
+new logic-heavy code) and `mvn clean install` succeed.
+`MessageRegistryTest`'s `ShipState` round-trip case extended to cover
+both new fields.
+
+**Out of missiles now stops lock acquisition entirely, 2026-09-09, same
+day.** User: "when the player runs out of missiles we can stop acquiring
+new missile locks. no need to go through that procedure if no missile is
+available. it's also a way for the player to infer that he is out of
+missiles, since there is no other indicator, yet." One-line gate in
+`MissileLockSystem.processEntity()`: the "no current target — scan for
+the closest enemy in cone" branch now also requires
+`lock.getMissileCount() > 0`. Deliberately does **not** touch an
+already-in-progress acquisition (there isn't one to touch in practice —
+the only way `missileCount` reaches zero is firing the last missile,
+which already resets the lock in the same tick via
+`processMissileFireRequests`, so the two states never actually overlap).
+Doubles as the ammo-out signal the design's own "open point for later"
+(no explicit missile-count HUD) flagged from the start — once out, the
+lock reticle simply never starts appearing again, which is itself
+legible to the player without any new UI. Pure gating logic on an
+already-tested system, no new unit test needed (systems are thin
+Box2D/Ashley wiring by this project's own testing convention, not
+logic-heavy pure functions). Verified: `mvn clean test` (153 tests) and
+`mvn clean install` green; build/tests only, same "you can leave the
+play testing to me" standing instruction.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape

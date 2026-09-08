@@ -2539,6 +2539,137 @@ touched by that pipeline.
 **Verified live, 2026-09-09, same day.** User: "i tested it and
 everything looks very good!" Full `mvn clean test` green throughout.
 
+**Missiles — implemented 2026-09-09, same session.** See design.md 2.15
+for the full writeup (data model, new server systems, tick-ordering fix,
+network wire changes, client rendering, and 7 explicitly-flagged
+interpretation points). Short version: both tier-3 ships (X-wing, TIE
+Interceptor) get 2 missiles, fired with "M" once a 5-second uninterrupted
+cone-radar lock is acquired on the closest enemy; the lock is lost
+immediately if the target leaves the cone, at any pre-fire stage. A fired
+missile has 5s fuel, limited turning torque, plain-pursuit guidance (not a
+lead solve), and deals 10x blaster damage (100). New `MissileConfig`/
+`MissileStats` (single cached instance, not per-type), `MissileLockComponent`/
+`MissileComponent`, `MissileLockSystem`/`MissileGuidanceSystem`,
+`MissileFactory`, `MissileFireRequest`. `ProjectileComponent` gained one
+new field (`trackedTargetPlayerId`) that alone distinguishes a missile
+from a blaster bolt — a separate `ProjectileType` enum was considered and
+rejected as redundant. Three-stage animated lock reticle
+(outer/inner/center rings, `Missile_Lock_Reticle_*.png`) drawn
+attacker-perspective-only, packed automatically into the existing
+`projectiles.atlas` (flat folder, no `AtlasPacker.java` change needed).
+
+**Reused almost entirely for free, no new server code needed:**
+`ProjectileLifetimeSystem` (fuel expiry, by setting the missile's
+`ProjectileComponent` lifetime to its fuel duration) and the entire
+existing hit-resolution/`ContactListener`/`ContactFilter` path (both
+already operate purely off `ProjectileComponent` + `HullComponent`/
+`ShieldComponent`, with no type-specific branching).
+
+**Same tick-ordering bug class caught before it was written, not found
+via play-testing this time** — mid-design, caught myself about to build
+missile creation directly inside a `pendingActions` runnable (the same
+shape `applyRadarPulse`/`applyTurretToggle` use), which would have
+reintroduced the exact "projectile swept forward before its first
+broadcast" bug already found and fixed for `WeaponSystem` on 2026-09-05
+(`pendingActions` drains *before* `physicsSystem.update(...)`, but a
+spawned body must not exist yet when that happens). Fixed in the design
+itself: "M" only records intent (`pendingMissileFireRequests`), the actual
+`MissileFactory` call happens later in `tick()`, in the same
+after-physics-stepping section as `weaponSystem`/`turretSystem`. Also
+needed the same per-physics-step treatment as `ShipControlSystem` for a
+different reason: `MissileGuidanceSystem`'s steering torque/thrust are
+continuous forces Box2D clears every `world.step()`, so it runs inside
+`physicsSystem.update(deltaTime, () -> {...})`'s callback, not once per
+tick.
+
+**No tweening library added, despite the new animation** (outer ring
+scale-pulse, inner ring constant rotation) — user asked mid-request
+whether it was time to add one; declined, both effects are one-line
+`MathUtils` formulas, consistent with this project's standing avoidance
+of animation frameworks for gameplay rendering (raw `SpriteBatch`
+throughout). Revisit only if a genuinely complex chained/sequenced
+animation (e.g. an explosion with callbacks) comes up later.
+
+**Verification status: build/tests only, explicitly NOT live-verified —
+the user's own instruction: "since this is gonna be complex to test, you
+can leave the play testing to me."** New `RadarDetection.isWithinCone`
+(3 tests) + `MissileFireRequest`/extended `ShipState`/`ProjectileState`
+round-trip coverage in `MessageRegistryTest`. Full `mvn clean test` green
+(119 core + 30 server + 4 dev-tools tests) and a full `mvn clean install`
+(all 4 modules, packaging included) succeed. `AtlasPacker` re-run and the
+four new regions confirmed present in the regenerated `projectiles.atlas`.
+Flagged as the most likely thing to feel off in play (see design.md 2.15's
+point 1): an already-acquired lock could flicker at the cone's exact
+boundary, since cone membership is a hard per-tick boolean with no grace
+period — the fix, if needed, is a short grace period before a cone exit
+resets progress, not a redesign.
+
+**Missile thrust/torque rescaled + victim-side lock reticle — implemented
+2026-09-09, same session, right after the user's first play-test.** See
+design.md 2.15's addendum for the full writeup. User: "everything works
+as expected! it sure needs some tweaking of the parameters but thats to
+be expected" — confirming the system overall — plus one real gap: "it
+would be cool if the targeted player would see the missile lock reticle
+on himself as well... the targeted player is totally unaware that he's
+about to have a very bad day."
+
+**Numbers:** thrust/torque had already been rescaled once, pre-emptively,
+by an advisor review before the user ever touched it (the original
+40N/15N·m placeholders against the missile's ~0.47kg mass would have been
+an undodgeable ~500 m/s instant-hit with an instant snap-turn) — now down
+to 15N/1.0N·m. Still explicitly untuned; the user's own feedback confirms
+further hand-tuning is expected next, same as every other stat in this
+project.
+
+**Victim-side reticle — a real protocol gap, not just a missing client
+feature:** the server never told a targeted ship it was being locked at
+all, only the attacker's own ship carried its own lock state. New
+`ShipState` fields `targetedByMissileLock`/`targetedByMissileLockAcquired`
+(aggregated across every attacker, not naming one — more than one enemy
+could be locking the same target), computed in
+`GameNetworkServer.broadcastSnapshot()` via a small pre-pass over every
+ship's `MissileLockComponent.getLockTarget()` before the main per-ship
+loop, since a ship can't know it's targeted from its own components
+alone. Delivered reliably regardless of the victim's own radar — a
+ship's own `ShipState` entry is always included in its personalized
+snapshot (design.md 2.14), so this doesn't depend on the victim
+detecting the attacker back (cone detection isn't symmetric).
+
+**Client:** `drawMissileLockReticle()` now draws up to two independent
+reticles a frame — the existing attacker-side one, plus a new victim-side
+one anchored to the local player's own ship (`drawLocalShip()` now caches
+its interpolated screen position each frame,
+`myRenderScreenX`/`myRenderScreenY`, so the reticle draw doesn't need a
+second alpha-lerp). The shared pulse/rotation animation math was factored
+into one `drawMissileLockReticleStages(...)` helper used by both cases.
+The victim's stage-3 (center mark) needed no new wire data at all — it
+just checks whether *any* owner's in-flight `ProjectileState` tracks
+`myPlayerId` (projectiles were already broadcast unfiltered to everyone,
+design.md 2.14's own scope boundary), vs. the attacker's stage-3 which
+only counts the local player's own missiles.
+
+**Verification status: build/tests only, same standing instruction for
+this whole feature** ("you can leave the play testing to me"). Full `mvn
+clean test` green (119 core + 30 server + 4 dev-tools — this is wiring on
+top of already-tested pure logic, no new logic-heavy code, so no new unit
+tests) and `mvn clean install` succeed. `MessageRegistryTest`'s
+`ShipState` round-trip extended for both new fields.
+
+**Out of missiles now stops lock acquisition entirely — implemented
+2026-09-09, same session.** See design.md 2.15's addendum. User: "when
+the player runs out of missiles we can stop acquiring new missile locks
+... it's also a way for the player to infer that he is out of missiles,
+since there is no other indicator, yet." One-line gate in
+`MissileLockSystem` — the "no target, start scanning" branch now also
+requires `lock.getMissileCount() > 0`. Nothing else needed: the only way
+`missileCount` reaches zero is firing the last missile, which already
+resets the lock in the same tick, so there's no in-progress-acquisition
+case to also handle. Doubles as the ammo-out indicator the original
+missile milestone had flagged as an open point (no HUD count yet) — the
+reticle simply stops appearing once out. Verified: `mvn clean test` (153
+tests) and `mvn clean install` green; build/tests only, per this
+feature's standing "leave the play testing to me" instruction.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

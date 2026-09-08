@@ -60,7 +60,34 @@ public final class RadarDetection {
         if (pulseActive && distanceSq <= pulseRangeMeters * pulseRangeMeters) {
             return true;
         }
-        return coneEnabled && distanceSq <= coneRangeMeters * coneRangeMeters
+        return coneEnabled && isWithinCone(observerX, observerY, observerAngleRadians, targetX, targetY,
+            coneRangeMeters, coneHalfAngleDegrees);
+    }
+
+    /**
+     * Returns whether a target is within an observer's forward-facing cone
+     * specifically — the same check {@link #detects} folds into its merged
+     * result, but exposed standalone for callers that care about the cone
+     * mechanism alone rather than "detected by any mechanism" (e.g. missile
+     * lock-on, design.md — missiles, which is defined in terms of the cone
+     * radar specifically, not general detection).
+     *
+     * @param observerX            the observer's X position, in meters
+     * @param observerY            the observer's Y position, in meters
+     * @param observerAngleRadians the observer's current facing angle, in radians
+     * @param targetX              the target's X position, in meters
+     * @param targetY              the target's Y position, in meters
+     * @param coneRangeMeters      the cone radar's range
+     * @param coneHalfAngleDegrees the cone radar's half-angle either side of the observer's facing
+     * @return {@code true} if the target is within range and inside the forward arc
+     */
+    public static boolean isWithinCone(float observerX, float observerY, float observerAngleRadians,
+                                        float targetX, float targetY,
+                                        float coneRangeMeters, float coneHalfAngleDegrees) {
+        float dx = targetX - observerX;
+        float dy = targetY - observerY;
+        float distanceSq = dx * dx + dy * dy;
+        return distanceSq <= coneRangeMeters * coneRangeMeters
             && isWithinForwardArc(dx, dy, observerAngleRadians, coneHalfAngleDegrees);
     }
 

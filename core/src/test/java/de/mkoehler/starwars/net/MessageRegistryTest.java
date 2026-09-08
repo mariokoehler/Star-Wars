@@ -7,6 +7,7 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
@@ -64,7 +65,8 @@ class MessageRegistryTest {
             LeaveMatchRequest.class, LeaveMatchDeniedMessage.class,
             TurretToggleMessage.class, float[].class, SpawnRequest.class,
             PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class,
-            ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class
+            ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class,
+            MissileFireRequest.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -155,12 +157,13 @@ class MessageRegistryTest {
     void worldSnapshotMessageSurvivesRoundTrip() {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
-                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0], 12f),
+                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0], 12f,
+                    5, true, true, false),
                 new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.STARDESTROYER,
-                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f)
+                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f, ShipState.NO_MISSILE_LOCK_TARGET, false, false, false)
             },
             new ProjectileState[]{
-                new ProjectileState(100, 1, 11f, 20f, 3f, 48f)
+                new ProjectileState(100, 1, 11f, 20f, 3f, 48f, 5)
             });
         WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
         assertEquals(2, copy.getShips().length);
@@ -174,6 +177,14 @@ class MessageRegistryTest {
         assertEquals(ShipType.XWING, copy.getShips()[0].getShipType());
         assertEquals(0, copy.getShips()[0].getTurretAimAngles().length);
         assertEquals(12f, copy.getShips()[0].getRadarPulseCooldownRemaining());
+        assertEquals(5, copy.getShips()[0].getMissileLockTargetPlayerId());
+        assertTrue(copy.getShips()[0].isMissileLockAcquired());
+        assertTrue(copy.getShips()[0].isTargetedByMissileLock());
+        assertEquals(false, copy.getShips()[0].isTargetedByMissileLockAcquired());
+        assertEquals(ShipState.NO_MISSILE_LOCK_TARGET, copy.getShips()[1].getMissileLockTargetPlayerId());
+        assertEquals(false, copy.getShips()[1].isMissileLockAcquired());
+        assertEquals(false, copy.getShips()[1].isTargetedByMissileLock());
+        assertEquals(false, copy.getShips()[1].isTargetedByMissileLockAcquired());
         assertEquals(-1.2f, copy.getShips()[1].getAngle());
         assertEquals(-0.3f, copy.getShips()[1].getAngularVelocity());
         assertEquals(ShipType.STARDESTROYER, copy.getShips()[1].getShipType());
@@ -185,6 +196,7 @@ class MessageRegistryTest {
         assertEquals(11f, copy.getProjectiles()[0].getX());
         assertEquals(3f, copy.getProjectiles()[0].getVelocityX());
         assertEquals(48f, copy.getProjectiles()[0].getVelocityY());
+        assertEquals(5, copy.getProjectiles()[0].getTrackedTargetPlayerId());
     }
 
     @Test
@@ -282,6 +294,12 @@ class MessageRegistryTest {
     void radarPulseRequestSurvivesRoundTrip() {
         RadarPulseRequest copy = roundTrip(new RadarPulseRequest(), RadarPulseRequest.class);
         assertEquals(RadarPulseRequest.class, copy.getClass());
+    }
+
+    @Test
+    void missileFireRequestSurvivesRoundTrip() {
+        MissileFireRequest copy = roundTrip(new MissileFireRequest(), MissileFireRequest.class);
+        assertEquals(MissileFireRequest.class, copy.getClass());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

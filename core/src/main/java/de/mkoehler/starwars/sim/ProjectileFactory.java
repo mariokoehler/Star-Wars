@@ -80,7 +80,8 @@ public final class ProjectileFactory {
 
         Entity entity = new Entity();
         entity.add(new PhysicsBodyComponent(body));
-        entity.add(new ProjectileComponent(projectileId, ownerPlayerId, stats.getDamage(), stats.getProjectileLifetimeSeconds()));
+        entity.add(new ProjectileComponent(projectileId, ownerPlayerId, stats.getDamage(),
+            stats.getProjectileLifetimeSeconds(), ProjectileComponent.NO_TRACKED_TARGET));
         engine.addEntity(entity);
         body.setUserData(entity);
         return entity;

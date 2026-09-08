@@ -117,4 +117,24 @@ class RadarDetectionTest {
             true, 60f, true, 120f, 30f, true, 200f);
         assertFalse(detected);
     }
+
+    @Test
+    void isWithinConeMatchesDetectsForAConeOnlyCase() {
+        // Same geometry as coneRadarDetectsAheadBeyondBaseRange, checked via the standalone
+        // cone-only entry point (missile lock-on's use case) instead of the merged detects(...).
+        boolean withinCone = RadarDetection.isWithinCone(0f, 0f, 0f, 0f, 100f, 120f, 30f);
+        assertTrue(withinCone);
+    }
+
+    @Test
+    void isWithinConeDoesNotDetectOutsideTheArc() {
+        boolean withinCone = RadarDetection.isWithinCone(0f, 0f, 0f, 100f, 0f, 120f, 30f);
+        assertFalse(withinCone);
+    }
+
+    @Test
+    void isWithinConeDoesNotDetectBeyondItsRange() {
+        boolean withinCone = RadarDetection.isWithinCone(0f, 0f, 0f, 0f, 121f, 120f, 30f);
+        assertFalse(withinCone);
+    }
 }

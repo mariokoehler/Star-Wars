@@ -9,6 +9,14 @@ package de.mkoehler.starwars.net.messages;
  * client infers a projectile is gone simply by its id no longer appearing
  * in a subsequent snapshot, the same way presence/absence already drives
  * everything else in this message.
+ * <p>
+ * {@link #getTrackedTargetPlayerId()} (design.md — missiles) is the one
+ * field that distinguishes a missile from an ordinary blaster bolt on the
+ * wire — sentinel {@link de.mkoehler.starwars.sim.components.ProjectileComponent#NO_TRACKED_TARGET}
+ * for a blaster bolt, the target's player id for a missile (fixed at
+ * launch, unchanged even if that target is later destroyed). A client uses
+ * it both to pick which sprite to draw and to drive the lock-reticle's
+ * "in flight" stage — no separate projectile-type field needed.
  */
 public class ProjectileState {
 
@@ -18,6 +26,7 @@ public class ProjectileState {
     private float y;
     private float velocityX;
     private float velocityY;
+    private int trackedTargetPlayerId;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -41,15 +50,18 @@ public class ProjectileState {
      *                      whatever angle it was fired at, once the firing ship's own velocity is
      *                      added on top of muzzle velocity.
      * @param velocityY     the projectile's actual world-frame velocity, in meters/second
+     * @param trackedTargetPlayerId the enemy player id this projectile is tracking (a missile), or
+     *                              {@link de.mkoehler.starwars.sim.components.ProjectileComponent#NO_TRACKED_TARGET}
      */
     public ProjectileState(int projectileId, int ownerPlayerId, float x, float y,
-                            float velocityX, float velocityY) {
+                            float velocityX, float velocityY, int trackedTargetPlayerId) {
         this.projectileId = projectileId;
         this.ownerPlayerId = ownerPlayerId;
         this.x = x;
         this.y = y;
         this.velocityX = velocityX;
         this.velocityY = velocityY;
+        this.trackedTargetPlayerId = trackedTargetPlayerId;
     }
 
     /**
@@ -104,5 +116,16 @@ public class ProjectileState {
      */
     public float getVelocityY() {
         return velocityY;
+    }
+
+    /**
+     * Returns the enemy player id this projectile is tracking.
+     *
+     * @return the tracked target's player id, or
+     * {@link de.mkoehler.starwars.sim.components.ProjectileComponent#NO_TRACKED_TARGET} for an
+     * ordinary, non-tracking projectile
+     */
+    public int getTrackedTargetPlayerId() {
+        return trackedTargetPlayerId;
     }
 }

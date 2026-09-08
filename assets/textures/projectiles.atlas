@@ -1,19 +1,47 @@
 
 projectiles.png
-size: 32, 16
+size: 512, 256
 format: RGBA8888
 filter: Linear, Linear
 repeat: none
+Missile_Lock_Reticle_Center
+  rotate: false
+  xy: 2, 54
+  size: 128, 128
+  orig: 128, 128
+  offset: 0, 0
+  index: -1
+Missile_Lock_Reticle_Inner
+  rotate: false
+  xy: 132, 54
+  size: 128, 128
+  orig: 128, 128
+  offset: 0, 0
+  index: -1
+Missile_Lock_Reticle_Outer
+  rotate: false
+  xy: 262, 54
+  size: 128, 128
+  orig: 128, 128
+  offset: 0, 0
+  index: -1
 blue_oval
   rotate: false
-  xy: 2, 2
+  xy: 392, 172
   size: 7, 10
   orig: 7, 10
   offset: 0, 0
   index: -1
+missile
+  rotate: false
+  xy: 2, 14
+  size: 8, 38
+  orig: 8, 38
+  offset: 0, 0
+  index: -1
 red_oval
   rotate: false
-  xy: 11, 2
+  xy: 2, 2
   size: 7, 10
   orig: 7, 10
   offset: 0, 0

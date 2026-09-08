@@ -12,6 +12,7 @@ import com.badlogic.gdx.physics.box2d.Shape;
 import com.badlogic.gdx.physics.box2d.World;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
+import de.mkoehler.starwars.sim.components.MissileLockComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
@@ -75,6 +76,9 @@ public final class ShipFactory {
         entity.add(new CombatTimerComponent());
         entity.add(new RadarComponent());
         createTurretComponent(stats).ifPresent(entity::add);
+        if (stats.isMissileEnabled()) {
+            entity.add(new MissileLockComponent(stats.getMissileStartingCount()));
+        }
         engine.addEntity(entity);
         body.setUserData(entity);
         return entity;

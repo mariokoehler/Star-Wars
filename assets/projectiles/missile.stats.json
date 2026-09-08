@@ -1,0 +1,7 @@
+{
+  "pixelsPerMeter" : 19.0,
+  "thrustForce" : 15.0,
+  "turnTorque" : 1.0,
+  "damage" : 100.0,
+  "flightSeconds" : 5.0
+}

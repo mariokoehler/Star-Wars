@@ -19,6 +19,7 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
@@ -38,6 +39,7 @@ import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
 import de.mkoehler.starwars.server.accounts.PlayerAccount;
 import de.mkoehler.starwars.sim.KillXp;
+import de.mkoehler.starwars.sim.MissileFactory;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
@@ -47,6 +49,7 @@ import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.ShipUnlocks;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
+import de.mkoehler.starwars.sim.components.MissileLockComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
@@ -57,6 +60,8 @@ import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.TurretComponent;
 import de.mkoehler.starwars.sim.systems.CombatTimerSystem;
+import de.mkoehler.starwars.sim.systems.MissileGuidanceSystem;
+import de.mkoehler.starwars.sim.systems.MissileLockSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
 import de.mkoehler.starwars.sim.systems.RadarSystem;
@@ -130,6 +135,8 @@ public class GameNetworkServer extends NetworkServer {
     private final ShieldRegenSystem shieldRegenSystem = new ShieldRegenSystem();
     private final CombatTimerSystem combatTimerSystem = new CombatTimerSystem();
     private final RadarSystem radarSystem = new RadarSystem(engine);
+    private final MissileLockSystem missileLockSystem = new MissileLockSystem(engine);
+    private final MissileGuidanceSystem missileGuidanceSystem = new MissileGuidanceSystem(engine);
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
@@ -142,6 +149,13 @@ public class GameNetworkServer extends NetworkServer {
     private final List<HitEvent> pendingHits = new ArrayList<>();
     private float scoreboardBroadcastTimer;
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
+    // Populated (during the pendingActions drain) whenever a player presses "M" - the actual
+    // missile creation is deferred to processMissileFireRequests(), called later in tick() after
+    // physicsSystem.update(...) has already run this tick, same "don't spawn a body before this
+    // tick's physics stepping" rule WeaponSystem/TurretSystem already follow (see tick()'s own
+    // comment on that ordering) - creating it directly inside a pendingActions Runnable would
+    // reintroduce that exact bug class.
+    private final Set<Integer> pendingMissileFireRequests = new HashSet<>();
     // Resolved via Gdx.files.local (relative to wherever the server process is launched from,
     // design.md 3.6) rather than hardcoded, but AccountStore itself has no libGDX dependency -
     // it's directly unit-tested against a plain java.nio.file.Path.
@@ -161,6 +175,8 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(shieldRegenSystem);
         engine.addSystem(combatTimerSystem);
         engine.addSystem(radarSystem);
+        engine.addSystem(missileLockSystem);
+        engine.addSystem(missileGuidanceSystem);
 
         // Without this, a freshly-fired projectile would generate a real Box2D collision
         // against its own shooter's ship the instant it spawns (previously spawned exactly at
@@ -238,7 +254,13 @@ public class GameNetworkServer extends NetworkServer {
         // PhysicsSystem#update(float, Runnable) for the full explanation) - found via
         // play-testing that felt like "flying in slow motion" compared to the unnetworked
         // prototype, plus knock-on jitter from reconciliation fighting that speed gap.
-        physicsSystem.update(deltaTime, () -> shipControlSystem.update(0f));
+        // Missile guidance also needs the per-step treatment (constant steering torque/thrust,
+        // same Box2D "forces are cleared after every step" reason shipControlSystem needs it) -
+        // see MissileGuidanceSystem's own Javadoc.
+        physicsSystem.update(deltaTime, () -> {
+            shipControlSystem.update(0f);
+            missileGuidanceSystem.update(0f);
+        });
 
         // Fires weapons *after* this tick's physics stepping, not before: a projectile created
         // here won't be moved by this tick's world.step() calls at all, so the position first
@@ -253,6 +275,10 @@ public class GameNetworkServer extends NetworkServer {
         // TurretSystem's Javadoc), so the player's own held-fire input gets first claim on it
         // each tick over the autonomous turret.
         turretSystem.update(deltaTime);
+        // Same "after physics stepping" placement as weapons/turrets above, for the same reason -
+        // a missile created here isn't swept forward by this tick's own physics steps before its
+        // first broadcast.
+        processMissileFireRequests();
 
         resolvePendingHits();
         shieldRegenSystem.update(deltaTime);
@@ -263,6 +289,11 @@ public class GameNetworkServer extends NetworkServer {
         // Recomputed against this tick's freshest (post-physics-step) positions, immediately
         // before broadcastSnapshot() reads it to decide what each player actually sees.
         radarSystem.update(deltaTime);
+        // Reuses the cone check radarSystem just recomputed conceptually (though not its actual
+        // detectedPlayerIds set, which merges in base/pulse too - missile lock cares about the
+        // cone mechanism specifically, see RadarDetection#isWithinCone) - order relative to
+        // radarSystem doesn't matter, neither reads the other's output.
+        missileLockSystem.update(deltaTime);
 
         broadcastSnapshot();
 
@@ -658,6 +689,9 @@ public class GameNetworkServer extends NetworkServer {
         } else if (object instanceof RadarPulseRequest) {
             int playerId = connection.getID();
             pendingActions.add(() -> applyRadarPulse(playerId));
+        } else if (object instanceof MissileFireRequest) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> pendingMissileFireRequests.add(playerId));
         }
     }
 
@@ -761,6 +795,58 @@ public class GameNetworkServer extends NetworkServer {
         radar.triggerPulse(stats.getRadarPulseCooldownSeconds(), stats.getRadarPulseRevealDurationSeconds());
     }
 
+    /**
+     * Creates a missile for every player who pressed "M" this tick (queued
+     * into {@link #pendingMissileFireRequests} during the earlier
+     * {@link #pendingActions} drain — see that field's Javadoc for why
+     * creation is deferred to here rather than done directly on receipt),
+     * re-validating each request server-side: the ship must exist, be
+     * missile-capable, have a fully acquired lock, and have at least one
+     * missile left (design.md — missiles) — never trusting the client's own
+     * "M is available" gating alone. On success, consumes one missile and
+     * fully resets the ship's lock, so a second missile press starts a fresh
+     * 5-second acquisition rather than instantly refiring at the same
+     * target.
+     */
+    private void processMissileFireRequests() {
+        if (pendingMissileFireRequests.isEmpty()) {
+            return;
+        }
+        for (int playerId : pendingMissileFireRequests) {
+            Entity ship = shipsByPlayerId.get(playerId);
+            if (ship == null) {
+                continue;
+            }
+            MissileLockComponent lock = ship.getComponent(MissileLockComponent.class);
+            if (lock == null || !lock.isLockAcquired() || lock.getMissileCount() <= 0) {
+                continue;
+            }
+            Entity target = lock.getLockTarget();
+            PlayerIdComponent targetPlayerId = target != null ? target.getComponent(PlayerIdComponent.class) : null;
+            if (target == null || targetPlayerId == null) {
+                continue; // target died the same tick the fire request was queued - nothing to lock onto anymore
+            }
+
+            Body body = ship.getComponent(PhysicsBodyComponent.class).getBody();
+            ShipStats shipStats = ShipStats.forType(shipTypeByPlayerId.get(playerId));
+            // Spawn just ahead of the ship's own hull, same "don't spawn exactly overlapping the
+            // shooter" reasoning as WeaponSystem#fireFromDefaultOffset - no authored "MISSILE"
+            // attachment point convention exists yet (neither missile-capable ship has one), so
+            // this is the only spawn offset for now.
+            float spawnDistance = shipStats.getRadiusMeters() + 1.5f;
+            Vector2 spawnOffset = new Vector2(0, 1).rotateRad(body.getAngle()).scl(spawnDistance);
+
+            MissileFactory.createMissile(engine, world, nextProjectileId.getAndIncrement(), playerId,
+                body.getPosition().x + spawnOffset.x, body.getPosition().y + spawnOffset.y, body.getAngle(),
+                body.getLinearVelocity().x, body.getLinearVelocity().y,
+                target, targetPlayerId.getPlayerId());
+
+            lock.consumeMissile();
+            lock.resetLock();
+        }
+        pendingMissileFireRequests.clear();
+    }
+
     private void despawnShip(int playerId) {
         Entity ship = shipsByPlayerId.remove(playerId);
         if (ship == null) {
@@ -784,6 +870,22 @@ public class GameNetworkServer extends NetworkServer {
      * boundary, not an oversight).
      */
     private void broadcastSnapshot() {
+        // Pre-pass, victim's-side of missile lock (design.md — missiles' addendum): for every
+        // ship currently being locked onto by at least one attacker, whether any of those locks
+        // is fully acquired. Built once up front (not per-ship inside the main loop below) since
+        // it requires scanning every OTHER ship's own MissileLockComponent, not just this one's -
+        // a ship never knows it's being targeted just by looking at its own components. Presence
+        // as a key means "targeted at all"; the boolean is OR'd across every attacker currently
+        // locking that same ship, since more than one could be doing so at once.
+        Map<Entity, Boolean> targetedByAcquiredMissileLock = new HashMap<>();
+        for (Entity attacker : shipsByPlayerId.values()) {
+            MissileLockComponent attackerLock = attacker.getComponent(MissileLockComponent.class);
+            if (attackerLock != null && attackerLock.getLockTarget() != null) {
+                targetedByAcquiredMissileLock.merge(attackerLock.getLockTarget(),
+                    attackerLock.isLockAcquired(), (alreadyAcquired, thisOneAcquired) -> alreadyAcquired || thisOneAcquired);
+            }
+        }
+
         Map<Integer, ShipState> shipStatesByPlayerId = new HashMap<>();
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
             Entity ship = entry.getValue();
@@ -792,11 +894,25 @@ public class GameNetworkServer extends NetworkServer {
             ShieldComponent shield = ship.getComponent(ShieldComponent.class);
             ShipType shipType = ship.getComponent(ShipTypeComponent.class).getShipType();
             RadarComponent radar = ship.getComponent(RadarComponent.class);
+            MissileLockComponent missileLock = ship.getComponent(MissileLockComponent.class);
+            int missileLockTargetPlayerId = ShipState.NO_MISSILE_LOCK_TARGET;
+            boolean missileLockAcquired = false;
+            if (missileLock != null && missileLock.getLockTarget() != null) {
+                PlayerIdComponent lockTargetPlayerId = missileLock.getLockTarget().getComponent(PlayerIdComponent.class);
+                if (lockTargetPlayerId != null) {
+                    missileLockTargetPlayerId = lockTargetPlayerId.getPlayerId();
+                    missileLockAcquired = missileLock.isLockAcquired();
+                }
+            }
+            boolean targetedByMissileLock = targetedByAcquiredMissileLock.containsKey(ship);
+            boolean targetedByMissileLockAcquired = targetedByAcquiredMissileLock.getOrDefault(ship, false);
             shipStatesByPlayerId.put(entry.getKey(), new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
                 hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType,
-                turretAimAngles(ship), radar.getPulseCooldownRemaining()));
+                turretAimAngles(ship), radar.getPulseCooldownRemaining(),
+                missileLockTargetPlayerId, missileLockAcquired,
+                targetedByMissileLock, targetedByMissileLockAcquired));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(
@@ -808,7 +924,7 @@ public class GameNetworkServer extends NetworkServer {
             Body body = entity.getComponent(PhysicsBodyComponent.class).getBody();
             projectileStates[j] = new ProjectileState(projectile.getProjectileId(), projectile.getOwnerPlayerId(),
                 body.getPosition().x, body.getPosition().y,
-                body.getLinearVelocity().x, body.getLinearVelocity().y);
+                body.getLinearVelocity().x, body.getLinearVelocity().y, projectile.getTrackedTargetPlayerId());
         }
 
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {

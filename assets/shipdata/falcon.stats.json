@@ -20,5 +20,8 @@
   "radarPulseEnabled": true,
   "radarPulseRangeMeters": 200.0,
   "radarPulseCooldownSeconds": 30.0,
-  "radarPulseRevealDurationSeconds": 5.0
+  "radarPulseRevealDurationSeconds": 5.0,
+  "missileEnabled": false,
+  "missileStartingCount": 0,
+  "missileLockDurationSeconds": 0.0
 }
