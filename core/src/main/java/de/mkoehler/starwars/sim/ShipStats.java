@@ -277,4 +277,30 @@ public final class ShipStats {
     public float getRadarPulseRevealDurationSeconds() {
         return config.getRadarPulseRevealDurationSeconds();
     }
+
+    /**
+     * Returns this ship type's largest enabled radar range — the distance
+     * the minimap's scope's outer edge represents (design.md 2.14's
+     * rendering addendum: each ship type's scope is scaled to its own
+     * equipment rather than one fixed distance for every ship, so a ship
+     * with fewer mechanisms enabled still uses the whole scope). {@code 0}
+     * if this ship type somehow has no radar mechanism enabled at all (not
+     * expected in practice — every current ship type has at least the base
+     * radar).
+     *
+     * @return the largest enabled range, in meters
+     */
+    public float getRadarMaxRangeMeters() {
+        float max = 0f;
+        if (isRadarBaseEnabled()) {
+            max = Math.max(max, getRadarBaseRangeMeters());
+        }
+        if (isRadarConeEnabled()) {
+            max = Math.max(max, getRadarConeRangeMeters());
+        }
+        if (isRadarPulseEnabled()) {
+            max = Math.max(max, getRadarPulseRangeMeters());
+        }
+        return max;
+    }
 }

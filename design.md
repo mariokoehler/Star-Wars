@@ -1407,7 +1407,15 @@ no restart needed, directly proving the prerequisite check re-evaluates
 against the account's just-updated unlocked set rather than a stale
 snapshot. `mvn clean test` green throughout.
 
-### 2.14 Radar / minimap — server infrastructure only, no rendering yet (2026-09-08)
+### 2.14 Radar / minimap (2026-09-08)
+
+**Status note:** this section's original text below covers the server
+infrastructure milestone (detection mechanics, per-player-filtered
+snapshots) — the rendering that consumes it, added the same day in a
+follow-up session, is written up in its own addendum right after
+"Explicitly out of scope this session" below. Left the original
+"no rendering yet" framing intact rather than rewriting it, since it
+accurately describes what was true when it was written.
 
 The play arena is large enough that players need a way to find each
 other beyond direct sight. User's spec, three independent detection
@@ -1537,6 +1545,133 @@ pulse-detected. The client-side data plumbing above (radar-filtered
 `ships` map, `radarPulseCooldownRemaining`) is deliberately already
 sufficient to build a minimap against once art exists — that's the
 actual goal of this session's work.
+
+**Addendum — rendering, implemented 2026-09-08, same day.** The user
+asked directly whether AI-generated art could work for this HUD widget
+too, the same way it did for the combat-lock warning banner (design.md
+2.3's addendum). Tried it — see "Art" below — and it worked well enough
+to build the real renderer against, subject to the user's own review
+before anything ships as final.
+
+**Key rendering decisions, settled through discussion before writing
+any code:**
+
+- **The scope is north-up and fixed** — it never rotates with the
+  observer's own facing. Only the forward-cone overlay rotates, to
+  track the observer's current heading. (The alternative — the whole
+  scope rotating so "up" always means "my current heading," like some
+  arcade space games do — was considered and explicitly rejected in
+  favor of this simpler, more common minimap convention.)
+- **Each ring represents one detection mechanism's range** (base/cone/
+  pulse), drawn as a full circle regardless of mechanism — the cone's
+  *shape* (forward-only) is a separate wedge overlay drawn on top, not
+  baked into its ring.
+- **The scope's outer edge represents this ship type's own largest
+  enabled range** (`ShipStats#getRadarMaxRangeMeters()`), not one fixed
+  distance for every ship. Decided this way, not the alternative (a
+  single fixed max-range scale shared by every ship), for two reasons:
+  a ship with fewer mechanisms enabled still fills the whole scope
+  instead of wasting most of it on empty space, and — more importantly —
+  the scope's scale never has to visibly jump when the pulse actually
+  fires, which a "rescale to whatever's currently active" approach
+  would cause every 30 seconds.
+- **A pulse-revealed contact beyond the observer's own equipment is
+  clamped to the scope's edge**, at its true bearing, rendered as a
+  distinct chevron rather than a plain dot — communicates direction
+  without falsely implying a precise distance. This clamp needs no
+  knowledge of *why* a contact was detected: ordinary range-based
+  detection can, by construction, never produce a distance beyond the
+  observer's own max range (whatever detected it is one of the ranges
+  that max is built from), so `distance > maxRange` alone is a
+  sufficient (and sufficient-only-for-the-pulse-case) test.
+- **Rings/cone are separate, dynamically-scaled/rotated overlay
+  textures, not baked into the background** — the earlier all-in-one
+  draft (shown to the user first, before this discussion) baked fixed-
+  position rings and a fixed-angle cone directly into the background
+  art. The user caught the real problem with that approach themselves:
+  since each ring's *range* can differ per ship type (once the Ship
+  Tree eventually differentiates them), baking fixed ring positions
+  would make the same physical ring mean different real-world distances
+  for different ships with no visual cue that anything changed — quietly
+  misleading. Splitting rings/cone into separate, runtime-scaled overlay
+  sprites (ordinary `SpriteBatch` scaling/rotation, the same technique
+  `Client.drawTurrets`/`drawLocalShip` already use for ship sprites —
+  no `ShapeRenderer`, which this codebase has deliberately avoided
+  everywhere so far) fixes this at the geometry level: a ring's on-screen
+  radius is always computed live as `range / maxRange`, so it's never
+  wrong regardless of what values a ship type actually has.
+
+**New pure, unit-tested `render.RadarScopeMath`** (9 test cases) — the
+bearing/clamping/range-fraction geometry, pulled out of the actual
+`RadarHud` renderer for the same "logic-heavy math needs a GL-context-free
+home" reason `HudGaugeClip` already exists. `ShipStats` gained
+`getRadarMaxRangeMeters()` (max of whichever of base/cone/pulse are
+enabled).
+
+**New `render.RadarHud`** (no test — thin `SpriteBatch` rendering
+wiring, same as `ShipStatusHud`/`PowerDistributionHud`, neither of
+which has one either) draws the background, up to three range rings,
+the cone overlay (only if the ship type has one), and one marker per
+entry in `Client`'s already-radar-filtered `ships` map — no client-side
+filtering needed, whatever's in that map is exactly what this player's
+radar detects (design.md 2.14's server-side infrastructure already
+guarantees this). Positioned as a third square widget in `Client`'s
+existing bottom-left HUD row, right of the power-distribution widget,
+same size/gap convention.
+
+**Art — 5 new textures, generated via the same Python/Pillow + "SF
+Distant Galaxy" font technique as the combat-lock warning banner
+(design.md 2.3's addendum), not the elaborate 3D-rendered look of the
+hull-status/power-distribution widgets** (winged side panels, ribbed
+gimbals) — that art is a different, more elaborate technique entirely,
+not something worth attempting to fake with a generated flat image.
+Reused the game's existing "unlock-affordable" green (sampled from
+`Padlock_Green.png`) as the scope's accent color, rather than either
+the hull/power widgets' blue-lavender (tied to their own 3D-rendered
+style) or the warning banner's amber (reserved for alerts):
+
+- `hud_radar_background.png` (512×512) — dark glass panel, glowing
+  green border, faint crosshair + center dot, "RADAR" label. No rings/
+  cone baked in (see above). Scope geometry uses clean round numbers,
+  documented as constants in `RadarHud.java`: center at pixel (256,224),
+  radius 150px.
+- `hud_radar_ring.png` (256×256) — one full circle outline, scaled to
+  any diameter at runtime via ordinary sprite scaling.
+- `hud_radar_cone.png` (599×560) — a ±30° wedge (matching every current
+  ship type's actual configured `radarConeHalfAngleDegrees` — a
+  **known simplification**, flagged here: the art assumes a 30° angle;
+  if a ship type is ever configured with a different cone angle, this
+  same texture would render the wrong angular width, since stretching
+  an authored angle isn't a simple linear scale the way stretching its
+  *length* is — revisit if/when ship types actually differentiate cone
+  angles). Apex at the exact bottom-center of the canvas, reaching to
+  the top edge, so its own region height already *is* its apex-to-tip
+  length in texture pixels — runtime scaling needs only one ratio.
+- `hud_radar_blip.png` (64×64) — a plain white filled circle with
+  glow, for an in-range contact.
+- `hud_radar_chevron.png` (64×64) — a small white chevron/arrow, for a
+  clamped (pulse-revealed, out-of-range) contact.
+
+Iterated through three real drafts before writing any Java: a first
+all-in-one background (shown to the user, who then identified the
+baked-ring-scale problem above through their own reasoning, not
+something flagged proactively); a revised, ring/cone-free background;
+and a composited preview (background + dynamically-scaled rings/cone/
+blips/chevron, assembled with a small throwaway Python script mimicking
+the actual runtime math) checked against two scenarios — a ship with
+all three mechanisms enabled, and a hypothetical base-only ship — to
+confirm the per-ship-max-range scaling concept actually reads well
+before committing to it in Java. All five files exist in both
+`assets-raw/hud/` (PascalCase, e.g. `HUD_Radar_Background.png`) and
+`assets/textures/hud/` (the runtime snake_case names above), same
+convention as every other generated HUD asset.
+
+**Verification status:** full `mvn clean install` (all 4 modules) and
+`mvn test` green — 110 core tests (up from 101: +9
+`RadarScopeMathTest`) + 30 server tests. **Not live-verified** — the
+user is testing this themselves once given the go-ahead; this session
+did not launch the client/server (a standing instruction for this
+whole work session, unrelated to this specific feature).
 
 ## 3. Architecture
 

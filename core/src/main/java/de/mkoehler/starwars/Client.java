@@ -39,6 +39,7 @@ import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.PowerDistributionHud;
+import de.mkoehler.starwars.render.RadarHud;
 import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.sim.PhysicsConstants;
@@ -54,6 +55,7 @@ import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -156,6 +158,10 @@ public class Client implements Screen {
     private static final float HUD_POWER_SIZE = 220f;
     /** Horizontal gap, in screen pixels, between the ship-status and power-distribution HUD widgets. */
     private static final float HUD_POWER_GAP = 16f;
+    /** Size, in screen pixels, of the radar/minimap HUD widget (design.md 2.14) - placeholder until tuned by feel. */
+    private static final float HUD_RADAR_SIZE = 220f;
+    /** Horizontal gap, in screen pixels, between the power-distribution and radar HUD widgets. */
+    private static final float HUD_RADAR_GAP = 16f;
     /** How long a power-distribution keybind must be held before it maximizes its system instead of just incrementing it - untuned placeholder. */
     private static final float HOLD_TO_MAXIMIZE_SECONDS = 0.4f;
 
@@ -191,6 +197,7 @@ public class Client implements Screen {
     private ParallaxBackground background;
     private ShipStatusHud statusHud;
     private PowerDistributionHud powerHud;
+    private RadarHud radarHud;
     private ScoreboardHud scoreboardHud;
     private Texture warningBannerTexture;
     private OrthographicCamera camera;
@@ -289,6 +296,7 @@ public class Client implements Screen {
         );
         statusHud = new ShipStatusHud(game.getAssets());
         powerHud = new PowerDistributionHud(game.getAssets());
+        radarHud = new RadarHud(game.getAssets());
         scoreboardHud = new ScoreboardHud(game.getAssets());
         warningBannerTexture = game.getAssets().get(GameAssets.WARNING_BANNER, Texture.class);
 
@@ -678,6 +686,18 @@ public class Client implements Screen {
             hullFraction, shieldFraction);
         powerHud.render(batch, HUD_STATUS_MARGIN + HUD_STATUS_SIZE + HUD_POWER_GAP, HUD_STATUS_MARGIN, HUD_POWER_SIZE,
             myPowerDistribution);
+
+        // Every ship currently in `ships` is already exactly what this player's radar detects
+        // (design.md 2.14 - the server only ever sends detected contacts), so no client-side
+        // filtering is needed here, just converting each one's render position back to meters.
+        List<Vector2> contactPositionsMeters = new ArrayList<>(ships.size());
+        for (RemoteShip ship : ships.values()) {
+            contactPositionsMeters.add(new Vector2(
+                ship.renderX / PhysicsConstants.PIXELS_PER_METER, ship.renderY / PhysicsConstants.PIXELS_PER_METER));
+        }
+        radarHud.render(batch, ShipStats.forType(myShipType),
+            HUD_STATUS_MARGIN + HUD_STATUS_SIZE + HUD_POWER_GAP + HUD_POWER_SIZE + HUD_RADAR_GAP, HUD_STATUS_MARGIN,
+            HUD_RADAR_SIZE, myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters);
     }
 
     /**

@@ -47,6 +47,12 @@ public final class GameAssets {
     public static final String SCOREBOARD_PANEL = "textures/hud/scoreboard.png";
     public static final String AFTER_DEATH_DIALOG_BACKGROUND = "textures/after_death/Dialog_Background.png";
 
+    public static final String RADAR_BACKGROUND = "textures/hud/hud_radar_background.png";
+    public static final String RADAR_RING = "textures/hud/hud_radar_ring.png";
+    public static final String RADAR_CONE = "textures/hud/hud_radar_cone.png";
+    public static final String RADAR_BLIP = "textures/hud/hud_radar_blip.png";
+    public static final String RADAR_CHEVRON = "textures/hud/hud_radar_chevron.png";
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -103,6 +109,11 @@ public final class GameAssets {
         manager.load(HUD_DISTRIBUTION_ENGINE, Texture.class);
         manager.load(SCOREBOARD_PANEL, Texture.class);
         manager.load(AFTER_DEATH_DIALOG_BACKGROUND, Texture.class);
+        manager.load(RADAR_BACKGROUND, Texture.class);
+        manager.load(RADAR_RING, Texture.class);
+        manager.load(RADAR_CONE, Texture.class);
+        manager.load(RADAR_BLIP, Texture.class);
+        manager.load(RADAR_CHEVRON, Texture.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);
