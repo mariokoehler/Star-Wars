@@ -2281,6 +2281,39 @@ still interact differently with the two flagged-not-fixed follow-ups
 above; worth another look if jitter reappears in an actual multiplayer
 session between the UK/Belgium/Norway players.
 
+**`ConnectScreen`'s own `stop()` calls extended to `stopAsync()` too,
+2026-09-08, same day — closing a gap explicitly left open by the
+earlier screen-transition-pause fix above.** The user hit the exact
+same multi-second pause again, this time switching from `ConnectScreen`
+to `ShipSelectionScreen` right after a successful login (an 11.8s
+`stop()`, logged the same way as before). That entry's own text had
+deliberately left `ConnectScreen` alone, reasoning it "already blocks
+synchronously by design while connecting" — true for the connect+
+handshake wait itself (`attemptConnect()`'s own Javadoc says as much),
+but that reasoning doesn't extend to the four `client.stop()` calls
+*after* the handshake resolves, on both the success and every failure
+path — those are just this now-unneeded connection's teardown, not
+part of the documented "blocking connect" contract, and the exact same
+"each `NetworkClient` owns an independent ephemeral-port socket"
+argument that justified `stopAsync()` everywhere else applies here
+unchanged. All four switched to `stopAsync()`, though only the success
+path (line 452, the one that actually transitions screens) is the
+evidenced fix — the other three (unreachable host, no response,
+rejected login) are extended on the same reasoning, not from a separate
+report, and stay on `ConnectScreen` where the user can retry
+immediately. `responseLatch`/`responseRef` are per-call locals captured
+by the connection's `Listener`, so a stale response arriving after a
+now-abandoned attempt (while its `stopAsync()` is still winding down in
+the background) lands on that old, discarded latch, not a subsequent
+attempt's — no cross-call contamination from making these async.
+`remoteLogin` (the MCP tool) needed no separate change — it just calls
+`attemptConnect()`. Full `mvn clean test` green. **Not yet re-verified
+live** — same situation as the original fix, diagnosed from a user-sent
+log, not a client launched this side; note that the *original*
+`Client`/`ShipSelectionScreen` `stopAsync()` fix above also still has no
+live confirmation of its own — this `ConnectScreen` fix is independent
+evidence-wise, not a substitute for testing that one.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

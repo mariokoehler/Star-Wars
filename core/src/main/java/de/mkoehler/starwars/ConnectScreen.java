@@ -419,7 +419,7 @@ public class ConnectScreen implements Screen, RemoteControllable {
             client.connect(NetworkConstants.CONNECTION_TIMEOUT_MILLIS, host,
                 NetworkConstants.TCP_PORT, NetworkConstants.UDP_PORT);
         } catch (IOException e) {
-            client.stop();
+            client.stopAsync();
             connecting = false;
             showError("Could not reach '" + host + "'.");
             return;
@@ -437,19 +437,19 @@ public class ConnectScreen implements Screen, RemoteControllable {
 
         connecting = false;
         if (!responded) {
-            client.stop();
+            client.stopAsync();
             showError("Server did not respond.");
             return;
         }
 
         HandshakeResponse response = responseRef.get();
         if (!response.isAccepted()) {
-            client.stop();
+            client.stopAsync();
             showError(response.getMessage());
             return;
         }
 
-        client.stop();
+        client.stopAsync();
         ConnectionConfigStore.save(new ConnectionConfig(host, displayName, login, password));
         Gdx.input.setInputProcessor(null);
         // Hand off to StarWarsGame before dispose() runs below - a fade takes real time that

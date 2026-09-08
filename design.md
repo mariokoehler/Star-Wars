@@ -3160,16 +3160,33 @@ wait for it synchronously mid-transition. `Client.dispose()`/
 to tear down on the way out) now call `stopAsync()`; `stop()` itself is
 unchanged and still used by tests, where actually waiting for the stop
 to complete matters. `ConnectScreen`'s own `client.stop()` calls were
-deliberately left synchronous — that screen's `attemptConnect()` is
-already fully blocking by design (5.1), so this fix wouldn't change its
-UX contract either way.
+initially left synchronous — that screen's `attemptConnect()` is already
+fully blocking by design (5.1) for the connect+handshake wait itself, so
+this fix wouldn't change *that* part of its UX contract either way.
 
-**Not yet re-verified live with a fresh play session** (this fix landed
-from a code-reading investigation of a sent log, not a live client this
-side) — the user should confirm the screen-transition pause is actually
-gone next time they play; `dispose()`'s own timing log stays in place
-specifically to confirm it now completes in single-digit milliseconds
-regardless of how long the now-backgrounded `stop()` takes.
+**Gap closed the same day, once the user hit it live:** the "already
+blocking by design" reasoning above only covers the connect+handshake
+wait, not the four `client.stop()` calls after the handshake resolves
+(one per outcome: unreachable host, no response, rejected login,
+accepted login) — those are just tearing down a connection the screen
+no longer needs, and the same independent-ephemeral-port argument
+applies to them unchanged. Only the accepted-login path is directly
+evidenced (the user's 11.8s repro was exactly that transition); the
+other three were extended on the same reasoning as a judgment call, not
+a separate report — each keeps the screen up for an immediate retry, so
+a stale response from an abandoned attempt landing after the fact could
+only matter if it wrote to shared state, and it doesn't: `responseLatch`/
+`responseRef` are locals captured fresh per `attemptConnect()` call, so
+an old attempt's late response can only ever satisfy its own, already-
+abandoned wait.
+
+**Not yet re-verified live with a fresh play session** (both this fix
+and the `ConnectScreen` follow-up landed from code-reading investigations
+of sent logs, not a live client this side) — the user should confirm
+both screen-transition pauses are actually gone next time they play;
+`dispose()`'s own timing log stays in place specifically to confirm it
+now completes in single-digit milliseconds regardless of how long the
+now-backgrounded `stop()` takes.
 
 ## 4. Rendering & presentation
 
