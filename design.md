@@ -1979,6 +1979,79 @@ whole work session, unrelated to this specific feature).
    same technique `drawWarningMessage()` already uses for its own
    screen-relative centering).
 
+**Addendum — redesigned background + pulse-cooldown indicator LED,
+2026-09-09.** The user reworked the widget's background art themselves in
+Photoshop, per feedback logged in the entry directly above ("a lot of
+unused real estate around the actual circular scope area") — new
+`HUD_Radar_Background_New.png`, tighter-cropped around the circular scope
+(378×379 vs. the original 512×512, less wasted padding) with a small
+rounded "extrusion" tab molded into the lower-right corner as a socket for
+a new pulse-cooldown indicator LED, plus two new small (60×60) glow
+sprites for it — `HUD_Radar_Indicator_Green.png`/`_Red.png`. Swapped in as
+a straight replacement at the same runtime path
+(`textures/hud/hud_radar_background.png`) — `GameAssets`/`RadarHud`
+didn't need a new constant for the background itself, just updated
+geometry (see below). Old `HUD_Radar_Background.png` intentionally left
+in place in `assets-raw/hud/` for now, at the user's own request, until
+it's confirmed no longer needed.
+
+**Scope geometry re-measured against the new art, not guessed.** The new
+background moves the crosshair center and changes the safe interior
+radius — measured directly off the actual pixels (a small Python/PIL
+script scanning for the bright center-dot cluster and the alpha/color
+transition from the dark interior into the gold border ring) rather than
+eyeballed: center at (188.5, 189.5) of the 378×379 canvas — now genuinely
+dead-center both axes, unlike the original art's vertically-offset
+layout — and a safe interior radius of 150px (comfortably inside the
+measured ~156px transition into the border, leaving a deliberate margin).
+`RadarHud`'s `SCOPE_CENTER_X_FRACTION`/`SCOPE_CENTER_Y_FRACTION_FROM_BOTTOM`/
+`SCOPE_RADIUS_FRACTION` all updated to derive from these measurements and
+the new art's own native pixel dimensions, rather than hardcoded literals
+against the old 512px art. Sanity-checked before ever touching the running
+game: composited the new background against the actual updated ring/cone
+textures at these new fractions with a throwaway Python script (same
+"composite onto the real background before judging" technique already
+established in this section's first addendum) — rings/cone sit centered
+on the crosshair with a clean margin inside the border, confirming the
+re-measured geometry is right.
+
+**New indicator LED — green when the active pulse (2.14 above) is enabled
+for this ship type and off cooldown, red otherwise** (disabled entirely,
+*or* on cooldown — the spec draws no visual distinction between those two
+"can't pulse right now" cases, so neither does the LED). Positioned via
+the user's own exact spec: the 60×60 sprite's top-left corner at pixel
+offset (300, 300) of the background's own image-space (Y measured down
+from the top) — `RadarHud.drawIndicator` converts that into a
+size-relative fraction the same way the scope geometry above does, then
+converts image-space "Y from top" into this codebase's screen-space
+"Y from bottom" convention (the background quad's top edge sits at
+{@code y + size} in screen coordinates, same reasoning `drawTurrets`/
+`drawCone` already apply elsewhere for a Y-up/Y-down conversion).
+Independently confirmed via the same pixel-measurement approach used for
+the scope center: the art's own molded socket decoration (a small ~9px
+circle visible in the extrusion tab) sits almost exactly at the center of
+where a 60×60 sprite placed at that offset would land — the user's given
+numbers and an independent pixel measurement agree.
+
+`Client.myRadarPulseCooldownRemaining` (already tracked since 2.14's
+original infrastructure milestone, explicitly flagged then as "not read
+by anything yet") is now finally consumed — `RadarHud.render` gained a
+`pulseCooldownRemainingSeconds` parameter, computing
+`stats.isRadarPulseEnabled() && pulseCooldownRemainingSeconds <= 0f`
+internally rather than pushing that boolean computation onto the caller.
+
+**`assets-raw/psd/` — new folder, user's own Photoshop source files,
+starting with `HUD_Radar_Background.psd`.** Explicitly told to leave these
+alone (don't touch, don't delete) but flagged as safe either way: checked
+`AtlasPacker.main()` — only `assets-raw/ships`, `assets-raw/projectiles`,
+and `assets-raw/menu` are ever atlas-packed; `assets-raw/hud/` (and now
+`assets-raw/psd/`) were never touched by that pipeline at all, so this new
+folder can't interact with atlas generation regardless of what ends up in
+it.
+
+**Verified live, 2026-09-09, same day.** User: "i tested it and
+everything looks very good!" Full `mvn clean test` green throughout.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape

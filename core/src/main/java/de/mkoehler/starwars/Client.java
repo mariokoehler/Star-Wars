@@ -297,9 +297,9 @@ public class Client implements Screen {
     private float[] myTurretAimAngles = new float[0];
     /**
      * How much longer until this ship's radar pulse (design.md 2.14, "R")
-     * can be triggered again - not read by anything yet (no minimap/HUD
-     * exists for it this session), kept in sync purely so that HUD has the
-     * data it needs once it does.
+     * can be triggered again - drives {@link RadarHud}'s pulse-cooldown
+     * indicator LED (2026-09-09 addendum): green once this reaches
+     * {@code <= 0}, red otherwise.
      */
     private float myRadarPulseCooldownRemaining;
     /** Latest scoreboard from the server (design.md 2.11) - only drawn while TAB is held. */
@@ -910,7 +910,8 @@ public class Client implements Screen {
         float radarX = Gdx.graphics.getWidth() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
         float radarY = Gdx.graphics.getHeight() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
         radarHud.render(batch, ShipStats.forType(myShipType), radarX, radarY, HUD_RADAR_SIZE,
-            myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters);
+            myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters,
+            myRadarPulseCooldownRemaining);
     }
 
     /**

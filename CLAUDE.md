@@ -2504,6 +2504,41 @@ off-by-one-frame fix, local shot prediction) is genuinely closed. Full
 `mvn clean test` green throughout. Committed as `ebc0d16`/`4963df2`,
 pushed.
 
+**Radar widget: redesigned background + pulse-cooldown indicator LED —
+implemented 2026-09-09.** See design.md 2.14's newest addendum for the
+full writeup. User reworked the background art themselves in Photoshop
+(feedback from an earlier play-test: too much unused space around the
+circular scope) and added a pulse-cooldown LED: new
+`HUD_Radar_Background_New.png` (378×379, tighter crop, a small molded
+"extrusion" socket in the lower-right for the LED) swapped in at the same
+runtime path, plus two new 60×60 glow sprites
+(`HUD_Radar_Indicator_Green.png`/`_Red.png`). Green when the ship's pulse
+is enabled and off cooldown, red otherwise (disabled or on cooldown —
+same color for both, the spec draws no distinction).
+
+**Scope geometry re-measured off the actual new art, not guessed:** a
+throwaway Python/PIL script found the crosshair center (188.5, 189.5 of
+378×379 — now dead-center both axes, unlike the old off-center-vertically
+layout) and the safe interior radius before the border ring starts
+(~156px) by scanning pixel alpha/color transitions directly, rather than
+eyeballing. `RadarHud`'s three scope-geometry constants now derive from
+these measurements and the new art's real dimensions. Indicator placement
+used the user's exact given offset (300, 300 px, top-left, image-space Y
+from top) — independently cross-checked against a small decorative circle
+already molded into the art's socket, which sits almost exactly where a
+60×60 sprite at that offset lands, confirming the given numbers.
+`Client.myRadarPulseCooldownRemaining` (tracked since the original radar
+milestone, explicitly flagged then as unused) is finally consumed here.
+
+**`assets-raw/psd/` — new folder for the user's own Photoshop source
+files.** Told to leave it alone; checked `AtlasPacker.main()` first to
+confirm it's safe regardless — only `ships`/`projectiles`/`menu` under
+`assets-raw/` are ever atlas-packed, `hud/` (and now `psd/`) were never
+touched by that pipeline.
+
+**Verified live, 2026-09-09, same day.** User: "i tested it and
+everything looks very good!" Full `mvn clean test` green throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

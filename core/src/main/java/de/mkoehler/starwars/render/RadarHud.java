@@ -15,9 +15,11 @@ import java.util.List;
  * addendum): a north-up, fixed scope (it never rotates with the observer's
  * own facing — see {@link RadarScopeMath}'s class Javadoc) showing up to
  * three range rings, a forward-facing cone overlay that <em>does</em> rotate
- * with the observer, and one marker per currently-known contact (a plain
+ * with the observer, one marker per currently-known contact (a plain
  * dot in range, a chevron pinned to the scope's edge for a pulse-revealed
- * contact beyond the observer's own equipment).
+ * contact beyond the observer's own equipment), and a pulse-cooldown
+ * indicator LED ({@link #drawIndicator}, added 2026-09-09) that's
+ * independent of the scope geometry entirely.
  * <p>
  * The scope is scaled to <em>this ship type's own</em> largest enabled
  * radar range ({@link ShipStats#getRadarMaxRangeMeters()}), not one fixed
@@ -28,19 +30,52 @@ import java.util.List;
  * skipped entirely for a ship type without one, not drawn at some
  * degenerate zero size.
  * <p>
- * All five source images are read from the shared {@link AssetManager} (see
+ * All seven source images are read from the shared {@link AssetManager} (see
  * {@link ShipStatusHud}'s class Javadoc for the same reasoning) rather than
  * loaded/disposed by this class itself, so this class owns nothing and
  * needs no {@code dispose()}.
  */
 public class RadarHud {
 
-    /** Fraction of the widget's drawn size the scope's center sits at horizontally — the background art's own authored geometry (256 of 512px). */
-    private static final float SCOPE_CENTER_X_FRACTION = 0.5f;
-    /** Fraction of the widget's drawn size the scope's center sits at, measured from the bottom (Y-up) — 1 - 224/512. */
-    private static final float SCOPE_CENTER_Y_FRACTION_FROM_BOTTOM = 1f - 224f / 512f;
-    /** Fraction of the widget's drawn size the scope's radius spans — 150/512. */
-    private static final float SCOPE_RADIUS_FRACTION = 150f / 512f;
+    /**
+     * The redesigned background art's (2026-09-09) own native pixel size —
+     * used both for the scope-geometry fractions below and for
+     * {@link #drawIndicator}'s conversion of the indicator LED's authored
+     * pixel offset into a size-relative fraction. Smaller and less square
+     * than the original 512×512 art (378×379, plus a small rounded
+     * "extrusion" tab in the lower-right corner molded in for the indicator
+     * LED) — wastes less widget space around the actual circular scope, per
+     * the user's own framing when providing it.
+     */
+    private static final float BACKGROUND_TEXTURE_WIDTH = 378f;
+    private static final float BACKGROUND_TEXTURE_HEIGHT = 379f;
+    /**
+     * Fraction of the widget's drawn size the scope's center sits at
+     * horizontally — measured directly off the new background art (crosshair
+     * center at pixel (188.5, 189.5) of 378×379, i.e. dead center this time,
+     * unlike the original art's off-center-vertically layout).
+     */
+    private static final float SCOPE_CENTER_X_FRACTION = 188.5f / BACKGROUND_TEXTURE_WIDTH;
+    /** Fraction of the widget's drawn size the scope's center sits at, measured from the bottom (Y-up) — 1 - 189.5/379. */
+    private static final float SCOPE_CENTER_Y_FRACTION_FROM_BOTTOM = 1f - 189.5f / BACKGROUND_TEXTURE_HEIGHT;
+    /**
+     * Fraction of the widget's drawn size the scope's radius spans — 150px,
+     * chosen to sit safely inside the new art's dark glass disc (the disc's
+     * hash-textured interior measured out to ~156px from center before
+     * transitioning into the gold border ring, so 150px leaves a small,
+     * deliberate margin rather than grazing the border).
+     */
+    private static final float SCOPE_RADIUS_FRACTION = 150f / BACKGROUND_TEXTURE_WIDTH;
+    /**
+     * The pulse-cooldown indicator LED's authored top-left offset, in the
+     * background art's own pixel space (image space — Y measured down from
+     * the top, per the user's own framing when specifying it) — matches the
+     * small molded socket in the art's lower-right "extrusion" tab. 60×60,
+     * same native size as {@link #indicatorGreen}/{@link #indicatorRed}.
+     */
+    private static final float INDICATOR_OFFSET_X_PIXELS = 300f;
+    private static final float INDICATOR_OFFSET_Y_PIXELS_FROM_TOP = 300f;
+    private static final float INDICATOR_SIZE_PIXELS = 60f;
     /**
      * The ring overlay's own crisp circle sits at 90% of its texture's own
      * half-width (its outer glow needs the remaining margin so it doesn't
@@ -58,9 +93,11 @@ public class RadarHud {
     private final TextureRegion cone;
     private final TextureRegion blip;
     private final TextureRegion chevron;
+    private final TextureRegion indicatorGreen;
+    private final TextureRegion indicatorRed;
 
     /**
-     * Creates the widget, reading its five source textures from
+     * Creates the widget, reading its seven source textures from
      * {@code assets} immediately — all must already be loaded (see the
      * class Javadoc).
      *
@@ -72,6 +109,8 @@ public class RadarHud {
         cone = new TextureRegion(assets.get(GameAssets.RADAR_CONE, Texture.class));
         blip = new TextureRegion(assets.get(GameAssets.RADAR_BLIP, Texture.class));
         chevron = new TextureRegion(assets.get(GameAssets.RADAR_CHEVRON, Texture.class));
+        indicatorGreen = new TextureRegion(assets.get(GameAssets.RADAR_INDICATOR_GREEN, Texture.class));
+        indicatorRed = new TextureRegion(assets.get(GameAssets.RADAR_INDICATOR_RED, Texture.class));
     }
 
     /**
@@ -95,11 +134,18 @@ public class RadarHud {
      * @param contactPositionsMeters every currently-known contact's world position, in meters —
      *                               already radar-filtered server-side (design.md 2.14), so every
      *                               entry here is drawn, none are filtered again client-side
+     * @param pulseCooldownRemainingSeconds the observer's own active-pulse
+     *                                       cooldown ({@code ShipState#getRadarPulseCooldownRemaining()}),
+     *                                       {@code <= 0} meaning ready — drives the indicator LED
+     *                                       ({@link #drawIndicator}), independent of whether any
+     *                                       range ring/contact is drawn this call
      */
     public void render(SpriteBatch batch, ShipStats stats, float x, float y, float size,
                         float observerXMeters, float observerYMeters, float observerAngleRadians,
-                        List<Vector2> contactPositionsMeters) {
+                        List<Vector2> contactPositionsMeters, float pulseCooldownRemainingSeconds) {
         batch.draw(background, x, y, size, size);
+        boolean pulseAvailable = stats.isRadarPulseEnabled() && pulseCooldownRemainingSeconds <= 0f;
+        drawIndicator(batch, pulseAvailable, x, y, size);
 
         float maxRangeMeters = stats.getRadarMaxRangeMeters();
         if (maxRangeMeters <= 0f) {
@@ -126,6 +172,30 @@ public class RadarHud {
             drawContact(batch, observerXMeters, observerYMeters, contact.x, contact.y, maxRangeMeters,
                 scopeCenterX, scopeCenterY, scopeRadius, size);
         }
+    }
+
+    /**
+     * Draws the pulse-cooldown indicator LED (2026-09-09) — green when the
+     * active pulse is enabled for this ship type and off cooldown, red
+     * otherwise (disabled entirely, or on cooldown; the two cases share one
+     * color since neither means "press R right now"). Positioned at the
+     * background art's own molded socket in its lower-right "extrusion" tab,
+     * via {@link #INDICATOR_OFFSET_X_PIXELS}/{@link #INDICATOR_OFFSET_Y_PIXELS_FROM_TOP}
+     * converted from that art's native pixel space into a fraction of
+     * {@code size} — independent of the scope's own center/radius geometry
+     * above, since the LED isn't part of the circular scope at all.
+     */
+    private void drawIndicator(SpriteBatch batch, boolean available, float x, float y, float size) {
+        TextureRegion region = available ? indicatorGreen : indicatorRed;
+        float widthPixels = size * INDICATOR_SIZE_PIXELS / BACKGROUND_TEXTURE_WIDTH;
+        float heightPixels = size * INDICATOR_SIZE_PIXELS / BACKGROUND_TEXTURE_HEIGHT;
+        float leftX = x + size * INDICATOR_OFFSET_X_PIXELS / BACKGROUND_TEXTURE_WIDTH;
+        // The background quad's top edge is at y + size (batch.draw's (x, y) is its bottom-left,
+        // screen space is Y-up) - the offset is authored Y-down from that top edge, per the art's
+        // own image-space convention.
+        float topY = y + size - size * INDICATOR_OFFSET_Y_PIXELS_FROM_TOP / BACKGROUND_TEXTURE_HEIGHT;
+        float bottomY = topY - heightPixels;
+        batch.draw(region, leftX, bottomY, widthPixels, heightPixels);
     }
 
     private void drawRing(SpriteBatch batch, boolean enabled, float rangeMeters, float maxRangeMeters,
