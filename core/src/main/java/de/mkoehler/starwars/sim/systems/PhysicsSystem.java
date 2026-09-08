@@ -71,9 +71,19 @@ public class PhysicsSystem extends EntitySystem {
     /**
      * Returns how far the accumulator is toward the next fixed step, for
      * interpolating a rendered position between the last two physics states.
+     * <p>
+     * Normally in {@code [0, 1)}: {@code 0} right after a step, approaching
+     * {@code 1} just before the next one. <b>Not clamped there</b>, though —
+     * if {@code deltaTime} passed to {@link #update(float, Runnable)} is
+     * large enough that {@link PhysicsConstants#MAX_STEPS_PER_FRAME} caps
+     * how many steps that one call can drain (e.g. after a render-thread
+     * stall), leftover time stays in the accumulator and this can return a
+     * value well past {@code 1} until subsequent calls catch it back up. A
+     * caller that lerps between two states using this as the blend factor
+     * (as {@code Client.drawLocalShip} does) will then extrapolate past the
+     * current state rather than interpolate (design.md 3.5's addendum).
      *
-     * @return a value in {@code [0, 1)}: {@code 0} right after a step,
-     * approaching {@code 1} just before the next one
+     * @return normally a value in {@code [0, 1)}; see above for when it isn't
      */
     public float getAlpha() {
         return accumulator / PhysicsConstants.TIME_STEP;

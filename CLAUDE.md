@@ -2206,6 +2206,81 @@ actually gone (or at least no longer blocks anything visible) — the
 report single-digit milliseconds regardless of how long the
 now-backgrounded `stop()` takes underneath.
 
+**Terminal-velocity jitter — root-caused and fixed, 2026-09-08, same
+day.** See design.md 3.5's addendum for the full writeup. User report
+from live play-testing: holding only "W" (constant thrust, no turning)
+eventually hit a stable top speed and got visibly jittery there — the
+user's own diagnosis was sharp and correct: "this should be the perfect
+scenario for local prediction... which leads me to believe there is
+still something wrong with our netcode or the prediction." They were
+right. Root cause: `Client.reconcileWithServer` compared the server
+snapshot's raw reported position directly against the local body's
+live, current-frame prediction — but a snapshot is never "now," it's
+already stale by at least one server tick interval plus transit/
+queueing time by the time it's applied client-side. That manufactured a
+phantom "error" out of pure staleness (`velocity × staleness`), scaling
+directly with speed — exactly the reported symptom. Fixed by
+extrapolating the snapshot forward by the wall-clock time since the
+previous reconciliation, using its own reported velocity, before
+computing the error against the body — the same dead-reckoning
+`RemoteShip` already uses for every other player's ship
+(`mySnapshotElapsedSeconds`).
+
+**Process, worth repeating since it's the actual reason this got
+documented correctly instead of prematurely:** the fix built clean on
+the first attempt and looked complete from code-reading alone — but a
+plausible-sounding steady-state analysis suggested a blended, position-
+only correction should converge to a constant offset, not the reported
+oscillation, casting doubt on whether staleness was really the (or the
+whole) cause. Rather than write this up as a confirmed root cause on
+reasoning alone, temporary diagnostic logging was added
+(`reconcile:`/`renderDelta:` lines in `Client`, since removed) and the
+user was asked to actually re-test with a real localhost A/B comparison
+(same setup, pre-fix vs. post-fix) plus a log from the jittery phase —
+**exactly the kind of live verification this file has praised
+repeatedly elsewhere and should keep insisting on before declaring a
+netcode fix confirmed.** The user's first log paste turned out to be a
+copy/paste mistake (unrelated `connect()`/`stop()` timing output); the
+corrected log is what actually confirmed the fix, not the first
+build-and-reason-about-it pass. A clean ×0.8 (`1 - RECONCILE_SOFT_BLEND`)
+geometric decay toward **zero** error after a one-off disturbance,
+alongside a separate steady-state run holding error under a centimeter
+at 93.6 m/s, is the actual evidence the extrapolation amount is
+correctly centered, not just plausible.
+
+**Real, flagged-not-fixed follow-up found in the same log data:**
+reconciliation is now correct *on average* but not fully robust to
+snapshot-delivery timing *noise*, amplified by speed — at ~90 m/s, only
+~32ms of unaccounted jitter crosses the 3m hard-snap threshold. Two
+concrete contributors identified, neither fixed yet: (1) `Client.
+render()`'s `pendingUpdates` drain can process more than one queued
+snapshot's reconciliation in a single frame after a stall, and every
+call after the first extrapolates by ~0 elapsed time since it was just
+reset, self-inflicting an avoidable snap; (2) `PhysicsSystem.getAlpha()`
+was documented to return `[0, 1)` but isn't actually clamped there once
+`MAX_STEPS_PER_FRAME` caps how much of a large `deltaTime` one call can
+drain — real values of 1.44 and 4.25 were observed live during a stall,
+meaning the render-side lerp extrapolated several body-lengths past the
+current position for that one frame. Javadoc corrected to describe the
+real behavior; the underlying clamp itself is still open. Both stalls in
+the log showed the same "physics accumulator way behind" signature
+already seen once before in this project (the still-open, wildly-
+variable `connect()`/`stop()` timing investigation above) — flagged as a
+possible shared cause, not confirmed as one.
+
+**Verified live, with real before/after data from the user, not just
+reasoning about the code:** two localhost play-test runs, one against
+the pre-fix build (confirmed jittery, matching the original report) and
+one against the fix (no discernible jitter at any speed over an
+extended flight) — a genuine same-machine, same-setup A/B comparison.
+Full `mvn clean test` green throughout. **Not yet tested over the real
+(non-loopback) internet latency the actual player group uses** — the
+localhost result rules out the reconciliation math being wrong, but
+real transit latency (unlike localhost's near-zero transit time) could
+still interact differently with the two flagged-not-fixed follow-ups
+above; worth another look if jitter reappears in an actual multiplayer
+session between the UK/Belgium/Norway players.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

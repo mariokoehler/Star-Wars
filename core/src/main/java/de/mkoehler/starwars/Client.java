@@ -223,6 +223,16 @@ public class Client implements Screen {
     private float myPreviousX;
     private float myPreviousY;
     private float myPreviousAngle;
+    /**
+     * Wall-clock seconds elapsed since the local player's own last
+     * {@link WorldSnapshotMessage} entry was reconciled — accumulated every
+     * frame in {@link #render(float)}, reset to zero inside
+     * {@link #reconcileWithServer}. See that method's Javadoc for why this
+     * exists: a snapshot is already stale by however long it took to
+     * arrive/queue, and without compensating for that, reconciliation was
+     * treating pure snapshot staleness as prediction error.
+     */
+    private float mySnapshotElapsedSeconds;
     private float myHullCurrent;
     private float myHullMax;
     private float myShieldCurrent;
@@ -405,6 +415,9 @@ public class Client implements Screen {
         myPreviousX = myBody.getPosition().x;
         myPreviousY = myBody.getPosition().y;
         myPreviousAngle = myBody.getAngle();
+        // A fresh body means no meaningful "elapsed since last reconciled snapshot" yet either -
+        // avoids extrapolating the very first post-spawn snapshot using a stale accumulated value.
+        mySnapshotElapsedSeconds = 0f;
 
         // Full hull/shield until the first WorldSnapshotMessage arrives - otherwise the HUD
         // would flash empty for a frame or two right after spawning/respawning.
@@ -553,6 +566,33 @@ public class Client implements Screen {
      * (including velocity) for a large one, so a bad desync — e.g. from a
      * burst of dropped packets — can't leave the local prediction
      * permanently wrong.
+     * <p>
+     * <b>Extrapolates {@code state} forward before comparing it against
+     * {@link #myBody}, by {@link #mySnapshotElapsedSeconds} — the wall-clock
+     * time since the previous snapshot was reconciled.</b> Fixes a user-
+     * reported high-speed jitter while holding a constant, single-input
+     * thrust (design.md 3.5's addendum). {@code state} describes the ship's
+     * position as of whenever the server captured it — already stale by the
+     * time it's applied here, by at least one tick interval (design.md 3.5,
+     * {@code SIMULATION_TICK_RATE_HZ}) plus transit/queueing time. Comparing
+     * that raw, already-old position directly against {@link #myBody}'s
+     * live, up-to-the-current-frame prediction manufactures a phantom
+     * "error" out of pure staleness, not actual divergence — and since that
+     * phantom error is {@code velocity × staleness}, it scales directly
+     * with speed. Extrapolating {@code state} forward by the elapsed time
+     * using its own reported velocity — the same dead-reckoning
+     * {@link RemoteShip} already uses for every other player's ship, just
+     * applied to this one's reconciliation target too — cancels that
+     * phantom error out, leaving only genuine prediction drift for the
+     * blend/snap logic below to actually correct.
+     * <p>
+     * <b>Known limitation:</b> this compensates for a snapshot's average
+     * staleness, not variance in it — snapshot-delivery timing noise can
+     * still produce a real (much smaller) residual error, and since that
+     * error also scales with speed, a large enough delivery-timing outlier
+     * at high speed can still cross {@link #RECONCILE_SNAP_THRESHOLD_METERS}
+     * and trigger a visible snap (design.md 3.5's addendum has the specifics
+     * and two identified, unfixed contributors).
      *
      * @param state the local player's ship state from the latest snapshot
      */
@@ -560,18 +600,23 @@ public class Client implements Screen {
         if (myBody == null) {
             return;
         }
-        float dx = state.getX() - myBody.getPosition().x;
-        float dy = state.getY() - myBody.getPosition().y;
+        float extrapolatedX = state.getX() + state.getVelocityX() * mySnapshotElapsedSeconds;
+        float extrapolatedY = state.getY() + state.getVelocityY() * mySnapshotElapsedSeconds;
+        float extrapolatedAngle = state.getAngle() + state.getAngularVelocity() * mySnapshotElapsedSeconds;
+        mySnapshotElapsedSeconds = 0f;
+
+        float dx = extrapolatedX - myBody.getPosition().x;
+        float dy = extrapolatedY - myBody.getPosition().y;
         float errorMeters = (float) Math.sqrt(dx * dx + dy * dy);
 
         if (errorMeters > RECONCILE_SNAP_THRESHOLD_METERS) {
-            myBody.setTransform(state.getX(), state.getY(), state.getAngle());
+            myBody.setTransform(extrapolatedX, extrapolatedY, extrapolatedAngle);
             myBody.setLinearVelocity(state.getVelocityX(), state.getVelocityY());
             myBody.setAngularVelocity(state.getAngularVelocity());
         } else {
-            float blendedX = MathUtils.lerp(myBody.getPosition().x, state.getX(), RECONCILE_SOFT_BLEND);
-            float blendedY = MathUtils.lerp(myBody.getPosition().y, state.getY(), RECONCILE_SOFT_BLEND);
-            float blendedAngle = MathUtils.lerpAngle(myBody.getAngle(), state.getAngle(), RECONCILE_SOFT_BLEND);
+            float blendedX = MathUtils.lerp(myBody.getPosition().x, extrapolatedX, RECONCILE_SOFT_BLEND);
+            float blendedY = MathUtils.lerp(myBody.getPosition().y, extrapolatedY, RECONCILE_SOFT_BLEND);
+            float blendedAngle = MathUtils.lerpAngle(myBody.getAngle(), extrapolatedAngle, RECONCILE_SOFT_BLEND);
             myBody.setTransform(blendedX, blendedY, blendedAngle);
         }
     }
@@ -584,6 +629,11 @@ public class Client implements Screen {
         }
 
         ScreenUtils.clear(0.05f, 0.05f, 0.08f, 1f);
+
+        // Accumulated before draining pendingUpdates below, so a snapshot processed this very
+        // frame (reconcileWithServer) sees an elapsed value that includes this frame's own
+        // deltaTime - see mySnapshotElapsedSeconds' and reconcileWithServer's Javadoc.
+        mySnapshotElapsedSeconds += deltaTime;
 
         Runnable update;
         while ((update = pendingUpdates.poll()) != null) {

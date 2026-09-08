@@ -2070,6 +2070,82 @@ proving both channels work end-to-end.
   headless backend the same as on the client, rather than adding SLF4J/
   Logback — no need for a separate logging dependency at this scale.
 
+**Terminal-velocity jitter — root-caused and fixed, 2026-09-08.** User
+report: holding only "W" (constant thrust, no turning — the case local
+prediction should nail perfectly) eventually reached a stable top speed,
+at which point the ship rendered visibly "jittery," worse at/near top
+speed. Root cause: the reconciliation logic above compares
+`WorldSnapshotMessage`'s reported position directly against the local
+body's live, current-frame prediction — but that reported position was
+never "now," it's however old the snapshot already was by the time it's
+applied here (at least one server tick interval, `SIMULATION_TICK_RATE_HZ`,
+plus transit/queueing). Comparing a stale position to a live one
+manufactures a phantom "error" out of pure staleness, not real
+divergence — and since that phantom error is `velocity × staleness`, it
+scales directly with speed, exactly matching the reported symptom.
+**Fix:** extrapolate the snapshot's position/angle forward by the wall-
+clock time since the previous reconciliation, using its own reported
+velocity, before computing the error — the same dead-reckoning technique
+`RemoteShip` already uses for every other player's ship, just applied to
+the local player's own reconciliation target too
+(`Client.mySnapshotElapsedSeconds`/`reconcileWithServer`).
+
+**Confirmed with a real same-machine A/B test, not just reasoning about
+the code** (worth stating plainly — the first candidate fix looked
+plausible from code-reading alone but was deliberately *not* written up
+here or reported as confirmed until real before/after data existed;
+see the process note below). The user ran the exact same localhost
+setup twice, once against the pre-fix build (visibly jittery at speed,
+confirmed as a real regression by their own account) and once against
+the fix (no discernible jitter at any speed over an extended flight).
+A logged jitter-free run at 93.6 m/s shows `errorMeters` sitting at
+0.0002–0.009m every reconciliation — two to three orders of magnitude
+tighter than any error size that could plausibly render as visible
+jitter. A separate logged run that *did* still show some residual
+jitter is equally informative: after one one-off disturbance, error
+decayed 1.126 → 0.901 → 0.721 → 0.576 → 0.461 → 0.369, a clean geometric
+×0.8 ratio — exactly `1 - RECONCILE_SOFT_BLEND` — converging toward
+**zero**, not toward some nonzero residual. That's the signature of a
+correctly-centered extrapolation: a biased one would decay toward a
+nonzero asymptote instead.
+
+**Known, flagged-not-fixed follow-up: reconciliation is now correct on
+average but still not fully robust to snapshot-delivery timing *noise*,**
+amplified by speed — found in the same log data, not separately
+reproduced. At ~90 m/s, only ~32ms of unaccounted-for delivery jitter is
+enough to cross `RECONCILE_SNAP_THRESHOLD_METERS` (3m) and trigger a
+hard position+velocity snap; a real stall in that same log produced a
+burst of three back-to-back snapshots processed in one frame (errors
+6.76m/6.44m, then 12.4m/10.9m/3.1m/3.1m in a second stall), each a
+visible teleport. Two concrete, unfixed contributors identified from
+that log:
+1. `Client.render()`'s `pendingUpdates` drain loop can run more than one
+   queued snapshot's worth of reconciliation in a single frame (normal
+   after any stall, since KryoNet's network thread keeps enqueueing
+   while the render thread was blocked) — every call after the first in
+   that drain extrapolates by ~0 elapsed time (`mySnapshotElapsedSeconds`
+   was just reset), comparing an already-stale-again snapshot against
+   the body and manufacturing exactly the phantom error this fix exists
+   to cancel, one frame later than the first.
+2. `PhysicsSystem.getAlpha()` is documented to return `[0, 1)` but isn't
+   actually clamped there once `PhysicsConstants.MAX_STEPS_PER_FRAME`
+   caps how much of a large `deltaTime` one `update()` call can drain —
+   the same log shows alpha values of 1.44 and 4.25 during the stalls,
+   meaning `drawLocalShip`'s interpolation extrapolated several
+   body-lengths past the current position for that one frame, turning a
+   stall into a much larger visible jump than the underlying physics
+   error alone would produce. (Javadoc corrected to describe the actual,
+   unclamped behavior; the clamp itself is not yet added.)
+
+Neither of the two stalls in the log was itself explained — both show
+the same "physics accumulator way behind, `getAlpha()` far past 1"
+signature already seen once before in this project (3.15's addendum,
+the screen-transition-pause investigation's still-open, wildly-variable
+`connect()`/`stop()` timing on this exact machine). Worth a mention as a
+lead, not asserted as the same cause: if *something* occasionally stalls
+threads unpredictably on this machine, it plausibly isn't limited to
+connect/stop calls specifically.
+
 **First implementation milestone (2026-09-05) — done:** connection
 lifecycle (connect/disconnect), a handshake round trip, and a ping/pong
 round trip over *both* the TCP and UDP channels, covered by
