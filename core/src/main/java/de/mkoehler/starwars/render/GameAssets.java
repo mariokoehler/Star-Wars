@@ -1,0 +1,117 @@
+package de.mkoehler.starwars.render;
+
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.assets.AssetManager;
+import com.badlogic.gdx.files.FileHandle;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.TextureAtlas;
+import de.mkoehler.starwars.sim.ShipType;
+
+/**
+ * Every shared texture atlas/texture this app ever needs, as classpath
+ * paths, plus {@link #queueAll} to queue them all into an
+ * {@link AssetManager} — the single source of truth for "what art does this
+ * game load," read by {@link de.mkoehler.starwars.SplashScreen} (which
+ * queues everything up front, once) and by every later screen/HUD widget,
+ * which only ever call {@link AssetManager#get} against paths already
+ * resident from that one load rather than constructing/disposing their own
+ * {@link Texture}/{@link TextureAtlas} instances directly on every screen
+ * transition.
+ * <p>
+ * Deliberately excludes a few asset-shaped things that stay outside the
+ * {@link AssetManager} on purpose: {@link GameFonts}-generated
+ * {@code BitmapFont}s (cheap to (re)generate, and each caller needs its own
+ * disposable instance at its own pixel size — not worth the extra
+ * {@code FreetypeFontLoader} plumbing for something this fast); the Connect
+ * Screen's {@code audio/StarWarsTheme.mp3} (streamed {@code Music}, loaded
+ * exactly once, not a repeated-load concern); and
+ * {@link PlaceholderStarfield}'s generated texture (procedural, not a file
+ * at all — see its own Javadoc for why it's still a placeholder).
+ */
+public final class GameAssets {
+
+    public static final String MENU_ATLAS = "textures/menu.atlas";
+    public static final String SHIPS_ATLAS = "textures/ships.atlas";
+    public static final String PROJECTILES_ATLAS = "textures/projectiles.atlas";
+
+    public static final String LOGO = "textures/menu/logo.png";
+    public static final String MENU_STARFIELD = "textures/backgrounds/menu_starfield.png";
+    public static final String BLUE_NEBULA = "textures/backgrounds/blue_nebula.png";
+    public static final String WARNING_BANNER = "textures/hud/hud_warning_ejection_locked.png";
+    public static final String HUD_STATUS_BACKGROUND = "textures/hud/hud_status_background.png";
+    public static final String HUD_STATUS_SHIELD = "textures/hud/hud_status_shield.png";
+    public static final String HUD_DISTRIBUTION_BACKGROUND = "textures/hud/hud_distribution_background.png";
+    public static final String HUD_DISTRIBUTION_SHIELD = "textures/hud/hud_distribution_shield.png";
+    public static final String HUD_DISTRIBUTION_WEAPONS = "textures/hud/hud_distribution_weapons.png";
+    public static final String HUD_DISTRIBUTION_ENGINE = "textures/hud/hud_distribution_engine.png";
+    public static final String SCOREBOARD_PANEL = "textures/hud/scoreboard.png";
+    public static final String AFTER_DEATH_DIALOG_BACKGROUND = "textures/after_death/Dialog_Background.png";
+
+    /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
+    public static final int AFTER_DEATH_QUOTE_COUNT = 23;
+
+    private GameAssets() {
+    }
+
+    /**
+     * Returns the classpath path of {@code type}'s HUD hull silhouette
+     * texture (design.md 2.6/2.7). Not guaranteed to exist on disk for
+     * every {@link ShipType} — {@link #queueAll} only queues it when it
+     * does, and {@link ShipStatusHud} falls back to the X-wing's own art
+     * for any type it doesn't find loaded.
+     *
+     * @param type the ship type
+     * @return the texture's classpath path
+     */
+    public static String shipHullTexturePath(ShipType type) {
+        return "textures/hud/" + type.getResourceName() + "_hull.png";
+    }
+
+    /**
+     * Returns the classpath path of one Death Screen quote image
+     * (design.md 5.1).
+     *
+     * @param oneBasedIndex a quote number in {@code [1, AFTER_DEATH_QUOTE_COUNT]}
+     * @return the texture's classpath path
+     */
+    public static String afterDeathQuotePath(int oneBasedIndex) {
+        return "textures/after_death/Quote_" + oneBasedIndex + ".png";
+    }
+
+    /**
+     * Queues every asset above into {@code manager} for asynchronous
+     * loading — called exactly once, by
+     * {@link de.mkoehler.starwars.SplashScreen#show()}, before any other
+     * screen is ever shown.
+     *
+     * @param manager the asset manager to queue into
+     */
+    public static void queueAll(AssetManager manager) {
+        manager.load(MENU_ATLAS, TextureAtlas.class);
+        manager.load(SHIPS_ATLAS, TextureAtlas.class);
+        manager.load(PROJECTILES_ATLAS, TextureAtlas.class);
+
+        manager.load(LOGO, Texture.class);
+        manager.load(MENU_STARFIELD, Texture.class);
+        manager.load(BLUE_NEBULA, Texture.class);
+        manager.load(WARNING_BANNER, Texture.class);
+        manager.load(HUD_STATUS_BACKGROUND, Texture.class);
+        manager.load(HUD_STATUS_SHIELD, Texture.class);
+        manager.load(HUD_DISTRIBUTION_BACKGROUND, Texture.class);
+        manager.load(HUD_DISTRIBUTION_SHIELD, Texture.class);
+        manager.load(HUD_DISTRIBUTION_WEAPONS, Texture.class);
+        manager.load(HUD_DISTRIBUTION_ENGINE, Texture.class);
+        manager.load(SCOREBOARD_PANEL, Texture.class);
+        manager.load(AFTER_DEATH_DIALOG_BACKGROUND, Texture.class);
+
+        for (ShipType type : ShipType.values()) {
+            String path = shipHullTexturePath(type);
+            if (Gdx.files.internal(path).exists()) {
+                manager.load(path, Texture.class);
+            }
+        }
+        for (int i = 1; i <= AFTER_DEATH_QUOTE_COUNT; i++) {
+            manager.load(afterDeathQuotePath(i), Texture.class);
+        }
+    }
+}

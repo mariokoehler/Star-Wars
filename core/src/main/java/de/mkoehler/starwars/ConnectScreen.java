@@ -31,6 +31,7 @@ import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.remote.RemoteControlRegistry;
 import de.mkoehler.starwars.remote.RemoteControllable;
 import de.mkoehler.starwars.render.DialogLayout;
+import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.GameFonts;
 import de.mkoehler.starwars.render.ScrollingBackground;
 
@@ -158,11 +159,11 @@ public class ConnectScreen implements Screen, RemoteControllable {
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
-        background = new ScrollingBackground(new Texture(Gdx.files.internal("textures/backgrounds/menu_starfield.png")),
+        background = new ScrollingBackground(game.getAssets().get(GameAssets.MENU_STARFIELD, Texture.class),
             BACKGROUND_DRIFT_DIRECTION_DEGREES, BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND);
-        logoTexture = new Texture(Gdx.files.internal("textures/menu/logo.png"));
+        logoTexture = game.getAssets().get(GameAssets.LOGO, Texture.class);
 
-        menuAtlas = new TextureAtlas(Gdx.files.internal("textures/menu.atlas"));
+        menuAtlas = game.getAssets().get(GameAssets.MENU_ATLAS, TextureAtlas.class);
         dialogRegion = menuAtlas.findRegion("Connect_Dialog");
 
         // Plays once, not looped, for as long as the player lingers on this screen - if it ends
@@ -531,9 +532,8 @@ public class ConnectScreen implements Screen, RemoteControllable {
     public void dispose() {
         RemoteControlRegistry.clearIfActive(this);
         batch.dispose();
-        background.dispose();
-        logoTexture.dispose();
-        menuAtlas.dispose();
+        // background/logoTexture/menuAtlas are owned by StarWarsGame#getAssets() (design.md -
+        // asset loading), not this screen - disposed once, at app shutdown, not here.
         uiFont.dispose();
         stage.dispose();
         // Null once ownership has passed to StarWarsGame#fadeOutAndDisposeMusic (the normal,

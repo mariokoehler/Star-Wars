@@ -2,8 +2,10 @@ package de.mkoehler.starwars;
 
 import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.audio.Music;
 import de.mkoehler.starwars.remote.RemoteControlQueue;
+import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.QuoteDeck;
 
 import java.util.Random;
@@ -20,39 +22,46 @@ import java.util.Random;
  * one being left) is each screen's own responsibility, not this class's —
  * see {@link ShipSelectionScreen}'s Start handling for where that happens.
  * <p>
- * Starts on {@link ConnectScreen} (design.md 5.1) — logging into a player
- * account is the very first thing the game does now that accounts
- * (design.md 3.6) exist.
+ * Starts on {@link SplashScreen} (design.md — asset loading), which loads
+ * every shared texture/atlas (see {@link #assetManager}/{@link #getAssets()})
+ * once up front before handing off to {@link ConnectScreen} — logging into
+ * a player account (design.md 3.6) is the first thing the player actually
+ * interacts with, but not the first thing the game does anymore.
  * <p>
- * Also owns the two pieces of state that need to survive across repeated
- * screen instances for the whole run of the app rather than living on any
- * single screen: {@link #quoteDeck}, so {@link DeathScreen} doesn't repeat
- * a quote until every other one has been shown, across as many deaths (and
- * therefore as many fresh {@code DeathScreen}/{@code Client} instances) as
- * happen in one sitting; and {@link #fadingMusic} (see
- * {@link #fadeOutAndDisposeMusic}), since fading a track out takes real
- * time that outlives whichever screen started the fade — by the time it's
- * fully faded, that screen has usually already been disposed and replaced.
- * Every other screen only ever needs a {@link Game} reference to switch
- * away from itself, but constructors are typed to this concrete class
- * instead so they can reach {@link #getQuoteDeck()}/
- * {@link #fadeOutAndDisposeMusic} too — there's only ever one {@code Game}
- * implementation in this project, so nothing is lost by not depending on
- * the interface.
+ * Also owns the pieces of state that need to survive across repeated screen
+ * instances for the whole run of the app rather than living on any single
+ * screen: {@link #assetManager} itself, so every screen after
+ * {@link SplashScreen} reads already-resident assets instead of
+ * loading/disposing its own copies of the same files on every transition
+ * (design.md — asset loading; this is what actually used to cause a
+ * noticeable pause switching screens, per CLAUDE.md); {@link #quoteDeck},
+ * so {@link DeathScreen} doesn't repeat a quote until every other one has
+ * been shown, across as many deaths (and therefore as many fresh
+ * {@code DeathScreen}/{@code Client} instances) as happen in one sitting;
+ * and {@link #fadingMusic} (see {@link #fadeOutAndDisposeMusic}), since
+ * fading a track out takes real time that outlives whichever screen started
+ * the fade — by the time it's fully faded, that screen has usually already
+ * been disposed and replaced. Every other screen only ever needs a
+ * {@link Game} reference to switch away from itself, but constructors are
+ * typed to this concrete class instead so they can reach
+ * {@link #getQuoteDeck()}/{@link #getAssets()}/{@link #fadeOutAndDisposeMusic}
+ * too — there's only ever one {@code Game} implementation in this project,
+ * so nothing is lost by not depending on the interface.
  */
 public class StarWarsGame extends Game {
 
     /** How long a handed-off track takes to reach silence - untuned, first value that felt right. */
     private static final float MUSIC_FADE_OUT_SECONDS = 1.5f;
 
-    private final QuoteDeck quoteDeck = new QuoteDeck(DeathScreen.QUOTE_COUNT, new Random());
+    private final QuoteDeck quoteDeck = new QuoteDeck(GameAssets.AFTER_DEATH_QUOTE_COUNT, new Random());
+    private final AssetManager assetManager = new AssetManager();
 
     private Music fadingMusic;
     private float fadingMusicElapsedSeconds;
 
     @Override
     public void create() {
-        setScreen(new ConnectScreen(this));
+        setScreen(new SplashScreen(this));
     }
 
     /**
@@ -93,6 +102,30 @@ public class StarWarsGame extends Game {
      */
     public QuoteDeck getQuoteDeck() {
         return quoteDeck;
+    }
+
+    /**
+     * Returns the app-wide {@link AssetManager} — populated once by
+     * {@link SplashScreen} before any other screen is shown, then read
+     * (never loaded/disposed piecemeal) by every screen/HUD widget that
+     * needs a shared texture or atlas.
+     *
+     * @return the shared asset manager
+     */
+    public AssetManager getAssets() {
+        return assetManager;
+    }
+
+    /**
+     * Disposes the current screen (via {@link Game#dispose() the inherited
+     * behavior}, which only calls {@link com.badlogic.gdx.Screen#hide()})
+     * and then {@link #assetManager} itself, freeing every texture/atlas it
+     * holds — called once, when the application actually closes.
+     */
+    @Override
+    public void dispose() {
+        super.dispose();
+        assetManager.dispose();
     }
 
     /**

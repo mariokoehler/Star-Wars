@@ -15,6 +15,7 @@ import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.render.DialogLayout;
+import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ScrollingBackground;
 import de.mkoehler.starwars.render.Tooltip;
 import de.mkoehler.starwars.sim.ShipStats;
@@ -77,6 +78,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * either of those specifics.
  */
 public class ShipSelectionScreen implements Screen {
+
+    private static final String TAG = "ShipSelectionScreen";
 
     private static final ShipType[] SHIP_TYPES = ShipType.values();
 
@@ -174,15 +177,19 @@ public class ShipSelectionScreen implements Screen {
 
     @Override
     public void show() {
+        // Temporary diagnostic timing while investigating an intermittent screen-transition
+        // pause (CLAUDE.md) - logged once show() finishes, below.
+        long showStartMillis = System.currentTimeMillis();
+
         batch = new SpriteBatch();
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
-        background = new ScrollingBackground(new Texture(Gdx.files.internal("textures/backgrounds/menu_starfield.png")),
+        background = new ScrollingBackground(game.getAssets().get(GameAssets.MENU_STARFIELD, Texture.class),
             BACKGROUND_DRIFT_DIRECTION_DEGREES, BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND);
-        logoTexture = new Texture(Gdx.files.internal("textures/menu/logo.png"));
+        logoTexture = game.getAssets().get(GameAssets.LOGO, Texture.class);
 
-        menuAtlas = new TextureAtlas(Gdx.files.internal("textures/menu.atlas"));
+        menuAtlas = game.getAssets().get(GameAssets.MENU_ATLAS, TextureAtlas.class);
         dialogRegion = menuAtlas.findRegion("Select_Ship_Dialog");
         arrowLeftRegion = menuAtlas.findRegion("Arrow_Left");
         arrowLeftHoverRegion = menuAtlas.findRegion("Arrow_Left_MouseOver");
@@ -196,9 +203,11 @@ public class ShipSelectionScreen implements Screen {
         tooltip = new Tooltip(TOOLTIP_FONT_SIZE_PX);
 
         // Ship hull sprites are also in this atlas, but only the portrait regions are used here.
-        shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
+        shipsAtlas = game.getAssets().get(GameAssets.SHIPS_ATLAS, TextureAtlas.class);
 
         connectToServer();
+
+        Gdx.app.log(TAG, "show() took " + (System.currentTimeMillis() - showStartMillis) + "ms total");
     }
 
     /**
@@ -501,14 +510,18 @@ public class ShipSelectionScreen implements Screen {
 
     @Override
     public void dispose() {
+        // Temporary diagnostic timing while investigating an intermittent screen-transition
+        // pause (CLAUDE.md).
+        long disposeStartMillis = System.currentTimeMillis();
+
         if (networkClient != null) {
             networkClient.stop();
         }
         batch.dispose();
-        background.dispose();
-        logoTexture.dispose();
-        menuAtlas.dispose();
-        shipsAtlas.dispose();
+        // background/logoTexture/menuAtlas/shipsAtlas are owned by StarWarsGame#getAssets()
+        // (design.md - asset loading), not this screen - disposed once, at app shutdown, not here.
         tooltip.dispose();
+
+        Gdx.app.log(TAG, "dispose() took " + (System.currentTimeMillis() - disposeStartMillis) + "ms total");
     }
 }

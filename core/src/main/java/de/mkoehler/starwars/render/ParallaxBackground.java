@@ -39,7 +39,10 @@ public class ParallaxBackground {
     }
 
     /**
-     * Disposes every layer's texture.
+     * Disposes every layer's texture that this background actually owns
+     * (see {@link Layer#Layer(Texture, float, boolean)}) — a layer built
+     * from an {@code AssetManager}-owned texture is left untouched, since
+     * that texture is disposed once, elsewhere, at app shutdown.
      */
     public void dispose() {
         for (Layer layer : layers) {
@@ -61,9 +64,12 @@ public class ParallaxBackground {
         private final Texture texture;
         private final TextureRegion region;
         private final float parallaxFactor;
+        private final boolean ownsTexture;
 
         /**
-         * Creates a layer.
+         * Creates a layer that owns (and will dispose) its texture — for a
+         * texture that exists only for this one layer instance, e.g.
+         * {@link PlaceholderStarfield}'s procedurally-generated placeholder.
          *
          * @param texture        a seamlessly tileable texture; this class takes
          *                       ownership and will set it to repeat-wrap and
@@ -75,10 +81,28 @@ public class ParallaxBackground {
          *                       values well below 1 read as "distant"
          */
         public Layer(Texture texture, float parallaxFactor) {
+            this(texture, parallaxFactor, true);
+        }
+
+        /**
+         * Creates a layer, optionally without taking ownership of the
+         * texture — pass {@code false} for a texture already owned
+         * elsewhere (the shared {@code AssetManager}, e.g.
+         * {@link GameAssets#BLUE_NEBULA}), so this layer only sets its
+         * wrap mode and never disposes it.
+         *
+         * @param texture        a seamlessly tileable texture, set to
+         *                       repeat-wrap by this constructor
+         * @param parallaxFactor see {@link #Layer(Texture, float)}
+         * @param ownsTexture    whether {@link #dispose()} should dispose
+         *                       {@code texture} too
+         */
+        public Layer(Texture texture, float parallaxFactor, boolean ownsTexture) {
             this.texture = texture;
             texture.setWrap(Texture.TextureWrap.Repeat, Texture.TextureWrap.Repeat);
             this.region = new TextureRegion(texture);
             this.parallaxFactor = parallaxFactor;
+            this.ownsTexture = ownsTexture;
         }
 
         private void render(SpriteBatch batch, OrthographicCamera camera) {
@@ -99,7 +123,9 @@ public class ParallaxBackground {
         }
 
         private void dispose() {
-            texture.dispose();
+            if (ownsTexture) {
+                texture.dispose();
+            }
         }
     }
 }

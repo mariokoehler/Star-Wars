@@ -1,10 +1,9 @@
 package de.mkoehler.starwars.render;
 
-import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
-import com.badlogic.gdx.utils.Disposable;
 import de.mkoehler.starwars.sim.PowerDistribution;
 import de.mkoehler.starwars.sim.PowerSystem;
 
@@ -24,18 +23,37 @@ import de.mkoehler.starwars.sim.PowerSystem;
  * visible-pixel range is the same for every bar and every ship type (there's
  * only one power-distribution panel design), so it's a fixed constant here
  * rather than per-ship config.
+ * <p>
+ * Every texture here is read from the shared {@link AssetManager} (see
+ * {@link ShipStatusHud}'s class Javadoc for the same reasoning) rather than
+ * loaded/disposed by this class itself, so this class owns nothing and
+ * needs no {@code dispose()}.
  */
-public class PowerDistributionHud implements Disposable {
+public class PowerDistributionHud {
 
     /** Top of every bar's visible-pixel range (from the top of the image) — the 100% mark. */
     private static final float CLIP_TOP_PIXEL = 170f;
     /** Bottom of every bar's visible-pixel range — the 0% mark. */
     private static final float CLIP_BOTTOM_PIXEL = 423f;
 
-    private final Texture background = new Texture(Gdx.files.internal("textures/hud/hud_distribution_background.png"));
-    private final Texture shieldsBar = new Texture(Gdx.files.internal("textures/hud/hud_distribution_shield.png"));
-    private final Texture weaponsBar = new Texture(Gdx.files.internal("textures/hud/hud_distribution_weapons.png"));
-    private final Texture enginesBar = new Texture(Gdx.files.internal("textures/hud/hud_distribution_engine.png"));
+    private final Texture background;
+    private final Texture shieldsBar;
+    private final Texture weaponsBar;
+    private final Texture enginesBar;
+
+    /**
+     * Creates the widget, reading its HUD chrome from {@code assets}
+     * immediately — all four must already be loaded (see the class
+     * Javadoc).
+     *
+     * @param assets the shared asset manager to resolve textures from
+     */
+    public PowerDistributionHud(AssetManager assets) {
+        background = assets.get(GameAssets.HUD_DISTRIBUTION_BACKGROUND, Texture.class);
+        shieldsBar = assets.get(GameAssets.HUD_DISTRIBUTION_SHIELD, Texture.class);
+        weaponsBar = assets.get(GameAssets.HUD_DISTRIBUTION_WEAPONS, Texture.class);
+        enginesBar = assets.get(GameAssets.HUD_DISTRIBUTION_ENGINE, Texture.class);
+    }
 
     /**
      * Draws the widget as a {@code size}x{@code size} square with its
@@ -65,13 +83,5 @@ public class PowerDistributionHud implements Disposable {
 
         TextureRegion region = new TextureRegion(texture, 0, clip.revealTopPixel(), texture.getWidth(), clip.revealHeightPixels());
         batch.draw(region, x, clip.sliceScreenBottomY(), size, clip.sliceScreenHeight());
-    }
-
-    @Override
-    public void dispose() {
-        background.dispose();
-        shieldsBar.dispose();
-        weaponsBar.dispose();
-        enginesBar.dispose();
     }
 }

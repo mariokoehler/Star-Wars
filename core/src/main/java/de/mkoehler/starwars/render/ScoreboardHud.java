@@ -1,6 +1,6 @@
 package de.mkoehler.starwars.render;
 
-import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
@@ -20,6 +20,12 @@ import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
  * in the panel image's own top-down pixel space, same convention as
  * {@link DialogLayout} — converted to screen space via
  * {@link DialogLayout#toScreenX}/{@link DialogLayout#toScreenY}.
+ * <p>
+ * The panel texture is read from the shared {@link AssetManager} (see
+ * {@link ShipStatusHud}'s class Javadoc for the same reasoning); the font
+ * is still generated fresh per instance via {@link GameFonts} (cheap, and
+ * each instance's own to dispose), so this class still owns exactly that
+ * one resource.
  */
 public class ScoreboardHud implements Disposable {
 
@@ -40,8 +46,18 @@ public class ScoreboardHud implements Disposable {
 
     private static final Color ROW_TEXT_COLOR = new Color(0.85f, 0.9f, 1f, 1f);
 
-    private final Texture panel = new Texture(Gdx.files.internal("textures/hud/scoreboard.png"));
+    private final Texture panel;
     private final BitmapFont font = GameFonts.generateSfDistantGalaxy(ROW_FONT_SIZE_PX);
+
+    /**
+     * Creates the widget, reading its panel texture from {@code assets}
+     * immediately — it must already be loaded (see the class Javadoc).
+     *
+     * @param assets the shared asset manager to resolve the panel texture from
+     */
+    public ScoreboardHud(AssetManager assets) {
+        panel = assets.get(GameAssets.SCOREBOARD_PANEL, Texture.class);
+    }
 
     /**
      * Returns the panel's native pixel width - {@link #render} always draws
@@ -93,7 +109,6 @@ public class ScoreboardHud implements Disposable {
 
     @Override
     public void dispose() {
-        panel.dispose();
         font.dispose();
     }
 }

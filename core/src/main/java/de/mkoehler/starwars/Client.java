@@ -34,6 +34,7 @@ import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.PowerDistributionHud;
@@ -117,6 +118,21 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * in the same frame.
  */
 public class Client implements Screen {
+
+    private static final String TAG = "Client";
+
+    /**
+     * {@link #render(float)} logs a warning if called with a
+     * {@code deltaTime} beyond this - temporary diagnostic instrumentation
+     * added while investigating an intermittent screen-transition pause
+     * (CLAUDE.md): a frame this slow means the render thread was
+     * blocked/stalled since the previous frame, which (via
+     * {@code PhysicsSystem}'s existing {@code MAX_STEPS_PER_FRAME} clamp on
+     * {@link #localPhysicsSystem}) can take many subsequent frames to fully
+     * catch up from, showing up as erratic local-prediction movement for a
+     * while afterward even once the actual stall is over.
+     */
+    private static final float RENDER_STALL_WARN_SECONDS = 0.5f;
 
     /** How quickly the camera eases toward the local ship each frame; not the full model from design.md 4.1. */
     private static final float CAMERA_FOLLOW_SPEED = 3f;
@@ -235,10 +251,15 @@ public class Client implements Screen {
 
     @Override
     public void show() {
+        // Temporary diagnostic timing while investigating an intermittent screen-transition
+        // pause (CLAUDE.md) - logged once show() finishes, below.
+        long showStartMillis = System.currentTimeMillis();
+
         Box2D.init();
+        long box2dInitMillis = System.currentTimeMillis();
 
         batch = new SpriteBatch();
-        shipsAtlas = new TextureAtlas(Gdx.files.internal("textures/ships.atlas"));
+        shipsAtlas = game.getAssets().get(GameAssets.SHIPS_ATLAS, TextureAtlas.class);
         for (ShipType type : ShipType.values()) {
             shipRegionsByType.put(type, shipsAtlas.findRegion(hullRegionName(type), 20));
         }
@@ -247,19 +268,21 @@ public class Client implements Screen {
         // to draw" rather than an error.
         turretRegionsByType.put(ShipType.FALCON, shipsAtlas.findRegion("turrets/turret40"));
         turretRegionsByType.put(ShipType.STARDESTROYER, shipsAtlas.findRegion("turrets/turret32"));
-        projectilesAtlas = new TextureAtlas(Gdx.files.internal("textures/projectiles.atlas"));
+        projectilesAtlas = game.getAssets().get(GameAssets.PROJECTILES_ATLAS, TextureAtlas.class);
         ownProjectileRegion = projectilesAtlas.findRegion("red_oval");
         enemyProjectileRegion = projectilesAtlas.findRegion("blue_oval");
 
         background = new ParallaxBackground(
-            new ParallaxBackground.Layer(new Texture(
-                Gdx.files.internal("textures/backgrounds/blue_nebula.png")), 0.1f),
+            // false: this texture is owned by StarWarsGame#getAssets() (design.md - asset
+            // loading), not this layer - unlike the procedurally-generated starfield below, which
+            // is regenerated (and must be disposed) fresh every time this screen is shown.
+            new ParallaxBackground.Layer(game.getAssets().get(GameAssets.BLUE_NEBULA, Texture.class), 0.1f, false),
             new ParallaxBackground.Layer(PlaceholderStarfield.generate(512, 120, 1L), 0.4f)
         );
-        statusHud = new ShipStatusHud();
-        powerHud = new PowerDistributionHud();
-        scoreboardHud = new ScoreboardHud();
-        warningBannerTexture = new Texture(Gdx.files.internal("textures/hud/hud_warning_ejection_locked.png"));
+        statusHud = new ShipStatusHud(game.getAssets());
+        powerHud = new PowerDistributionHud(game.getAssets());
+        scoreboardHud = new ScoreboardHud(game.getAssets());
+        warningBannerTexture = game.getAssets().get(GameAssets.WARNING_BANNER, Texture.class);
 
         camera = new OrthographicCamera();
         viewport = new ScreenViewport(camera);
@@ -271,6 +294,9 @@ public class Client implements Screen {
         hudCamera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
         connectToServer();
+
+        Gdx.app.log(TAG, "show() took " + (System.currentTimeMillis() - showStartMillis)
+            + "ms total (Box2D.init() " + (box2dInitMillis - showStartMillis) + "ms)");
     }
 
     /**
@@ -520,6 +546,11 @@ public class Client implements Screen {
 
     @Override
     public void render(float deltaTime) {
+        if (deltaTime > RENDER_STALL_WARN_SECONDS) {
+            Gdx.app.log(TAG, "render() called with deltaTime=" + deltaTime
+                + "s - the render thread was likely blocked/stalled since the previous frame");
+        }
+
         ScreenUtils.clear(0.05f, 0.05f, 0.08f, 1f);
 
         Runnable update;
@@ -869,6 +900,10 @@ public class Client implements Screen {
 
     @Override
     public void dispose() {
+        // Temporary diagnostic timing while investigating an intermittent screen-transition
+        // pause (CLAUDE.md).
+        long disposeStartMillis = System.currentTimeMillis();
+
         if (networkClient != null) {
             networkClient.stop();
         }
@@ -876,13 +911,14 @@ public class Client implements Screen {
             localWorld.dispose();
         }
         batch.dispose();
-        shipsAtlas.dispose();
-        projectilesAtlas.dispose();
+        // shipsAtlas/projectilesAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
+        // owned by StarWarsGame#getAssets() (design.md - asset loading), not this screen -
+        // disposed once, at app shutdown, not here. background.dispose() below still frees the
+        // procedurally-generated starfield layer, which this screen alone owns (see #show()).
         background.dispose();
-        statusHud.dispose();
-        powerHud.dispose();
         scoreboardHud.dispose();
-        warningBannerTexture.dispose();
+
+        Gdx.app.log(TAG, "dispose() took " + (System.currentTimeMillis() - disposeStartMillis) + "ms total");
     }
 
     /**

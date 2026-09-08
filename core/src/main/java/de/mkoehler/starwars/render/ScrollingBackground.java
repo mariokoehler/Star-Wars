@@ -4,7 +4,6 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.Vector2;
-import com.badlogic.gdx.utils.Disposable;
 
 /**
  * Fills the screen with a seamlessly tileable texture that autonomously
@@ -19,8 +18,14 @@ import com.badlogic.gdx.utils.Disposable;
  * texture — but the drawn quad always exactly fills the screen and never
  * itself moves; only the sampled UV offset advances, since there's no camera
  * position to tie the quad's placement to here.
+ * <p>
+ * Does <b>not</b> take ownership of the given texture — every caller in this
+ * codebase passes in a texture already owned by {@code StarWarsGame}'s
+ * shared {@link com.badlogic.gdx.assets.AssetManager} ({@link GameAssets#MENU_STARFIELD}),
+ * which disposes it once, at app shutdown; this class only mutates its wrap
+ * mode.
  */
-public class ScrollingBackground implements Disposable {
+public class ScrollingBackground {
 
     private final Texture texture;
     private final TextureRegion region;
@@ -31,9 +36,9 @@ public class ScrollingBackground implements Disposable {
     /**
      * Creates a scrolling background.
      *
-     * @param texture              a seamlessly tileable texture; this class
-     *                             takes ownership and will set it to
-     *                             repeat-wrap and dispose it
+     * @param texture              a seamlessly tileable texture, set to
+     *                             repeat-wrap by this constructor; not owned
+     *                             by this class (see the class Javadoc)
      * @param directionDegrees     the drift direction, in degrees (0 = along
      *                             +X, 90 = along +Y)
      * @param speedPixelsPerSecond how fast the pattern drifts, in texture
@@ -79,10 +84,5 @@ public class ScrollingBackground implements Disposable {
         region.setRegion(u, v, u + uWidth, v + vHeight);
 
         batch.draw(region, 0f, 0f, screenWidth, screenHeight);
-    }
-
-    @Override
-    public void dispose() {
-        texture.dispose();
     }
 }

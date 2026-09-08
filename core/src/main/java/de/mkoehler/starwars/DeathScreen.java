@@ -8,6 +8,7 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.utils.ScreenUtils;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
+import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ScrollingBackground;
 
@@ -41,7 +42,11 @@ import de.mkoehler.starwars.render.ScrollingBackground;
  * Loading just the two needed files as plain {@link Texture}s instead
  * (same convention as this project's tileable backgrounds, e.g.
  * {@code blue_nebula.png}) fixed it: at most ~2MB decoded per death
- * instead of ~67MB.
+ * instead of ~67MB. All 23 (plus the shared dialog background) are now
+ * additionally preloaded into {@link StarWarsGame#getAssets()} by
+ * {@link SplashScreen} (design.md - asset loading) — this screen just
+ * reads whichever one {@link #show()} deals from there, so even that ~2MB
+ * on-demand decode at the moment of death is gone too.
  * <p>
  * Combat death itself no longer waits for the server's automatic
  * mid-match respawn (design.md 2.4's {@code RESPAWN_DELAY_SECONDS}) the
@@ -62,9 +67,6 @@ import de.mkoehler.starwars.render.ScrollingBackground;
  * server connection of its own to ask for anyone else's.
  */
 public class DeathScreen implements Screen {
-
-    /** How many {@code Quote_<n>.png} images exist (design.md - authored by the user). */
-    public static final int QUOTE_COUNT = 23;
 
     private static final float DIALOG_WIDTH = 818f;
     private static final float DIALOG_HEIGHT = 618f;
@@ -117,15 +119,15 @@ public class DeathScreen implements Screen {
         batch = new SpriteBatch();
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-        scoreboardHud = new ScoreboardHud();
+        scoreboardHud = new ScoreboardHud(game.getAssets());
 
-        background = new ScrollingBackground(new Texture(Gdx.files.internal("textures/backgrounds/menu_starfield.png")),
+        background = new ScrollingBackground(game.getAssets().get(GameAssets.MENU_STARFIELD, Texture.class),
             BACKGROUND_DRIFT_DIRECTION_DEGREES, BACKGROUND_DRIFT_SPEED_PIXELS_PER_SECOND);
 
-        dialogBackgroundTexture = new Texture(Gdx.files.internal("textures/after_death/Dialog_Background.png"));
+        dialogBackgroundTexture = game.getAssets().get(GameAssets.AFTER_DEATH_DIALOG_BACKGROUND, Texture.class);
 
         int quoteIndex = game.getQuoteDeck().next();
-        quoteTexture = new Texture(Gdx.files.internal("textures/after_death/Quote_" + (quoteIndex + 1) + ".png"));
+        quoteTexture = game.getAssets().get(GameAssets.afterDeathQuotePath(quoteIndex + 1), Texture.class);
     }
 
     @Override
@@ -179,9 +181,9 @@ public class DeathScreen implements Screen {
     @Override
     public void dispose() {
         batch.dispose();
-        background.dispose();
-        dialogBackgroundTexture.dispose();
-        quoteTexture.dispose();
+        // background/dialogBackgroundTexture/quoteTexture/scoreboardHud's panel are owned by
+        // StarWarsGame#getAssets() (design.md - asset loading), not this screen - disposed once,
+        // at app shutdown, not here.
         scoreboardHud.dispose();
     }
 }

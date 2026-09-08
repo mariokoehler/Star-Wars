@@ -1,11 +1,9 @@
 package de.mkoehler.starwars.render;
 
-import com.badlogic.gdx.Gdx;
-import com.badlogic.gdx.files.FileHandle;
+import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
-import com.badlogic.gdx.utils.Disposable;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
 
@@ -30,19 +28,39 @@ import java.util.Map;
  * occupies a different vertical extent of that shared canvas.
  * <p>
  * The background panel and shield ring are generic HUD chrome, shared by
- * every ship type; the hull silhouette is ship-specific art, loaded lazily
- * per {@link ShipType} from {@code textures/hud/<resourceName>_hull.png} —
- * falling back to the X-wing's own hull art (and, since every ship type
- * currently copies the X-wing's hud clip numbers too, its correct clip
- * range) for any ship type that doesn't have its own yet.
+ * every ship type; the hull silhouette is ship-specific art, resolved lazily
+ * per {@link ShipType} from the shared {@link AssetManager} — falling back
+ * to the X-wing's own hull art (and, since every ship type currently copies
+ * the X-wing's hud clip numbers too, its correct clip range) for any ship
+ * type {@link GameAssets#queueAll} didn't find (and therefore didn't queue)
+ * art for.
+ * <p>
+ * Every texture here is read from {@code assets} (owned by
+ * {@code StarWarsGame}, populated once by {@code SplashScreen} before any
+ * screen using this widget is ever shown) rather than loaded/disposed by
+ * this class itself — so, unlike its predecessor, this class owns nothing
+ * and needs no {@link com.badlogic.gdx.utils.Disposable#dispose()}.
  */
-public class ShipStatusHud implements Disposable {
+public class ShipStatusHud {
 
-    private static final String FALLBACK_HULL_TEXTURE_PATH = "textures/hud/xwing_hull.png";
+    private static final String FALLBACK_HULL_TEXTURE_PATH = GameAssets.shipHullTexturePath(ShipType.XWING);
 
-    private final Texture background = new Texture(Gdx.files.internal("textures/hud/hud_status_background.png"));
-    private final Texture shield = new Texture(Gdx.files.internal("textures/hud/hud_status_shield.png"));
+    private final AssetManager assets;
+    private final Texture background;
+    private final Texture shield;
     private final Map<ShipType, Texture> hullTexturesByType = new EnumMap<>(ShipType.class);
+
+    /**
+     * Creates the widget, reading its shared HUD chrome from {@code assets}
+     * immediately — both must already be loaded (see the class Javadoc).
+     *
+     * @param assets the shared asset manager to resolve textures from
+     */
+    public ShipStatusHud(AssetManager assets) {
+        this.assets = assets;
+        background = assets.get(GameAssets.HUD_STATUS_BACKGROUND, Texture.class);
+        shield = assets.get(GameAssets.HUD_STATUS_SHIELD, Texture.class);
+    }
 
     /**
      * Draws the widget as a {@code size}x{@code size} square with its
@@ -63,8 +81,9 @@ public class ShipStatusHud implements Disposable {
     public void render(SpriteBatch batch, ShipStats stats, float x, float y, float size,
                         float hullFraction, float shieldFraction) {
         Texture hullTexture = hullTexturesByType.computeIfAbsent(stats.getType(), type -> {
-            FileHandle preferred = Gdx.files.internal("textures/hud/" + type.getResourceName() + "_hull.png");
-            return new Texture(preferred.exists() ? preferred : Gdx.files.internal(FALLBACK_HULL_TEXTURE_PATH));
+            String preferredPath = GameAssets.shipHullTexturePath(type);
+            String path = assets.isLoaded(preferredPath, Texture.class) ? preferredPath : FALLBACK_HULL_TEXTURE_PATH;
+            return assets.get(path, Texture.class);
         });
 
         batch.draw(background, x, y, size, size);
@@ -96,14 +115,5 @@ public class ShipStatusHud implements Disposable {
 
         TextureRegion region = new TextureRegion(texture, 0, clip.revealTopPixel(), texture.getWidth(), clip.revealHeightPixels());
         batch.draw(region, x, clip.sliceScreenBottomY(), size, clip.sliceScreenHeight());
-    }
-
-    @Override
-    public void dispose() {
-        background.dispose();
-        shield.dispose();
-        for (Texture texture : hullTexturesByType.values()) {
-            texture.dispose();
-        }
     }
 }
