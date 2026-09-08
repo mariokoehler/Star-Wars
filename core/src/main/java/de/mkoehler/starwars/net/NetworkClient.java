@@ -87,14 +87,47 @@ public class NetworkClient {
 
     /**
      * Closes the connection, if any, and stops the underlying network thread.
+     * Blocks until the underlying socket(s) are actually closed.
      * <p>
      * Logs how long the call took, same temporary diagnostic reasoning as
-     * {@link #connect}.
+     * {@link #connect}. <b>That logging is what root-caused the
+     * screen-transition pause this method's own {@link #stopAsync()}
+     * sibling now works around</b> (CLAUDE.md/design.md) — this call
+     * itself does almost nothing (no I/O, no dispatch); the time is spent
+     * inside KryoNet's {@code Client.close()}, in
+     * {@code SocketChannel.close()}/{@code DatagramChannel.close()} — the
+     * JDK's/OS's own socket teardown, observed on some machines/networks to
+     * take anywhere from single-digit milliseconds to several seconds, for
+     * reasons outside this codebase's control (Windows socket-close
+     * behavior, antivirus/firewall interception, etc.). Prefer
+     * {@link #stopAsync()} for any caller that can't afford to block on
+     * that (e.g. a screen transitioning away) — this method remains for
+     * callers (tests especially) that need the stop to have genuinely
+     * completed before proceeding.
      */
     public void stop() {
         long startMillis = System.currentTimeMillis();
         client.stop();
         Log.info("net-client", "stop() took " + (System.currentTimeMillis() - startMillis) + "ms");
+    }
+
+    /**
+     * Like {@link #stop()}, but runs it on a short-lived background thread
+     * instead of blocking the caller — see {@link #stop()}'s Javadoc for
+     * why that block can take seconds on some machines. A screen
+     * transitioning away doesn't need to wait for its old connection to
+     * actually finish closing before moving on: each screen's
+     * {@code NetworkClient} owns an independent socket on its own
+     * ephemeral port (already proven safe for multiple simultaneous
+     * connections, design.md 3.4/CLAUDE.md), so there's no resource this
+     * teardown needs to release before the next screen's own connection
+     * can be established. Fire-and-forget — this method returns
+     * immediately, before the stop has actually completed.
+     */
+    public void stopAsync() {
+        Thread thread = new Thread(this::stop, "NetworkClient-stopAsync");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     /**

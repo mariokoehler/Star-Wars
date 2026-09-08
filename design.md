@@ -3047,6 +3047,54 @@ connect/stop, not per-tick or per-frame) and directly useful for any
 future networking-timing question, not just the specific investigation
 that motivated it.
 
+**Root cause found and fixed, same day, once the user played on their
+home gaming PC and sent a real log.** The timing added above pinned the
+pause precisely: `[ShipSelectionScreen]`/`[Client] dispose() took Nms`
+tracked `[net-client] stop() took Nms` almost exactly (ranging ~750ms to
+~9.8s across a real session), while `show()` stayed under 20ms every
+time — so the pause was never texture/asset disposal (`background`/
+`batch`/`scoreboardHud`/`tooltip` — all cheap now that hull/portrait/HUD
+textures live once in `StarWarsGame#getAssets()`, 3.14), it was always
+inside `dispose()`'s `networkClient.stop()` call.
+
+Reading this KryoNet fork's own source (`kryonet-2.22.9-sources.jar`,
+not guessed) confirms `Client.stop()`/`close()` itself does almost
+nothing — no I/O, its only wait is an uncontended `synchronized`
+gate — the real work is `TcpConnection.close()`/`UdpConnection.close()`
+calling straight into `java.nio.channels.SocketChannel#close()`/
+`DatagramChannel#close()`: the **JDK's/OS's own socket teardown**, not
+anything this codebase's own logic does. This class of NIO-channel-close
+latency is a known-flaky Windows behavior (antivirus/firewall socket
+interception, driver-level filtering) — reproduced independently on a
+second machine too, via a from-scratch `NetworkServerClientIntegrationTest`
+run showing a 5.5s `stop()` (and even a 4.5s `connect()`) with zero game
+code involved, confirming it's environmental, not a bug in `dispose()`'s
+own logic to fix.
+
+**The actual fix isn't making socket-close faster (outside this
+codebase's control) — it's not blocking the render thread on it.**
+New `NetworkClient.stopAsync()`: runs `stop()` on a short-lived daemon
+thread instead of the caller's own thread. Safe because each screen's
+`NetworkClient` owns a fully independent socket on its own ephemeral
+port (already proven fine for simultaneous connections, 3.4) — nothing
+about the *next* screen's own connection needs the *previous* one's
+socket to have actually finished closing first, so there's no reason to
+wait for it synchronously mid-transition. `Client.dispose()`/
+`ShipSelectionScreen.dispose()` (the two screens with a live connection
+to tear down on the way out) now call `stopAsync()`; `stop()` itself is
+unchanged and still used by tests, where actually waiting for the stop
+to complete matters. `ConnectScreen`'s own `client.stop()` calls were
+deliberately left synchronous — that screen's `attemptConnect()` is
+already fully blocking by design (5.1), so this fix wouldn't change its
+UX contract either way.
+
+**Not yet re-verified live with a fresh play session** (this fix landed
+from a code-reading investigation of a sent log, not a live client this
+side) — the user should confirm the screen-transition pause is actually
+gone next time they play; `dispose()`'s own timing log stays in place
+specifically to confirm it now completes in single-digit milliseconds
+regardless of how long the now-backgrounded `stop()` takes.
+
 ## 4. Rendering & presentation
 
 ### 4.1 Camera

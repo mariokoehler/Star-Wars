@@ -2145,6 +2145,67 @@ handling is therefore now genuinely different from every other ship,
 not just its response-to-maxed-Engines curve — worth remembering if a
 future balancing pass touches it.
 
+**Screen-transition pause — root-caused and fixed, 2026-09-08.** See
+design.md 3.15's addendum for the full writeup. The user played on
+their home gaming PC (not this dev machine) and sent a real log
+showing `[ShipSelectionScreen]`/`[Client] dispose() took Nms` tracking
+`[net-client] stop() took Nms` almost exactly, ranging 750ms-9.8s —
+directly asked "what takes so long inside dispose(), I'd assume we
+don't have much to dispose since the global atlas migration (3.14)."
+Correct instinct: it wasn't asset disposal at all (that stayed under
+20ms every time, per `show()`'s own timing) — it was `NetworkClient
+.stop()`'s call into KryoNet's `Client.stop()`, which (confirmed by
+actually reading the fork's real source,
+`kryonet-2.22.9-sources.jar`, not guessed) does almost no work of its
+own; the delay is in `TcpConnection`/`UdpConnection.close()` calling
+straight into `java.nio.channels.SocketChannel`/`DatagramChannel
+.close()` — the JDK's/OS's own socket teardown. Reproduced
+independently on *this* machine too, with zero game code involved: a
+plain `mvn test` run of `NetworkServerClientIntegrationTest` showed a
+genuine 5.5s `stop()` (and a 4.5s `connect()`) in between two fully
+local, back-to-back test methods — confirming this is real,
+environment-level socket-close latency (Windows-specific, likely
+antivirus/firewall socket interception), not a bug in this project's
+own `dispose()` logic.
+
+**Fix: stop blocking the render thread on it, since nothing actually
+needs to wait for it.** New `NetworkClient.stopAsync()` runs `stop()`
+on a short-lived daemon thread instead of the caller's own thread —
+safe because each screen's `NetworkClient` owns a fully independent
+socket on its own ephemeral port (already proven fine for multiple
+simultaneous connections), so the *next* screen's connection has no
+dependency on the *previous* one's socket having actually finished
+closing. `Client.dispose()`/`ShipSelectionScreen.dispose()` (the two
+screens this bit, matching the user's log) now call `stopAsync()`;
+plain `stop()` is untouched and still used by tests, where actually
+waiting for completion matters. `ConnectScreen`'s own `client.stop()`
+calls were deliberately left alone — that screen already blocks
+synchronously by design while connecting (5.1), so this fix doesn't
+change its contract either way, and it wasn't the screen the user
+reported the pause on.
+
+**Also found and cleared while verifying this: a stray, already-running
+`--mcp` client process** (`java -jar lwjgl3\target\StarWars-*.jar
+--mcp`, PID found via `Get-CimInstance Win32_Process -Filter
+"Name='java.exe'" | select ProcessId,CommandLine`) was holding the
+packaged client jar locked, failing `mvn clean` — same class of gotcha
+CLAUDE.md has flagged before (the Ship-Selection-screen milestone's
+stray server jar): check full command lines, not just process names,
+before concluding nothing's running. Killed it, `mvn clean test` then
+passed green (all 4 modules, including the reproduced-live-here 5.5s
+`stop()` inside `NetworkServerClientIntegrationTest` — expected/
+unrelated to the fix, that test intentionally calls the still-blocking
+`stop()`, not `stopAsync()`).
+
+**Not yet re-verified live with a real play session** — this was
+diagnosed and fixed from the user's sent log plus reading the actual
+KryoNet source, not by launching a client this side. Next time the
+user plays, confirm the pause between Ship Selection ↔ gameplay is
+actually gone (or at least no longer blocks anything visible) — the
+`dispose()` timing logs stay in place specifically to confirm they now
+report single-digit milliseconds regardless of how long the
+now-backgrounded `stop()` takes underneath.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

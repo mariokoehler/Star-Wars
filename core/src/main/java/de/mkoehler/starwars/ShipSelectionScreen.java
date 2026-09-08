@@ -511,11 +511,13 @@ public class ShipSelectionScreen implements Screen {
     @Override
     public void dispose() {
         // Temporary diagnostic timing while investigating an intermittent screen-transition
-        // pause (CLAUDE.md).
+        // pause (CLAUDE.md) - root-caused to NetworkClient#stop()'s underlying OS socket
+        // teardown (see that method's Javadoc); networkClient.stopAsync() below is the fix,
+        // this timing stays to confirm dispose() itself is fast now.
         long disposeStartMillis = System.currentTimeMillis();
 
         if (networkClient != null) {
-            networkClient.stop();
+            networkClient.stopAsync();
         }
         batch.dispose();
         // background/logoTexture/menuAtlas/shipsAtlas are owned by StarWarsGame#getAssets()
