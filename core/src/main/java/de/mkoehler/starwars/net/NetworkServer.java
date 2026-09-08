@@ -29,6 +29,7 @@ public class NetworkServer {
      * to begin listening for connections.
      */
     public NetworkServer() {
+        NetworkLogging.useAbsoluteTimestamps();
         this.server = new Server(NetworkConstants.WRITE_BUFFER_SIZE, NetworkConstants.OBJECT_BUFFER_SIZE);
         MessageRegistry.register(server.getKryo());
         server.addListener(new Listener() {

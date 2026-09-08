@@ -3,6 +3,7 @@ package de.mkoehler.starwars.net;
 import com.esotericsoftware.kryonet.Client;
 import com.esotericsoftware.kryonet.Connection;
 import com.esotericsoftware.kryonet.Listener;
+import com.esotericsoftware.minlog.Log;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.TcpPingMessage;
@@ -30,6 +31,7 @@ public class NetworkClient {
      * yet connected to a server until {@link #connect(int, String, int, int)} is called.
      */
     public NetworkClient() {
+        NetworkLogging.useAbsoluteTimestamps();
         this.client = new Client(NetworkConstants.WRITE_BUFFER_SIZE, NetworkConstants.OBJECT_BUFFER_SIZE);
         MessageRegistry.register(client.getKryo());
         client.addListener(new Listener() {
@@ -54,6 +56,18 @@ public class NetworkClient {
     /**
      * Connects to a server, blocking until the connection is established or the
      * timeout elapses.
+     * <p>
+     * Logs how long the call actually took (via {@link Log#info}) —
+     * temporary diagnostic instrumentation added while investigating an
+     * intermittent multi-second-to-multi-minute pause on this exact call
+     * during a screen transition (CLAUDE.md). Notably, this KryoNet fork's
+     * {@code Client.connect(...)} resolves {@code host} via a blocking
+     * {@code InetAddress.getByName(host)} call <b>before</b> the
+     * {@code timeoutMillis} budget below is ever applied to the actual
+     * socket connect — so a slow/hung hostname resolution (DNS, VPN, a
+     * flaky corporate network) is not bounded by {@code timeoutMillis} at
+     * all, and would freeze whichever thread calls this (the render thread,
+     * for every caller in this codebase) for as long as it takes.
      *
      * @param timeoutMillis maximum time to wait for the connection to complete, in milliseconds
      * @param host          the server's hostname or IP address
@@ -62,14 +76,25 @@ public class NetworkClient {
      * @throws IOException if the connection could not be established
      */
     public void connect(int timeoutMillis, String host, int tcpPort, int udpPort) throws IOException {
-        client.connect(timeoutMillis, host, tcpPort, udpPort);
+        long startMillis = System.currentTimeMillis();
+        try {
+            client.connect(timeoutMillis, host, tcpPort, udpPort);
+        } finally {
+            Log.info("net-client", "connect(" + host + ":" + tcpPort + "/" + udpPort
+                + ") took " + (System.currentTimeMillis() - startMillis) + "ms");
+        }
     }
 
     /**
      * Closes the connection, if any, and stops the underlying network thread.
+     * <p>
+     * Logs how long the call took, same temporary diagnostic reasoning as
+     * {@link #connect}.
      */
     public void stop() {
+        long startMillis = System.currentTimeMillis();
         client.stop();
+        Log.info("net-client", "stop() took " + (System.currentTimeMillis() - startMillis) + "ms");
     }
 
     /**

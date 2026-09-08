@@ -1737,6 +1737,158 @@ needed**, confirming the prerequisite check reads the account's
 just-updated state, not a stale one. Full `mvn clean test` green
 throughout.
 
+**Shared `AssetManager` + splash screen — implemented 2026-09-08.** See
+design.md 3.14 for the full writeup. The user noticed occasional longer
+pauses switching screens/scenes while playing and asked directly
+whether this codebase had a load-everything-up-front `AssetManager`
+the way their past projects did — it didn't: every screen
+(`ConnectScreen`/`ShipSelectionScreen`/`Client`/`DeathScreen`)
+constructed and disposed its own `Texture`/`TextureAtlas` instances in
+`show()`/`dispose()`, reloading `ships.atlas`/`menu.atlas` from scratch
+on almost every transition. Auditing it further turned up something
+worse than the user had even flagged: `ShipStatusHud`/
+`PowerDistributionHud`/`ScoreboardHud` were *also* each constructing
+fresh copies of their own textures every time `Client`/`DeathScreen`
+was shown — meaning every single combat death, not just a rarer screen
+change, reloaded a stack of HUD textures from disk.
+
+Fixed with the exact shape the user described: `StarWarsGame` now owns
+one `AssetManager` for the app's whole run; new `SplashScreen` (logo on
+a black background, a simple tinted-pixel progress bar, same technique
+`Tooltip` already used for its background box) queues everything via
+new `render.GameAssets` (the single list of every shared asset path)
+and polls `AssetManager.update()`/`getProgress()` until done, then
+hands off to `ConnectScreen`. Every consumer screen and HUD widget was
+converted to read from `game.getAssets()` instead of loading its own
+copies; `ShipStatusHud`'s per-ship-type hull-art fallback (design.md
+2.7) was preserved by re-expressing it as `assets.isLoaded(...)`
+instead of a `FileHandle.exists()` check. `ScrollingBackground` dropped
+`Disposable` entirely (100% of its callers now pass an asset-managed
+texture it never owned to begin with after this change);
+`ParallaxBackground.Layer` gained an explicit `ownsTexture` flag
+instead, since `Client`'s background genuinely mixes an asset-managed
+layer (`blue_nebula.png`) with a still-procedurally-generated,
+still-per-instance-disposed one (`PlaceholderStarfield`).
+
+**Deliberately left outside the `AssetManager`** (see design.md 3.14 for
+the reasoning on each): `GameFonts`-generated `BitmapFont`s (cheap to
+regenerate, not worth the extra `FreetypeFontLoader` plumbing for a
+cost this small), `PlaceholderStarfield`'s procedural texture (not a
+file, still explicitly a stand-in for real art), and
+`audio/StarWarsTheme.mp3` (loaded exactly once already, not a
+repeated-load concern).
+
+**Verification status, worth flagging plainly this time:** full `mvn
+clean install` (all 4 modules, packaging included) and `mvn test`
+green — but the user asked this session not to launch the client/server
+at all today (working from the office; `ConnectScreen`'s background
+music would otherwise play at an inopportune moment), so the splash
+screen itself and the actual pause-reduction switching between Ship
+Selection/gameplay/Death Screen are **not yet live-verified** — that
+needs a real play-test before this milestone is considered fully
+confirmed, same as every other one in this project.
+
+**Screen-transition pauses — NOT fixed by the AssetManager, still
+open — investigated 2026-09-08, same day.** The user played the build
+above and confirmed the splash screen itself works (logo + progress
+bar, art unchanged), but the original complaint — long pauses switching
+screens — was **still there**, so the root cause is something else
+entirely. Their own play-by-play was the key clue: KryoNet
+connect/disconnect logs showed the client reconnecting fresh on every
+screen transition (Connect → Ship Selection → gameplay → back), each
+one stopping the previous screen's own connection right after opening a
+new one — a real, existing, and per design.md 3.6 explicitly-intentional
+pattern ("reconnecting is harmless"), not new from this session. The
+actual multi-minute gaps sat *between* those connect/disconnect log
+lines, so the KryoNet-level logs alone couldn't show where the time
+actually went.
+
+**Investigation, in order (ruled out two plausible theories with real
+evidence before finding the actual one — worth the full trail, since
+the wrong-but-plausible theories are exactly what a future session
+might reach for again):**
+1. Suspected `NetworkClient.stop()`/KryoNet's `Client.stop()` blocking
+   on a thread-join. **Ruled out by disassembling the actual fork jar's
+   bytecode** (`com.github.crykn:kryonet:2.22.9`, `javap -c` on the
+   extracted `.class` files) — `stop()`/`close()` only flip a flag and
+   wake the selector, no `Thread.join()` anywhere.
+2. Suspected `InetAddress.getByName("localhost")` (confirmed, via the
+   same bytecode read, to run **unbounded by `timeoutMillis`** before
+   the actual socket connect in this fork's `connect(int, String, int,
+   int)` overload — a real, separate, still-worth-fixing-eventually gap,
+   just not the active cause here) hanging due to a corporate DNS/VPN
+   quirk. **Ruled out empirically** — timed `[System.Net.Dns]::GetHostAddresses("localhost")`
+   directly via PowerShell on the user's actual machine, got 37ms then
+   0ms on repeat calls.
+3. **Actual cause, found by instrumenting and just measuring:** added
+   real elapsed-time logging around `NetworkClient.connect()`/`stop()`
+   (see below) and re-ran the existing
+   `NetworkServerClientIntegrationTest` (plain JUnit, zero game code,
+   zero screens) repeatedly. A bare `SocketChannel.connect()`/`close()`
+   pair took anywhere from **0ms to 22.8 seconds**, wildly inconsistent
+   between runs, on this machine, with nothing else running. That
+   single fact fully explains both reported symptoms: the render thread
+   calls `connect()`/`stop()` synchronously on every screen transition,
+   so a bad roll of this die freezes the whole game for exactly that
+   long; and the ~20 seconds of erratic "teleporting" ship movement
+   right after is a **secondary, already-understood consequence**, not
+   a separate bug — once the render thread unblocks, that one frame's
+   `deltaTime` is huge, and `PhysicsSystem`'s existing
+   `MAX_STEPS_PER_FRAME` clamp (a deliberate, correct anti-spiral-of-death
+   safety net, see the "Important Box2D gotcha" entry above) then takes
+   many subsequent frames to drain the backlog — exactly the
+   teleport-then-settle pattern described. One consistent pattern
+   across every run so far: **the *first* connect/stop pair in a freshly
+   started JVM process is always the slow/variable one; a second pair
+   moments later in the same process is always near-instant (0-3ms)** —
+   suggestive of a one-time per-process check (a security/firewall
+   product evaluating a new process's first network activity), though
+   this doesn't cleanly match the original game session's own log order
+   (there, the *first* connect was the fast one) — flagged as a lead,
+   not a confirmed mechanism.
+4. **User's hypothesis: the active corporate VPN.** Disabled it and
+   re-ran the same test three more times: **no improvement** — 22844ms/
+   1ms, 791ms/4011ms, 9290ms/15282ms. If anything, worse than some of
+   the earlier VPN-connected runs. VPN ruled out as the (sole) cause.
+
+**New permanent instrumentation added as a result (design.md — network
+diagnostics), explicitly requested by the user and worth keeping
+regardless of how this resolves:** new `core.net.NetworkLogging`
+installs a custom minlog `Log.Logger` giving every KryoNet log line
+(both processes) an **absolute** wall-clock timestamp
+(`HH:mm:ss.SSS`) instead of minlog's default time-since-process-start
+elapsed counter — the user pointed out directly that two independent
+processes' relative timers can't be lined up against each other,
+which is exactly what made this investigation harder than it needed to
+be. Installed once from both `NetworkClient`'s and `NetworkServer`'s
+constructors (idempotent). Also added, all flagged inline as temporary
+diagnostic code tied to this specific investigation: elapsed-time logs
+around `NetworkClient.connect()`/`stop()`; total-time logs around
+`Client`/`ShipSelectionScreen`'s `show()`/`dispose()`; a
+large-`deltaTime` stall warning in both `Client.render()` and
+`GameNetworkServer.tick()` (>0.5s); and an elapsed-time log around
+`GameNetworkServer.handleHandshake` (to rule out a slow
+`AccountStore.login()` specifically — it wasn't; that class was already
+audited as synchronous-in-memory-only, background-flushed, per an
+earlier session's own work).
+
+**Status: open, deliberately paused here rather than chased further
+today** — the user said not to sink more time into it in this session;
+next step is to reproduce (or fail to reproduce) the same
+`NetworkServerClientIntegrationTest` timing on the user's home network
+once they're off the corporate one, which will finally tell us whether
+this is an office-network/corporate-security-software artifact or
+something that follows the machine/JVM anywhere. **Pick this up by
+re-running exactly that test** (`mvn -pl core -Dtest=NetworkServerClientIntegrationTest test`,
+several times — the variability itself is the signal) **and comparing
+against the numbers above** before touching any code further. If it
+turns out to reproduce at home too, the next real angle is probably an
+architectural one: stop reconnecting fresh on every screen transition
+(design.md 3.6's "reconnecting is harmless" claim is now known to be
+false time-wise on at least this machine) and keep one persistent
+connection alive across Connect → Ship Selection → gameplay instead —
+not started, flagged only.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

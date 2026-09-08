@@ -2562,6 +2562,153 @@ typed actions. Extend the same `RemoteControllable` pattern to more
 screens once this one has proven useful in practice, rather than
 building the rest speculatively now.
 
+### 3.14 Shared `AssetManager` + splash screen (2026-09-08)
+
+The user noticed occasional longer-than-expected pauses switching
+screens/scenes while playing, and correctly suspected the cause: this
+codebase had no `AssetManager` at all. Every screen (`ConnectScreen`,
+`ShipSelectionScreen`, `Client`, `DeathScreen`) constructed its own
+`Texture`/`TextureAtlas` instances directly from disk in `show()` and
+`dispose()`d them on the way out — so `ships.atlas`/`menu.atlas` in
+particular were reloaded from scratch on almost every transition (e.g.
+Ship Selection loads both, then `Client` reloads `ships.atlas` again a
+moment later), and — worse, once actually audited — every HUD widget
+(`ShipStatusHud`, `PowerDistributionHud`, `ScoreboardHud`) was
+constructing (and disposing) its *own* fresh copies of its background/
+gauge/panel textures every single time `Client` or `DeathScreen` was
+shown — meaning every single combat death (not just a rarer screen
+transition) reloaded and re-uploaded a stack of HUD textures too.
+
+**Fix — the same shape the user described from past projects:** a small
+splash screen loads every shared texture/atlas once, up front, into an
+`AssetManager` held for the whole run of the app; every other screen
+just reads already-resident assets from then on.
+
+- **`StarWarsGame`** now owns the `AssetManager` (`getAssets()`) and
+  starts on the new `SplashScreen` instead of `ConnectScreen` directly;
+  overrides `dispose()` to dispose the manager (frees every texture/
+  atlas) after the inherited screen-hide behavior, once, at real app
+  shutdown.
+- **New `render.GameAssets`**: the single source of truth for every
+  shared asset's classpath path (3 atlases, ~15 standalone HUD/menu/
+  background textures, all 7 ship types' HUD hull textures, the Death
+  Screen's dialog background + all 23 quote images), plus
+  `queueAll(AssetManager)` — called exactly once, by `SplashScreen`.
+- **New `SplashScreen`**: logo on a black background (`ScreenUtils.clear`),
+  plus a simple progress bar (a tinted/stretched 1x1 white pixel texture,
+  same technique `Tooltip` already used for its background box — no
+  `ShapeRenderer` needed for one rectangle) driven by
+  `AssetManager.getProgress()`. The logo itself is loaded and
+  `finishLoadingAsset`-forced synchronously first (a single small
+  texture, negligible blocking cost) so it's actually visible on this
+  very screen, before `GameAssets.queueAll` queues everything else for
+  the asynchronous loading this screen's `render()` drives one step at a
+  time via `AssetManager.update()`. Hands off to `ConnectScreen` the
+  frame `update()` returns `true`.
+- **Every consumer screen** (`ConnectScreen`, `ShipSelectionScreen`,
+  `Client`, `DeathScreen`) now calls `game.getAssets().get(GameAssets.X,
+  ...)` instead of `new Texture(...)`/`new TextureAtlas(...)`, and no
+  longer disposes those specific fields itself (the asset manager owns
+  them now) — each dispose() left a one-line comment explaining why,
+  rather than silently dropping the call.
+- **`ShipStatusHud`/`PowerDistributionHud`/`ScoreboardHud`** all gained an
+  `AssetManager` constructor parameter and now resolve their textures
+  from it instead of loading their own; `ShipStatusHud`'s per-ship-type
+  hull texture fallback (design.md 2.7) is preserved, just re-expressed
+  as `assets.isLoaded(path, Texture.class)` instead of a `FileHandle
+  .exists()` check (`GameAssets.queueAll` only queues a hull texture for
+  a ship type when the file actually exists, same condition, checked
+  once up front instead of lazily). `ShipStatusHud`/`PowerDistributionHud`
+  own nothing anymore and dropped `Disposable` entirely rather than keep
+  a meaningless empty `dispose()`; `ScoreboardHud` keeps it, since it
+  still owns one per-instance `GameFonts`-generated `BitmapFont` (see
+  below).
+- **`ScrollingBackground`** dropped `Disposable`/`dispose()` outright — 100%
+  of its call sites now pass in the same `AssetManager`-owned
+  `menu_starfield.png`, so it never owned a texture to free in the first
+  place after this migration. **`ParallaxBackground.Layer`** gained a
+  `boolean ownsTexture` constructor parameter instead, since it has two
+  genuinely different use cases side by side in `Client`: `blue_nebula.png`
+  (now asset-managed, `ownsTexture = false`) and
+  `PlaceholderStarfield.generate(...)`'s procedurally-generated texture
+  (still built fresh, and therefore still disposed, per `Client`
+  instance — see below).
+
+**Deliberately left outside the `AssetManager`, on purpose, not by
+oversight:**
+
+- **`GameFonts`-generated `BitmapFont`s** (the live "SF Distant Galaxy"
+  rendering, design.md 4.4) — still generated fresh per call site
+  (`ConnectScreen`'s UI font, `Tooltip`'s and `ScoreboardHud`'s own
+  fonts). Rasterizing a small font from a `.ttf` is fast (single-digit
+  milliseconds), nowhere near the cost of a full texture atlas reload,
+  and routing it through the `AssetManager` would need real extra
+  plumbing (`FreetypeFontLoader` + a distinct `AssetDescriptor` per
+  pixel size actually used) for a cost that isn't the problem being
+  fixed. Revisit only if font generation itself is ever measured as a
+  real contributor.
+- **`PlaceholderStarfield`'s generated texture** — procedural, not a
+  file on disk, and explicitly a stand-in for real star-dot art the
+  project is still waiting on (design.md 4.2) anyway; still generated
+  (and disposed) fresh per `Client` instance.
+- **`audio/StarWarsTheme.mp3`** — streamed `Music`, loaded exactly once
+  by `ConnectScreen`, not a repeated-load concern this migration needed
+  to touch.
+
+**Verification status:** full `mvn clean install` (all 4 modules,
+packaging included) and `mvn test` (core + server) both green,
+confirming the refactor compiles and every existing unit test still
+passes. **Not yet verified live** — the user asked this session not to
+launch the client/server at all today (working from the office, and
+`ConnectScreen`'s background music would otherwise play at an
+inopportune moment), so the actual splash screen (logo + progress bar
+rendering correctly, then handing off cleanly to `ConnectScreen`) and
+the actual pause-reduction switching between Ship Selection ↔ gameplay ↔
+Death Screen still need a real play-test before this is considered
+fully confirmed, the same as every other milestone in this project.
+
+### 3.15 Network diagnostics: absolute timestamps + connect/stop/tick timing (2026-09-08)
+
+Added while investigating a still-open screen-transition-pause report
+(CLAUDE.md has the full investigation trail) — kept here because it's
+permanent architecture, not throwaway debugging code.
+
+- **`core.net.NetworkLogging`** installs a custom minlog `Log.Logger`
+  that prefixes every KryoNet log line with an absolute wall-clock
+  timestamp (`HH:mm:ss.SSS`) instead of minlog's default
+  time-since-process-start elapsed counter, so a client-process log line
+  and a server-process log line (two independent processes, started at
+  different times) can actually be lined up against each other.
+  Installed once, idempotently, from both `NetworkClient`'s and
+  `NetworkServer`'s constructors — either alone covers the whole
+  process, including KryoNet's own internal connect/disconnect lines.
+- **`NetworkClient.connect()`/`stop()`** log how long the call actually
+  took. Both are otherwise unremarkable wrappers around the underlying
+  KryoNet fork's own methods — the timing exists purely because those
+  two specific calls turned out to have highly variable, real-world
+  multi-second-to-20+-second durations on at least one development
+  machine, confirmed by a from-scratch, game-free JUnit test
+  (`NetworkServerClientIntegrationTest`), not by anything in this
+  project's own code.
+- **`Client.show()`/`dispose()` and `ShipSelectionScreen.show()`/`dispose()`**
+  log their own total elapsed time, to localize a stall to a specific
+  screen-transition step relative to the `NetworkClient`-level timing
+  above.
+- **`Client.render()`** and **`GameNetworkServer.tick()`** both log a
+  warning if called with a `deltaTime` beyond 0.5s — a direct signal
+  that the calling thread (render thread client-side, tick thread
+  server-side) was blocked/stalled since the previous call, independent
+  of knowing *why*.
+- **`GameNetworkServer.handleHandshake`** logs its own elapsed time, to
+  rule in/out `AccountStore.login()` (already synchronous-in-memory-only,
+  background-flushed — design.md 3.6) as a contributor.
+
+None of this is behind a flag — it's cheap (a handful of
+`System.currentTimeMillis()` calls and log lines per screen transition/
+connect/stop, not per-tick or per-frame) and directly useful for any
+future networking-timing question, not just the specific investigation
+that motivated it.
+
 ## 4. Rendering & presentation
 
 ### 4.1 Camera

@@ -94,12 +94,25 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class GameNetworkServer extends NetworkServer {
 
+    private static final String TAG = "GameNetworkServer";
+
     /** Fixed delay between a ship being destroyed and it respawning; not a tuned value. */
     private static final float RESPAWN_DELAY_SECONDS = 3f;
     /** design.md 2.3's combat-lock window: ESC-leave is blocked within this long of firing or being hit. */
     private static final float COMBAT_LOCK_SECONDS = 20f;
     /** How often {@link #broadcastScoreboard()} runs - the TAB overlay (design.md 2.11) doesn't need per-tick freshness. */
     private static final float SCOREBOARD_BROADCAST_INTERVAL_SECONDS = 1f;
+    /**
+     * {@link #tick(float)} logs a warning if called with a {@code deltaTime}
+     * beyond this - temporary diagnostic instrumentation added while
+     * investigating an intermittent screen-transition pause (CLAUDE.md): a
+     * tick this slow means the tick thread was blocked/stalled since the
+     * previous call, which (via {@code PhysicsSystem}'s existing
+     * {@code MAX_STEPS_PER_FRAME} clamp) can take many subsequent ticks to
+     * fully catch up from, showing up as erratic movement for a while
+     * afterward even once the actual stall is over.
+     */
+    private static final float TICK_STALL_WARN_SECONDS = 0.5f;
 
     private final World world = new World(new Vector2(0, 0), true);
     private final Engine engine = new Engine();
@@ -203,6 +216,11 @@ public class GameNetworkServer extends NetworkServer {
      * @param deltaTime time since the last tick, in seconds
      */
     public void tick(float deltaTime) {
+        if (deltaTime > TICK_STALL_WARN_SECONDS) {
+            Gdx.app.log(TAG, "tick() called with deltaTime=" + deltaTime
+                + "s - the tick thread was likely blocked/stalled since the previous tick");
+        }
+
         Runnable action;
         while ((action = pendingActions.poll()) != null) {
             action.run();
@@ -507,20 +525,34 @@ public class GameNetworkServer extends NetworkServer {
      * actually joins a match. On acceptance, the response also carries the
      * account's XP/unlocked ships (design.md - ship unlocks) -
      * {@code ShipSelectionScreen} reads these from its own fresh handshake.
+     * <p>
+     * Logs how long the call took - temporary diagnostic instrumentation
+     * added while investigating an intermittent screen-transition pause
+     * (CLAUDE.md), to rule in/out {@link #accountStore}'s (synchronous,
+     * in-memory-only, see its own class Javadoc) login check as the cause.
+     * Runs on KryoNet's network thread (see the class Javadoc), not the
+     * tick thread, so this can't itself be why {@link #tick(float)} would
+     * see a large {@code deltaTime}.
      */
     @Override
     protected HandshakeResponse handleHandshake(Connection connection, HandshakeRequest request) {
-        int playerId = connection.getID();
-        AuthResult result = accountStore.login(request.getLogin(), request.getPassword(), request.getDisplayName());
-        if (!result.success()) {
-            return new HandshakeResponse(false, result.message());
+        long startMillis = System.currentTimeMillis();
+        try {
+            int playerId = connection.getID();
+            AuthResult result = accountStore.login(request.getLogin(), request.getPassword(), request.getDisplayName());
+            if (!result.success()) {
+                return new HandshakeResponse(false, result.message());
+            }
+            pendingActions.add(() -> {
+                connectionsByPlayerId.put(playerId, connection);
+                loginByPlayerId.put(playerId, request.getLogin());
+            });
+            PlayerAccount account = result.account();
+            return new HandshakeResponse(true, result.message(), account.getXp(), toArray(account.getUnlockedShips()));
+        } finally {
+            Gdx.app.log(TAG, "handleHandshake(" + request.getLogin() + ") took "
+                + (System.currentTimeMillis() - startMillis) + "ms");
         }
-        pendingActions.add(() -> {
-            connectionsByPlayerId.put(playerId, connection);
-            loginByPlayerId.put(playerId, request.getLogin());
-        });
-        PlayerAccount account = result.account();
-        return new HandshakeResponse(true, result.message(), account.getXp(), toArray(account.getUnlockedShips()));
     }
 
     /**
