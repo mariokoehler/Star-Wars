@@ -108,6 +108,16 @@ public final class ShipStats {
     }
 
     /**
+     * Returns the exponent applied to the Engines power multiplier before
+     * it scales turn torque.
+     *
+     * @return the turn-response exponent, see {@link ShipTypeConfig#getEngineTurnResponseExponent()}
+     */
+    public float getEngineTurnResponseExponent() {
+        return config.getEngineTurnResponseExponent();
+    }
+
+    /**
      * Returns the ship's maximum hull health.
      *
      * @return the maximum hull health

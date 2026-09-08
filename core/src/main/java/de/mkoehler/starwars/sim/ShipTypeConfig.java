@@ -25,6 +25,7 @@ public class ShipTypeConfig {
     private float pixelsPerMeter;
     private float thrustForce;
     private float turnTorque;
+    private float engineTurnResponseExponent;
     private float hullMaxHealth;
     private float shieldMaxCapacity;
     private float shieldRechargePerSecond;
@@ -106,6 +107,26 @@ public class ShipTypeConfig {
 
     public void setTurnTorque(float turnTorque) {
         this.turnTorque = turnTorque;
+    }
+
+    /**
+     * Returns the exponent applied to the Engines power multiplier before
+     * it scales turn torque (design.md 2.2's addendum — see
+     * {@link de.mkoehler.starwars.sim.TurnResponseCurve}): {@code 1.0}
+     * reproduces the plain linear multiplier thrust also uses (unchanged
+     * behavior), {@code < 1.0} gives diminishing returns at both extremes —
+     * taming how "ridiculously" agile a light ship gets with Engines maxed
+     * out, at the cost of also softening how punishing a starved-Engines
+     * split is. Only turn torque is affected; thrust always stays linear.
+     *
+     * @return the turn-response exponent
+     */
+    public float getEngineTurnResponseExponent() {
+        return engineTurnResponseExponent;
+    }
+
+    public void setEngineTurnResponseExponent(float engineTurnResponseExponent) {
+        this.engineTurnResponseExponent = engineTurnResponseExponent;
     }
 
     public float getHullMaxHealth() {

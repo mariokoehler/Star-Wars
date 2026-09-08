@@ -943,6 +943,56 @@ a held key, only rapid down/up) confirmed visually and unambiguously:
 holding **L** for 700ms snapped Engines to the ~80% ceiling and
 Shields/Weapons to the 10% floor in one jump, no exceptions either side.
 
+**Non-linear engine-power-to-turn-torque curve, added 2026-09-09.** The
+user reported light ships (Snowspeeder specifically) becoming
+"ridiculously" agile — hard to control — with Engines maxed out, while
+straight-line speed at the same setting felt fine. Root cause: `2.2`'s
+linear `multiplierFor(PowerSystem)` (`fraction / BASELINE_FRACTION`,
+ranging ~0.30 at the floor to ~2.40 maxed) was applied identically to
+*both* thrust and torque (`ShipControlSystem`) — a light ship's small
+moment of inertia makes the same linear torque multiplier feel far more
+extreme than it does on a heavier ship, and nothing curbed the top end.
+
+**Decision, made via `AskUserQuestion` (a real gameplay-feel fork, same
+"foundational" bar as 2.2's original power-fraction-formula decision) —
+a power-law curve, not a piecewise-above-baseline one:**
+`torqueMultiplier = enginesMultiplier ^ engineTurnResponseExponent`,
+a new **per-ship-type** `.stats.json` field (thrust is untouched —
+still the plain linear multiplier). Chosen over the piecewise
+alternative (which would only compress the maxed-out end, leaving
+starved-engine turning exactly as punishing as today) specifically
+because it always evaluates to exactly 1.0 at baseline power
+regardless of the exponent — every ship's baseline handling stays
+byte-for-byte identical to today with zero re-tuning — while
+compressing *both* extremes symmetrically in log-space: `exponent = 1`
+reproduces today's exact linear behavior (the default for every ship
+except the Snowspeeder), `exponent < 1` tames the top end (the actual
+complaint) as a direct consequence of the same curve that also softens
+the starved-engine bottom end. Snowspeeder example at `exponent = 0.5`,
+150 N·m baseline torque: floor 45→82 N·m, baseline 150→150 N·m
+(unchanged), maxed 360→232 N·m. `exponent = 0.5` is a first-guess
+starting point for the Snowspeeder specifically, **untuned, expected to
+be adjusted by feel** — every other ship type keeps `1.0` (linear,
+unchanged) until/unless a similar complaint comes up for one of them.
+
+New pure `sim.TurnResponseCurve.apply(linearMultiplier, exponent)`
+(unit-tested), the same "logic-heavy pure function, separate from
+system wiring" split as `TurretAiming`/`RadarDetection`/`PowerDistribution`
+itself — deliberately its own small class rather than a method on
+`PowerDistribution`, since `PowerDistribution` represents the 3-way
+power *split* itself and has no reason to know about a torque-specific
+curve on top of it. `PlayerControlledComponent` (server-side) gained a
+third baked-in-at-spawn value, `engineTurnResponseExponent`, alongside
+its existing thrust/torque — `ShipControlSystem` now computes the
+Engines linear multiplier once, applies it to thrust unchanged, and
+runs it through `TurnResponseCurve.apply` (using that stored exponent)
+before applying it to torque. `Client.predictLocalShip` applies the
+identical curve using `ShipStats.getEngineTurnResponseExponent()`
+directly (no Ashley component involved client-side, same dual-path
+shape thrust/torque themselves already have) — required for prediction
+to stay reconciliation-free, same reasoning as every other
+client/server physics-parity rule in this project.
+
 ### 2.9 Turret weapons (Falcon/Star Destroyer only, 2026-09-06)
 
 A second, independently-autonomous weapon system layered on top of 2.4's

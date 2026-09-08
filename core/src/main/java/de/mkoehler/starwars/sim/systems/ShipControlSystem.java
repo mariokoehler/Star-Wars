@@ -7,6 +7,7 @@ import com.badlogic.ashley.systems.IteratingSystem;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import de.mkoehler.starwars.sim.PowerSystem;
+import de.mkoehler.starwars.sim.TurnResponseCurve;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
@@ -54,8 +55,11 @@ public class ShipControlSystem extends IteratingSystem {
         PlayerControlledComponent control = controlMapper.get(entity);
         NetworkInputComponent input = inputMapper.get(entity);
         float enginesMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.ENGINES);
+        // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
+        // response curve (design.md 2.2's addendum) - see TurnResponseCurve's own Javadoc for why.
+        float turnMultiplier = TurnResponseCurve.apply(enginesMultiplier, control.getEngineTurnResponseExponent());
 
-        applyInput(body, control.getThrustForce() * enginesMultiplier, control.getTurnTorque() * enginesMultiplier,
+        applyInput(body, control.getThrustForce() * enginesMultiplier, control.getTurnTorque() * turnMultiplier,
             input.isThrustForward(), input.isThrustReverse(), input.isTurnLeft(), input.isTurnRight());
     }
 

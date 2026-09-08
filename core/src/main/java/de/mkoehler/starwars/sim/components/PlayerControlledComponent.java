@@ -12,18 +12,23 @@ public class PlayerControlledComponent implements Component {
 
     private final float thrustForce;
     private final float turnTorque;
+    private final float engineTurnResponseExponent;
 
     /**
      * Creates a player-controlled component.
      *
-     * @param thrustForce force, in newtons, applied along the ship's facing
-     *                    direction while the thrust-forward input is held
-     * @param turnTorque  torque, in newton-meters, applied while a turn input
-     *                    is held
+     * @param thrustForce                force, in newtons, applied along the ship's facing
+     *                                   direction while the thrust-forward input is held
+     * @param turnTorque                 torque, in newton-meters, applied while a turn input
+     *                                   is held
+     * @param engineTurnResponseExponent this ship type's own
+     *                                   {@link de.mkoehler.starwars.sim.ShipTypeConfig#getEngineTurnResponseExponent()}
+     *                                   (design.md 2.2's addendum)
      */
-    public PlayerControlledComponent(float thrustForce, float turnTorque) {
+    public PlayerControlledComponent(float thrustForce, float turnTorque, float engineTurnResponseExponent) {
         this.thrustForce = thrustForce;
         this.turnTorque = turnTorque;
+        this.engineTurnResponseExponent = engineTurnResponseExponent;
     }
 
     /**
@@ -42,5 +47,15 @@ public class PlayerControlledComponent implements Component {
      */
     public float getTurnTorque() {
         return turnTorque;
+    }
+
+    /**
+     * Returns the exponent applied to the Engines power multiplier before
+     * it scales {@link #getTurnTorque()} (design.md 2.2's addendum).
+     *
+     * @return the turn-response exponent
+     */
+    public float getEngineTurnResponseExponent() {
+        return engineTurnResponseExponent;
     }
 }

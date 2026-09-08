@@ -1,8 +1,9 @@
 {
   "radiusMeters": 1.5,
   "pixelsPerMeter": 42.6667,
-  "thrustForce": 200.0,
-  "turnTorque": 150.0,
+  "thrustForce": 150.0,
+  "turnTorque": 50.0,
+  "engineTurnResponseExponent": 0.5,
   "hullMaxHealth": 100.0,
   "shieldMaxCapacity": 100.0,
   "shieldRechargePerSecond": 5.0,

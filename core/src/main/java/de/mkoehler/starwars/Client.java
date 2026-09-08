@@ -48,6 +48,7 @@ import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
+import de.mkoehler.starwars.sim.TurnResponseCurve;
 import de.mkoehler.starwars.sim.WeaponStats;
 import de.mkoehler.starwars.sim.metadata.PixelPoint;
 import de.mkoehler.starwars.sim.metadata.TurretConfig;
@@ -767,6 +768,11 @@ public class Client implements Screen {
     private void predictLocalShip(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, float deltaTime) {
         ShipStats myStats = ShipStats.forType(myShipType);
         float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES);
+        // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
+        // response curve (design.md 2.2's addendum) - must match ShipControlSystem's own server-side
+        // math exactly, or local prediction would constantly need correcting for reasons other than
+        // differing input.
+        float turnMultiplier = TurnResponseCurve.apply(enginesMultiplier, myStats.getEngineTurnResponseExponent());
         // Snapshot the pre-step position/angle, and reapply input, immediately before *each*
         // individual physics step (see PhysicsSystem#update(float, Runnable)) - not once here
         // before the whole call. A single render() call can trigger more than one fixed step
@@ -783,7 +789,7 @@ public class Client implements Screen {
             myPreviousY = myBody.getPosition().y;
             myPreviousAngle = myBody.getAngle();
             ShipControlSystem.applyInput(myBody, myStats.getThrustForce() * enginesMultiplier,
-                myStats.getTurnTorque() * enginesMultiplier,
+                myStats.getTurnTorque() * turnMultiplier,
                 thrustForward, thrustReverse, turnLeft, turnRight);
         });
     }

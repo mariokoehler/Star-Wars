@@ -65,7 +65,8 @@ public final class ShipFactory {
         entity.add(new PlayerIdComponent(playerId));
         entity.add(new ShipTypeComponent(stats.getType()));
         entity.add(new PhysicsBodyComponent(body));
-        entity.add(new PlayerControlledComponent(stats.getThrustForce(), stats.getTurnTorque()));
+        entity.add(new PlayerControlledComponent(stats.getThrustForce(), stats.getTurnTorque(),
+            stats.getEngineTurnResponseExponent()));
         entity.add(new NetworkInputComponent());
         entity.add(new HullComponent(stats.getMaxHealth()));
         entity.add(new ShieldComponent(stats.getShieldMaxCapacity(), stats.getShieldRechargePerSecond()));

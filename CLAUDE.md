@@ -2090,6 +2090,61 @@ carries exactly the data this would need, kept in sync for this
 reason even before there was a consumer for it. Both explicitly
 deferred, not blocking anything.
 
+**One more `connect()`/`stop()` data point, unprompted, from this same
+session's own `mvn clean install` runs at home (not investigated
+further, per the user's own "no immediate to-do" on this right now):**
+`stop()` took **24795ms** in one run — the worst single number seen
+yet, at home, same laptop. Reinforces rather than changes anything in
+the entry above; still parked until the other-machine test.
+
+**Non-linear engine-power-to-turn-torque curve — implemented
+2026-09-09.** See design.md 2.2's addendum for the full writeup. User
+reported light ships (Snowspeeder) turning "ridiculously" fast with
+Engines maxed, straight-line speed fine at the same setting — root
+cause was `ShipControlSystem` applying the exact same linear power
+multiplier to both thrust and torque, with nothing curbing the top end
+for a low-inertia ship. Resolved the curve-shape choice via
+`AskUserQuestion` (same "foundational gameplay-feel fork" bar as 2.2's
+original linear-multiplier decision) with two options shown side by
+side with actual worked numbers, not just formulas — **power law
+(`torqueMultiplier = enginesMultiplier ^ exponent`) chosen** over a
+piecewise-only-above-baseline alternative, specifically because it
+always fixes at exactly 1.0 at baseline power regardless of the
+exponent (zero re-tuning risk for every ship not touched) while
+compressing both extremes symmetrically in log-space — accepted the
+tradeoff that a starved-Engines split also gets softer, not just the
+maxed-out end, as a direct consequence of the same simple curve.
+
+New pure `sim.TurnResponseCurve` (5 unit tests), a new per-ship-type
+`.stats.json` field `engineTurnResponseExponent` (`1.0` = today's exact
+linear behavior — every ship keeps this except Snowspeeder, given
+`0.5` as an explicitly untuned starting point for the user to feel-test
+and adjust), `PlayerControlledComponent` gained a third baked-in-at-spawn
+value, `ShipControlSystem` now splits thrust (still plain linear) from
+torque (curved) instead of one shared multiplier, and `Client.
+predictLocalShip` applies the identical curve client-side (via
+`ShipStats` directly, no Ashley component needed there) so local
+prediction can't drift from the server for reasons other than input —
+same physics-parity rule this project has followed since client-side
+prediction was first added.
+
+**Verification status:** full `mvn clean install` (all 4 modules) and
+`mvn test` green — 115 core tests (up from 110: +5
+`TurnResponseCurveTest`) + 30 server tests.
+
+**Play-tested, same day — the exponent alone wasn't enough, user hand-
+tuned further.** `0.5` on its own didn't fully fix the feel; the user
+edited `snowspeeder.stats.json` directly afterward, dropping
+`thrustForce` 200→150 and `turnTorque` 150→50 (on top of keeping
+`engineTurnResponseExponent` at `0.5`) — a real, empirical, by-feel
+result, not a formula-derived one. **Same standing rule as every other
+hand-tuned number in this project: don't "fix" these toward a
+calculated value if they come up again**, they're the user's own
+verified-by-flying-it result. Snowspeeder's baseline (even power split)
+handling is therefore now genuinely different from every other ship,
+not just its response-to-maxed-Engines curve — worth remembering if a
+future balancing pass touches it.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

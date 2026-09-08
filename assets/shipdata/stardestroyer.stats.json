@@ -3,6 +3,7 @@
   "pixelsPerMeter": 32.0,
   "thrustForce": 200.0,
   "turnTorque": 150.0,
+  "engineTurnResponseExponent": 1.0,
   "hullMaxHealth": 100.0,
   "shieldMaxCapacity": 100.0,
   "shieldRechargePerSecond": 5.0,
