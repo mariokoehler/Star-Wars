@@ -195,4 +195,86 @@ public final class ShipStats {
     public int getUnlockCostXp() {
         return config.getUnlockCostXp();
     }
+
+    /**
+     * Returns whether this ship type's omnidirectional base radar is enabled.
+     *
+     * @return {@code true} if enabled, see {@link ShipTypeConfig#isRadarBaseEnabled()}
+     */
+    public boolean isRadarBaseEnabled() {
+        return config.isRadarBaseEnabled();
+    }
+
+    /**
+     * Returns the base radar's omnidirectional detection range.
+     *
+     * @return the range, in meters, see {@link ShipTypeConfig#getRadarBaseRangeMeters()}
+     */
+    public float getRadarBaseRangeMeters() {
+        return config.getRadarBaseRangeMeters();
+    }
+
+    /**
+     * Returns whether this ship type's forward-facing cone radar is enabled.
+     *
+     * @return {@code true} if enabled, see {@link ShipTypeConfig#isRadarConeEnabled()}
+     */
+    public boolean isRadarConeEnabled() {
+        return config.isRadarConeEnabled();
+    }
+
+    /**
+     * Returns the cone radar's detection range.
+     *
+     * @return the range, in meters, see {@link ShipTypeConfig#getRadarConeRangeMeters()}
+     */
+    public float getRadarConeRangeMeters() {
+        return config.getRadarConeRangeMeters();
+    }
+
+    /**
+     * Returns the cone radar's half-angle.
+     *
+     * @return the half-angle, in degrees, see {@link ShipTypeConfig#getRadarConeHalfAngleDegrees()}
+     */
+    public float getRadarConeHalfAngleDegrees() {
+        return config.getRadarConeHalfAngleDegrees();
+    }
+
+    /**
+     * Returns whether this ship type's active pulse radar is enabled.
+     *
+     * @return {@code true} if enabled, see {@link ShipTypeConfig#isRadarPulseEnabled()}
+     */
+    public boolean isRadarPulseEnabled() {
+        return config.isRadarPulseEnabled();
+    }
+
+    /**
+     * Returns the pulse's omnidirectional detection range while active.
+     *
+     * @return the range, in meters, see {@link ShipTypeConfig#getRadarPulseRangeMeters()}
+     */
+    public float getRadarPulseRangeMeters() {
+        return config.getRadarPulseRangeMeters();
+    }
+
+    /**
+     * Returns how long after triggering the pulse before it can be triggered again.
+     *
+     * @return the cooldown, in seconds, see {@link ShipTypeConfig#getRadarPulseCooldownSeconds()}
+     */
+    public float getRadarPulseCooldownSeconds() {
+        return config.getRadarPulseCooldownSeconds();
+    }
+
+    /**
+     * Returns how long the pulse's own detection (and the pulsing ship's
+     * unconditional visibility to others) lasts after triggering.
+     *
+     * @return the duration, in seconds, see {@link ShipTypeConfig#getRadarPulseRevealDurationSeconds()}
+     */
+    public float getRadarPulseRevealDurationSeconds() {
+        return config.getRadarPulseRevealDurationSeconds();
+    }
 }

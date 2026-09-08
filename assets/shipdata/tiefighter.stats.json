@@ -10,5 +10,14 @@
   "hudShieldClipBottomPixel": 437.0,
   "hudHullClipTopPixel": 187.0,
   "hudHullClipBottomPixel": 382.0,
-  "unlockCostXp": 1000
+  "unlockCostXp": 1000,
+  "radarBaseEnabled": true,
+  "radarBaseRangeMeters": 60.0,
+  "radarConeEnabled": true,
+  "radarConeRangeMeters": 120.0,
+  "radarConeHalfAngleDegrees": 30.0,
+  "radarPulseEnabled": true,
+  "radarPulseRangeMeters": 200.0,
+  "radarPulseCooldownSeconds": 30.0,
+  "radarPulseRevealDurationSeconds": 5.0
 }

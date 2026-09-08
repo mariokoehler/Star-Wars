@@ -1407,6 +1407,137 @@ no restart needed, directly proving the prerequisite check re-evaluates
 against the account's just-updated unlocked set rather than a stale
 snapshot. `mvn clean test` green throughout.
 
+### 2.14 Radar / minimap — server infrastructure only, no rendering yet (2026-09-08)
+
+The play arena is large enough that players need a way to find each
+other beyond direct sight. User's spec, three independent detection
+mechanisms per ship, each individually enable-able per ship type
+(design.md 7's Ship Tree progression can gate them in later — not done
+this session, every ship gets all three for now, uniform baseline, same
+"same numbers for everyone now, differentiate later" convention this
+project already applies to thrust/torque/hull/shield):
+
+1. **Base radar** — omnidirectional, 60m range, always-on detection.
+2. **Cone radar** — forward-facing arc, ±30° half-angle, 120m range.
+3. **Active pulse** — "R" keybind, omnidirectional, 200m range, 30s
+   cooldown. Using it also makes the *pulsing ship itself* visible to
+   every other player, regardless of range or their own radar
+   equipment, for the same duration the pulse's own detection lasts
+   (see "One simplification" below).
+
+**This session is infrastructure only, explicitly per the user's own
+framing** — no minimap art exists yet, so nothing renders. The goal was
+making sure the client receives exactly the data a minimap will need,
+nothing about drawing one.
+
+**Architectural consequence: this is the first real "fog of war" in the
+project, and it changes how `WorldSnapshotMessage` is built.**
+Design.md 3.5 originally had the server broadcast one shared snapshot
+(every ship's state) to every client via `sendToAllUDP`. Radar detection
+being meaningful at all requires the server to decide, per observing
+player, which *other* ships they currently know about — so
+`GameNetworkServer.broadcastSnapshot()` now builds a **personalized**
+`ShipState[]` per connected/spawned player (their own ship, always,
+plus whichever enemies their radar currently detects) and sends each
+one individually via that player's own `Connection.sendUDP(...)`,
+rather than one shared broadcast. This is a real, deliberate departure
+from 3.5's original model, chosen (not just defaulted to) because it's
+the only version consistent with this project's standing "never trust
+the client" rule (every unlock, spawn, and movement input is already
+re-validated server-side) — a client-side-only fog-of-war would be
+trivially bypassable by simply drawing every ship the client happens to
+receive.
+
+**Projectiles are deliberately NOT filtered by radar** — they stay
+broadcast to everyone, unfiltered, exactly as before. The user's spec
+was specifically about ships; gating projectile visibility too would be
+a much larger, unrequested scope addition (a shot suddenly appearing
+"from nowhere" once its shooter enters detection range, or vanishing
+before impact if the shooter drops out, are real design questions on
+their own) — left alone for now.
+
+**One simplification, worth flagging as a default, not confirmed by the
+user:** the spec describes the pulse's own detection ("ships within
+200m are picked up") and its downside ("you're visible to everyone for
+5 seconds") as two separate effects, only the second with an explicit
+duration. Implemented as one shared, continuously-re-evaluated window
+instead of a single instantaneous snapshot at the moment of the pulse:
+while a ship's pulse is active (`RadarComponent.isPulseActive()`, true
+for `radarPulseRevealDurationSeconds` after triggering), it (a) also
+detects everything within `radarPulseRangeMeters` omnidirectionally,
+continuously, for that whole window, and (b) is unconditionally visible
+to every other player's radar for that same window. Simpler to
+implement and reason about than a one-tick snapshot (which at 30Hz
+would be visually meaningless anyway), and a natural reading of "sends
+out a pulse... every other ship within range is picked up" as lasting
+long enough to actually register, not literally one simulation tick.
+Revisit if the user wants the pulse's own detection to persist for a
+different duration than the "I'm now visible" downside.
+
+**New/changed files:**
+
+- **`ShipTypeConfig`/`ShipStats`** gained 9 fields, loaded from
+  `.stats.json` like every other balance number: `radarBaseEnabled`/
+  `radarBaseRangeMeters`, `radarConeEnabled`/`radarConeRangeMeters`/
+  `radarConeHalfAngleDegrees`, `radarPulseEnabled`/`radarPulseRangeMeters`/
+  `radarPulseCooldownSeconds`/`radarPulseRevealDurationSeconds`. Every
+  ship type's `.stats.json` was given the same values (60m/120m±30°/
+  200m·30s·5s, all three enabled) — the exact numbers from the user's
+  own spec, applied uniformly.
+- **New `sim.RadarDetection`** — a pure, static, unit-tested geometry
+  function (no Ashley/Box2D dependency), same pattern as `TurretAiming`/
+  `ShipDamage`/`PowerDistribution`: given an observer's position/facing
+  and a target's position plus each mechanism's enabled/range/angle
+  values, returns whether the target is detected. Reuses
+  `TurretAiming.angularDifference` for the cone's wraparound-safe
+  bearing check rather than duplicating that math a third time.
+- **New `sim.components.RadarComponent`** (added to *every* ship,
+  unconditionally, unlike the optional `TurretComponent`) — pure
+  runtime state only, no stats reference (matches `NetworkInputComponent`'s
+  shape more than `WeaponComponent`'s): `pulseCooldownRemaining`,
+  `pulseActiveRemaining` (both ticked down every server tick), and the
+  `Set<Integer>` of currently-detected enemy player ids, recomputed from
+  scratch every tick.
+- **New `sim.systems.RadarSystem`** (server-side only) — each tick, for
+  every live ship, checks every *other* live ship against
+  `RadarDetection` (using that ship type's own config, read fresh via
+  `ShipTypeComponent`+`ShipStats.forType`, same lookup pattern
+  `WeaponSystem`/`TurretSystem` already use) OR'd with "is that other
+  ship currently pulsing" (unconditional visibility, independent of the
+  observer's own radar).
+- **New `net.messages.RadarPulseRequest`** — empty payload, reliable
+  (TCP) channel, same shape as `TurretToggleMessage`: the server
+  identifies the requester from the connection, checks
+  `radarPulseEnabled` and `!isPulseOnCooldown()`, and either triggers it
+  or drops the request harmlessly (same "don't trust the client, just
+  don't let a bad request do anything" pattern as every other
+  player-triggered action here).
+- **`ShipState`** gained `radarPulseCooldownRemaining` — broadcast for
+  every ship (not just the local player's), same low-cost-now,
+  no-protocol-change-later reasoning as the existing hull/shield/turret
+  fields — a future HUD readout for "can I pulse again yet" needs it,
+  even though nothing reads it yet.
+- **`Client`** sends `RadarPulseRequest` on **R**, no local
+  cooldown-tracking needed (the server already drops it harmlessly if
+  premature, same as every other server-validated action). Also gained
+  ship-presence pruning in `onWorldSnapshot` — `ships.keySet().removeIf(id
+  -> !presentShipIds.contains(id))`, the exact same pattern already used
+  for `projectiles` — a ship that drops out of radar range now actually
+  disappears from the client's world instead of freezing in its last
+  known position forever, which is new and necessary now that a ship
+  can legitimately stop appearing in snapshots without dying or
+  disconnecting.
+
+**Explicitly out of scope this session, per the user's own framing:**
+any minimap rendering/HUD widget at all (no art exists yet); tiering
+which ships get which radar sub-systems (§7's Ship Tree idea — every
+ship gets all three uniformly for now); any client-side visual feedback
+for the pulse (a ping animation, a cooldown indicator) or for being
+pulse-detected. The client-side data plumbing above (radar-filtered
+`ships` map, `radarPulseCooldownRemaining`) is deliberately already
+sufficient to build a minimap against once art exists — that's the
+actual goal of this session's work.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -3417,6 +3548,8 @@ remappable via the Keybind Setup screen (5.2).
 - **SPACE** — fire primary weapon
 - **ESC** — leave match, back to Ship Selection (blocked while in combat,
   see §2.3)
+- **R** — trigger the active radar pulse (2.14), if this ship type has one
+  and it's off cooldown
 - **Power distribution (2.2):** **I / J / L**, chosen because they form a
   triangle under the right hand (resting comfortably while the left hand
   stays on WASD), with **K** (the natural center of the triangle) as the

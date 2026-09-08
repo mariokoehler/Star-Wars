@@ -27,6 +27,7 @@ import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
@@ -214,6 +215,13 @@ public class Client implements Screen {
     private float myShieldCurrent;
     private float myShieldMax;
     private float[] myTurretAimAngles = new float[0];
+    /**
+     * How much longer until this ship's radar pulse (design.md 2.14, "R")
+     * can be triggered again - not read by anything yet (no minimap/HUD
+     * exists for it this session), kept in sync purely so that HUD has the
+     * data it needs once it does.
+     */
+    private float myRadarPulseCooldownRemaining;
     /** Latest scoreboard from the server (design.md 2.11) - only drawn while TAB is held. */
     private PlayerScoreEntry[] scoreboardEntries = NO_SCORES;
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
@@ -478,6 +486,13 @@ public class Client implements Screen {
     }
 
     private void onWorldSnapshot(WorldSnapshotMessage snapshot) {
+        // Radar (design.md 2.14): a ship no longer appears here at all once this player's radar
+        // stops detecting it - the server never sends more than the local player's own ship plus
+        // whichever enemies it currently detects. presentShipIds drives the same
+        // present-in-this-snapshot-or-remove pruning already used for projectiles just below, so
+        // a ship that drops out of radar range actually disappears from this client's world
+        // instead of freezing in its last known position forever.
+        Set<Integer> presentShipIds = new HashSet<>();
         for (ShipState state : snapshot.getShips()) {
             if (state.getPlayerId() == myPlayerId) {
                 reconcileWithServer(state);
@@ -486,8 +501,10 @@ public class Client implements Screen {
                 myShieldCurrent = state.getShieldCurrent();
                 myShieldMax = state.getShieldMax();
                 myTurretAimAngles = state.getTurretAimAngles();
+                myRadarPulseCooldownRemaining = state.getRadarPulseCooldownRemaining();
                 continue;
             }
+            presentShipIds.add(state.getPlayerId());
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
             RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(),
@@ -498,6 +515,7 @@ public class Client implements Screen {
                 state.getAngularVelocity());
             ship.turretAimAngles = state.getTurretAimAngles();
         }
+        ships.keySet().removeIf(id -> !presentShipIds.contains(id));
 
         // Projectiles have no destroyed-notification of their own (design.md 3.5's
         // ProjectileState note) - presence in this snapshot means alive, so anything not
@@ -586,6 +604,13 @@ public class Client implements Screen {
 
             if (Gdx.input.isKeyJustPressed(Input.Keys.T)) {
                 networkClient.sendTCP(new TurretToggleMessage());
+            }
+
+            // Radar pulse (design.md 2.14, "R") - no local cooldown gating needed, same as every
+            // other server-validated action here: the server just drops it harmlessly if the
+            // pulse is disabled for this ship type or still on cooldown.
+            if (Gdx.input.isKeyJustPressed(Input.Keys.R)) {
+                networkClient.sendTCP(new RadarPulseRequest());
             }
         }
 

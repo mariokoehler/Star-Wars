@@ -12,6 +12,7 @@ import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
@@ -63,7 +64,7 @@ class MessageRegistryTest {
             LeaveMatchRequest.class, LeaveMatchDeniedMessage.class,
             TurretToggleMessage.class, float[].class, SpawnRequest.class,
             PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class,
-            ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class
+            ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -154,9 +155,9 @@ class MessageRegistryTest {
     void worldSnapshotMessageSurvivesRoundTrip() {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
-                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0]),
+                new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0], 12f),
                 new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.STARDESTROYER,
-                    new float[]{0.4f, -1.1f, 2.9f, -2.9f})
+                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f)
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 0.5f)
@@ -172,6 +173,7 @@ class MessageRegistryTest {
         assertEquals(100f, copy.getShips()[0].getShieldMax());
         assertEquals(ShipType.XWING, copy.getShips()[0].getShipType());
         assertEquals(0, copy.getShips()[0].getTurretAimAngles().length);
+        assertEquals(12f, copy.getShips()[0].getRadarPulseCooldownRemaining());
         assertEquals(-1.2f, copy.getShips()[1].getAngle());
         assertEquals(-0.3f, copy.getShips()[1].getAngularVelocity());
         assertEquals(ShipType.STARDESTROYER, copy.getShips()[1].getShipType());
@@ -272,6 +274,12 @@ class MessageRegistryTest {
         assertEquals(2500, copy.getXp());
         assertEquals(2, copy.getUnlockedShips().length);
         assertEquals(ShipType.AWING, copy.getUnlockedShips()[1]);
+    }
+
+    @Test
+    void radarPulseRequestSurvivesRoundTrip() {
+        RadarPulseRequest copy = roundTrip(new RadarPulseRequest(), RadarPulseRequest.class);
+        assertEquals(RadarPulseRequest.class, copy.getClass());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

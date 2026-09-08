@@ -24,6 +24,7 @@ import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
+import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
@@ -51,12 +52,14 @@ import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
+import de.mkoehler.starwars.sim.components.RadarComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.TurretComponent;
 import de.mkoehler.starwars.sim.systems.CombatTimerSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
+import de.mkoehler.starwars.sim.systems.RadarSystem;
 import de.mkoehler.starwars.sim.systems.ShieldRegenSystem;
 import de.mkoehler.starwars.sim.systems.ShipControlSystem;
 import de.mkoehler.starwars.sim.systems.TurretSystem;
@@ -126,6 +129,7 @@ public class GameNetworkServer extends NetworkServer {
     private final ProjectileLifetimeSystem projectileLifetimeSystem = new ProjectileLifetimeSystem(engine, world);
     private final ShieldRegenSystem shieldRegenSystem = new ShieldRegenSystem();
     private final CombatTimerSystem combatTimerSystem = new CombatTimerSystem();
+    private final RadarSystem radarSystem = new RadarSystem(engine);
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
@@ -156,6 +160,7 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(projectileLifetimeSystem);
         engine.addSystem(shieldRegenSystem);
         engine.addSystem(combatTimerSystem);
+        engine.addSystem(radarSystem);
 
         // Without this, a freshly-fired projectile would generate a real Box2D collision
         // against its own shooter's ship the instant it spawns (previously spawned exactly at
@@ -254,6 +259,10 @@ public class GameNetworkServer extends NetworkServer {
         combatTimerSystem.update(deltaTime);
         projectileLifetimeSystem.update(deltaTime);
         tickRespawns(deltaTime);
+
+        // Recomputed against this tick's freshest (post-physics-step) positions, immediately
+        // before broadcastSnapshot() reads it to decide what each player actually sees.
+        radarSystem.update(deltaTime);
 
         broadcastSnapshot();
 
@@ -646,6 +655,9 @@ public class GameNetworkServer extends NetworkServer {
         } else if (object instanceof UnlockShipRequest unlockRequest) {
             int playerId = connection.getID();
             pendingActions.add(() -> handleUnlockShipRequest(playerId, connection, unlockRequest.getShipType()));
+        } else if (object instanceof RadarPulseRequest) {
+            int playerId = connection.getID();
+            pendingActions.add(() -> applyRadarPulse(playerId));
         }
     }
 
@@ -723,6 +735,32 @@ public class GameNetworkServer extends NetworkServer {
         }
     }
 
+    /**
+     * Triggers a ship's radar pulse (design.md 2.14, the "R" keybind).
+     * Dropped harmlessly if the ship isn't spawned right now, its ship type
+     * has the pulse disabled, or it's still on cooldown from a previous
+     * pulse — same "don't trust the client, just don't let a bad request do
+     * anything" treatment as {@link #applyTurretToggle}.
+     *
+     * @param playerId the requesting player's id
+     */
+    private void applyRadarPulse(int playerId) {
+        Entity ship = shipsByPlayerId.get(playerId);
+        if (ship == null) {
+            return;
+        }
+        ShipType shipType = shipTypeByPlayerId.get(playerId);
+        ShipStats stats = ShipStats.forType(shipType);
+        if (!stats.isRadarPulseEnabled()) {
+            return;
+        }
+        RadarComponent radar = ship.getComponent(RadarComponent.class);
+        if (radar.isPulseOnCooldown()) {
+            return;
+        }
+        radar.triggerPulse(stats.getRadarPulseCooldownSeconds(), stats.getRadarPulseRevealDurationSeconds());
+    }
+
     private void despawnShip(int playerId) {
         Entity ship = shipsByPlayerId.remove(playerId);
         if (ship == null) {
@@ -732,20 +770,33 @@ public class GameNetworkServer extends NetworkServer {
         engine.removeEntity(ship);
     }
 
+    /**
+     * Builds and sends one personalized {@link WorldSnapshotMessage} per
+     * spawned player (design.md 2.14) — no longer a single shared broadcast.
+     * Each recipient's ship list always includes their own ship, plus
+     * whichever other ships their {@link RadarComponent} currently detects
+     * (computed by {@link RadarSystem} earlier this same tick) — a ship this
+     * player doesn't currently detect simply isn't included, the mechanism
+     * by which radar/fog-of-war actually works (never trust a client to hide
+     * something on its own). Projectiles are <em>not</em> filtered this way
+     * — every currently-alive projectile is included for everyone, same as
+     * before radar existed (design.md 2.14 flags this as a deliberate scope
+     * boundary, not an oversight).
+     */
     private void broadcastSnapshot() {
-        ShipState[] shipStates = new ShipState[shipsByPlayerId.size()];
-        int i = 0;
+        Map<Integer, ShipState> shipStatesByPlayerId = new HashMap<>();
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
             Entity ship = entry.getValue();
             Body body = ship.getComponent(PhysicsBodyComponent.class).getBody();
             HullComponent hull = ship.getComponent(HullComponent.class);
             ShieldComponent shield = ship.getComponent(ShieldComponent.class);
             ShipType shipType = ship.getComponent(ShipTypeComponent.class).getShipType();
-            shipStates[i++] = new ShipState(entry.getKey(),
+            RadarComponent radar = ship.getComponent(RadarComponent.class);
+            shipStatesByPlayerId.put(entry.getKey(), new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
                 hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType,
-                turretAimAngles(ship));
+                turretAimAngles(ship), radar.getPulseCooldownRemaining()));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(
@@ -759,7 +810,23 @@ public class GameNetworkServer extends NetworkServer {
                 body.getPosition().x, body.getPosition().y, body.getAngle());
         }
 
-        sendToAllUDP(new WorldSnapshotMessage(shipStates, projectileStates));
+        for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
+            int playerId = entry.getKey();
+            Connection connection = connectionsByPlayerId.get(playerId);
+            if (connection == null) {
+                continue; // shouldn't happen in practice - a spawned ship always has a known connection
+            }
+            RadarComponent radar = entry.getValue().getComponent(RadarComponent.class);
+            List<ShipState> visibleShips = new ArrayList<>(radar.getDetectedPlayerIds().size() + 1);
+            visibleShips.add(shipStatesByPlayerId.get(playerId));
+            for (int detectedPlayerId : radar.getDetectedPlayerIds()) {
+                ShipState detected = shipStatesByPlayerId.get(detectedPlayerId);
+                if (detected != null) {
+                    visibleShips.add(detected);
+                }
+            }
+            connection.sendUDP(new WorldSnapshotMessage(visibleShips.toArray(new ShipState[0]), projectileStates));
+        }
     }
 
     /**

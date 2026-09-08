@@ -33,6 +33,15 @@ public class ShipTypeConfig {
     private float hudHullClipTopPixel;
     private float hudHullClipBottomPixel;
     private int unlockCostXp;
+    private boolean radarBaseEnabled;
+    private float radarBaseRangeMeters;
+    private boolean radarConeEnabled;
+    private float radarConeRangeMeters;
+    private float radarConeHalfAngleDegrees;
+    private boolean radarPulseEnabled;
+    private float radarPulseRangeMeters;
+    private float radarPulseCooldownSeconds;
+    private float radarPulseRevealDurationSeconds;
 
     /**
      * Returns the ship's collision/draw radius, used only for the fallback
@@ -179,5 +188,138 @@ public class ShipTypeConfig {
 
     public void setUnlockCostXp(int unlockCostXp) {
         this.unlockCostXp = unlockCostXp;
+    }
+
+    /**
+     * Returns whether this ship type's omnidirectional base radar (design.md
+     * 2.14) is enabled at all — a ship type can have this (and/or the cone/
+     * pulse below) individually switched off, for a future per-ship-type
+     * radar loadout (design.md 7's Ship Tree progression); every current
+     * ship type has all three enabled.
+     *
+     * @return {@code true} if the base radar is enabled
+     */
+    public boolean isRadarBaseEnabled() {
+        return radarBaseEnabled;
+    }
+
+    public void setRadarBaseEnabled(boolean radarBaseEnabled) {
+        this.radarBaseEnabled = radarBaseEnabled;
+    }
+
+    /**
+     * Returns the base radar's omnidirectional detection range, meaningless
+     * if {@link #isRadarBaseEnabled()} is {@code false}.
+     *
+     * @return the range, in meters
+     */
+    public float getRadarBaseRangeMeters() {
+        return radarBaseRangeMeters;
+    }
+
+    public void setRadarBaseRangeMeters(float radarBaseRangeMeters) {
+        this.radarBaseRangeMeters = radarBaseRangeMeters;
+    }
+
+    /**
+     * Returns whether this ship type's forward-facing cone radar (design.md
+     * 2.14) is enabled at all.
+     *
+     * @return {@code true} if the cone radar is enabled
+     */
+    public boolean isRadarConeEnabled() {
+        return radarConeEnabled;
+    }
+
+    public void setRadarConeEnabled(boolean radarConeEnabled) {
+        this.radarConeEnabled = radarConeEnabled;
+    }
+
+    /**
+     * Returns the cone radar's detection range, meaningless if
+     * {@link #isRadarConeEnabled()} is {@code false}.
+     *
+     * @return the range, in meters
+     */
+    public float getRadarConeRangeMeters() {
+        return radarConeRangeMeters;
+    }
+
+    public void setRadarConeRangeMeters(float radarConeRangeMeters) {
+        this.radarConeRangeMeters = radarConeRangeMeters;
+    }
+
+    /**
+     * Returns the cone radar's half-angle — the arc spans this many degrees
+     * to either side of the ship's current facing (e.g. 30 means a 60°-wide
+     * total arc), meaningless if {@link #isRadarConeEnabled()} is
+     * {@code false}.
+     *
+     * @return the half-angle, in degrees
+     */
+    public float getRadarConeHalfAngleDegrees() {
+        return radarConeHalfAngleDegrees;
+    }
+
+    public void setRadarConeHalfAngleDegrees(float radarConeHalfAngleDegrees) {
+        this.radarConeHalfAngleDegrees = radarConeHalfAngleDegrees;
+    }
+
+    /**
+     * Returns whether this ship type's active pulse radar (design.md 2.14,
+     * the "R" keybind) is enabled at all.
+     *
+     * @return {@code true} if the pulse is enabled
+     */
+    public boolean isRadarPulseEnabled() {
+        return radarPulseEnabled;
+    }
+
+    public void setRadarPulseEnabled(boolean radarPulseEnabled) {
+        this.radarPulseEnabled = radarPulseEnabled;
+    }
+
+    /**
+     * Returns the pulse's omnidirectional detection range while active,
+     * meaningless if {@link #isRadarPulseEnabled()} is {@code false}.
+     *
+     * @return the range, in meters
+     */
+    public float getRadarPulseRangeMeters() {
+        return radarPulseRangeMeters;
+    }
+
+    public void setRadarPulseRangeMeters(float radarPulseRangeMeters) {
+        this.radarPulseRangeMeters = radarPulseRangeMeters;
+    }
+
+    /**
+     * Returns how long after triggering the pulse before it can be
+     * triggered again.
+     *
+     * @return the cooldown, in seconds
+     */
+    public float getRadarPulseCooldownSeconds() {
+        return radarPulseCooldownSeconds;
+    }
+
+    public void setRadarPulseCooldownSeconds(float radarPulseCooldownSeconds) {
+        this.radarPulseCooldownSeconds = radarPulseCooldownSeconds;
+    }
+
+    /**
+     * Returns how long, after triggering, the pulse's own detection stays
+     * active <em>and</em> the pulsing ship stays unconditionally visible to
+     * every other player's radar (design.md 2.14's "one simplification" —
+     * the spec's two separate effects share this one duration).
+     *
+     * @return the duration, in seconds
+     */
+    public float getRadarPulseRevealDurationSeconds() {
+        return radarPulseRevealDurationSeconds;
+    }
+
+    public void setRadarPulseRevealDurationSeconds(float radarPulseRevealDurationSeconds) {
+        this.radarPulseRevealDurationSeconds = radarPulseRevealDurationSeconds;
     }
 }

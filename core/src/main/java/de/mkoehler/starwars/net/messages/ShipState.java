@@ -30,6 +30,17 @@ import de.mkoehler.starwars.sim.ShipType;
  * server-simulated, never predicted (like projectiles), so this is the only
  * way any client, including the turret's own owner, learns where it's
  * currently pointed.
+ * <p>
+ * {@link #getRadarPulseCooldownRemaining()} (design.md 2.14) is broadcast
+ * for every ship, not just the local player's own, same low-cost-now
+ * reasoning as hull/shield/turret aim above — a future "can I pulse again"
+ * HUD readout needs it, even though nothing reads it yet.
+ * <p>
+ * This ship state's own presence in a {@link WorldSnapshotMessage} is
+ * itself meaningful now (design.md 2.14): the server only ever includes a
+ * ship here if the receiving player's radar currently detects it (or it's
+ * their own ship, always included) — not every currently-connected ship
+ * unconditionally, the way it was before radar existed.
  */
 public class ShipState {
 
@@ -46,6 +57,7 @@ public class ShipState {
     private float shieldMax;
     private ShipType shipType;
     private float[] turretAimAngles;
+    private float radarPulseCooldownRemaining;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -70,11 +82,13 @@ public class ShipState {
      * @param shipType        the ship's type
      * @param turretAimAngles this ship's turrets' current aim angles, in radians, one per
      *                        {@code "TURRET"} attachment point in authored order; empty if none
+     * @param radarPulseCooldownRemaining how much longer until this ship's radar pulse (design.md
+     *                                    2.14) can be triggered again; {@code <= 0} means ready
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
                       float hullCurrent, float hullMax, float shieldCurrent, float shieldMax,
-                      ShipType shipType, float[] turretAimAngles) {
+                      ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -88,6 +102,7 @@ public class ShipState {
         this.shieldMax = shieldMax;
         this.shipType = shipType;
         this.turretAimAngles = turretAimAngles;
+        this.radarPulseCooldownRemaining = radarPulseCooldownRemaining;
     }
 
     /**
@@ -206,5 +221,15 @@ public class ShipState {
      */
     public float[] getTurretAimAngles() {
         return turretAimAngles;
+    }
+
+    /**
+     * Returns how much longer until this ship's radar pulse can be
+     * triggered again (design.md 2.14).
+     *
+     * @return the remaining cooldown, in seconds; {@code <= 0} means ready
+     */
+    public float getRadarPulseCooldownRemaining() {
+        return radarPulseCooldownRemaining;
     }
 }

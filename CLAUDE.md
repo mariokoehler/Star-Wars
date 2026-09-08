@@ -1889,6 +1889,84 @@ false time-wise on at least this machine) and keep one persistent
 connection alive across Connect → Ship Selection → gameplay instead —
 not started, flagged only.
 
+**Radar / minimap infrastructure — implemented 2026-09-08, same day,
+right after the networking investigation above.** See design.md 2.14
+for the full writeup. User's ask: three detection mechanisms (60m
+omnidirectional base, 120m ±30° forward cone, a 200m "R"-triggered
+active pulse on a 30s cooldown that also makes the pulser visible to
+everyone for 5s), all individually enable-able per ship type via
+`.stats.json` for a future Ship Tree-gated rollout (§7) — but
+explicitly **infrastructure only** this session, no minimap art exists
+yet, so nothing renders; the goal was just making sure the client
+receives exactly the data a minimap will eventually need.
+
+**This turned out to require a real architecture change, not just new
+components:** design.md 3.5's original model had the server broadcast
+one shared `WorldSnapshotMessage` to every client. Radar/fog-of-war
+only means anything if the server decides, per player, which enemy
+ships they currently know about — so `GameNetworkServer.broadcastSnapshot()`
+now builds a **personalized** `ShipState[]` per connected/spawned
+player (their own ship always, plus whichever enemies their new
+`RadarComponent` currently detects) and sends each one individually via
+that player's own `Connection.sendUDP(...)`, rather than one
+`sendToAllUDP` broadcast. Chose this over any client-side-only
+filtering specifically because it's the only version consistent with
+this project's standing "never trust the client" rule (every unlock/
+spawn/movement input is already re-validated server-side) — a
+client-side fog-of-war would be trivially bypassed by just drawing
+every ship the client happens to receive. Projectiles are deliberately
+**not** filtered this way — still broadcast to everyone unfiltered,
+flagged in design.md as a scope boundary, not an oversight (gating
+projectile visibility too raises its own separate design questions the
+user didn't ask about).
+
+**One simplification, flagged as a default, not confirmed by the
+user:** the spec describes the pulse's own detection and its "you're
+now visible to everyone" downside as two effects, only the second with
+an explicit duration. Implemented as one shared, continuously-
+re-evaluated window instead of an instantaneous snapshot (which would
+be meaningless at 30Hz anyway) — see design.md 2.14 for the full
+reasoning; revisit if the user wants them decoupled.
+
+New: `sim.RadarDetection` (pure, unit-tested — 12 cases including exact
+cone-boundary behavior — same "logic-heavy pure function separate from
+system wiring" convention as `TurretAiming`/`ShipDamage`, reusing
+`TurretAiming.angularDifference` for the cone's bearing check rather
+than a third copy of that math); `sim.components.RadarComponent`
+(added to *every* ship unconditionally, unlike the optional
+`TurretComponent`); `sim.systems.RadarSystem` (server-side, recomputes
+every ship's detected-enemy set each tick); `net.messages.RadarPulseRequest`
+(empty payload, same shape as `TurretToggleMessage`). `ShipTypeConfig`/
+`ShipStats` gained 9 fields; every ship type's `.stats.json` got the
+same values (the user's own spec numbers), uniformly — the established
+"same baseline for every ship now, differentiate later" convention
+this project already applies to thrust/torque/hull/shield.
+
+**Real client-side gap found and fixed while implementing this, not
+by playtesting:** `Client.onWorldSnapshot` had never needed to remove a
+ship from its `ships` map except on an explicit `PlayerLeftMessage`/
+`ShipDestroyedMessage` — every ship used to be in every snapshot
+unconditionally, so "stop appearing in snapshots" never used to happen
+without one of those. With radar filtering, a ship can now legitimately
+disappear from a snapshot just by leaving detection range, with no
+disconnect/death event to trigger removal — without a fix, it would
+have frozen in its last known position forever instead of vanishing.
+Fixed by adding the exact same present-in-this-snapshot-or-remove
+pruning already used for `projectiles` (`ships.keySet().removeIf(id ->
+!presentShipIds.contains(id))`) — caught by reasoning through the new
+data flow while writing it, before ever running it live.
+
+**Verification status:** full `mvn clean install` (all 4 modules) and
+`mvn test` green — 101 core tests (up from 88: +12 `RadarDetectionTest`,
++1 `MessageRegistryTest` for `RadarPulseRequest`'s round trip) + 30
+server tests, all passing. **Not live-verified** — no minimap art
+exists yet to actually look at, and this session's broader
+network-launch restriction (see the entry above) was still in effect;
+the real test once art exists will be actually flying near another
+ship and confirming it appears/disappears on a minimap exactly when
+radar should detect/lose it, plus a real "R" pulse revealing a distant
+ship and making the pulser visible back.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

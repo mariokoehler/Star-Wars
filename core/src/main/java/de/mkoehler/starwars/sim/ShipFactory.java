@@ -17,6 +17,7 @@ import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
+import de.mkoehler.starwars.sim.components.RadarComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.TurretComponent;
@@ -71,6 +72,7 @@ public final class ShipFactory {
         entity.add(new WeaponComponent(WeaponStats.BLASTER));
         entity.add(new PowerDistributionComponent());
         entity.add(new CombatTimerComponent());
+        entity.add(new RadarComponent());
         createTurretComponent(stats).ifPresent(entity::add);
         engine.addEntity(entity);
         body.setUserData(entity);
