@@ -10,6 +10,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
@@ -85,5 +86,6 @@ public final class MessageRegistry {
         kryo.register(UnlockShipResponse.class);
         kryo.register(RadarPulseRequest.class);
         kryo.register(MissileFireRequest.class);
+        kryo.register(ProjectileHitMessage.class);
     }
 }

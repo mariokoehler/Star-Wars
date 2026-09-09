@@ -28,6 +28,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
@@ -44,7 +45,7 @@ import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.MuzzleFlashEffect;
 import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.RadarHud;
-import de.mkoehler.starwars.render.RadarPulseEffect;
+import de.mkoehler.starwars.render.OneShotParticleEffect;
 import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipLightEffect;
 import de.mkoehler.starwars.render.ShipStatusHud;
@@ -348,7 +349,7 @@ public class Client implements Screen {
      * increase frame-to-frame is the pulse actually just firing server-side
      * - it otherwise only ever ticks down).
      */
-    private RadarPulseEffect myRadarPulseEffect;
+    private OneShotParticleEffect myRadarPulseEffect;
     /**
      * The local player's own muzzle flash(es) (design.md — muzzle flash),
      * one per {@code "PROJECTILE"} attachment point on the current
@@ -373,6 +374,29 @@ public class Client implements Screen {
      * goes false rather than growing unboundedly.
      */
     private final List<MuzzleFlashEffect> remoteMuzzleFlashPool = new ArrayList<>();
+    /**
+     * A small, self-growing pool of small impact explosions (design.md —
+     * explosions), one per {@link ProjectileHitMessage} received - same
+     * "not attached to any particular ship, pooled since more than one can
+     * be mid-explosion at once" reasoning as {@link #remoteMuzzleFlashPool},
+     * just triggered by an explicit server message (a real contact event)
+     * rather than inferred from a new projectile appearing. Each entry
+     * pairs its {@link OneShotParticleEffect} with the fixed world
+     * position it was last triggered at - unlike {@link #myRadarPulseEffect}/
+     * {@link RemoteShip#radarPulseEffect}, an explosion has nothing moving
+     * to re-center on every frame, so its position is set once at trigger
+     * time and simply repeated on every later {@link #updateAndDrawExplosions} call.
+     */
+    private final List<PositionedOneShotEffect> hitExplosionPool = new ArrayList<>();
+    /**
+     * A small, self-growing pool of full ship-destruction explosions
+     * (design.md — explosions), one per {@link ShipDestroyedMessage} for
+     * another player's ship - see {@link #onShipDestroyed} for why the
+     * local player's own destruction doesn't get one (the screen
+     * transitions away in the same instant, so it would never actually
+     * render). Same fixed-position-per-entry shape as {@link #hitExplosionPool}.
+     */
+    private final List<PositionedOneShotEffect> shipExplosionPool = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -512,7 +536,7 @@ public class Client implements Screen {
         // One shared effect regardless of ship type, unlike myThrusters/myLights/myDamageSmoke -
         // built once here rather than rebuilt per-spawn, since it depends on no ship-type-specific
         // attachment metadata.
-        myRadarPulseEffect = createRadarPulseEffect();
+        myRadarPulseEffect = createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE);
 
         background = new ParallaxBackground(
             // false: this texture is owned by StarWarsGame#getAssets() (design.md - asset
@@ -577,6 +601,8 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> ships.remove(left.getPlayerId()));
                 } else if (object instanceof ShipDestroyedMessage destroyed) {
                     pendingUpdates.add(() -> onShipDestroyed(destroyed));
+                } else if (object instanceof ProjectileHitMessage hit) {
+                    pendingUpdates.add(() -> onProjectileHit(hit));
                 } else if (object instanceof LeaveMatchDeniedMessage) {
                     pendingUpdates.add(Client.this::onLeaveMatchDenied);
                 } else if (object instanceof ScoreboardMessage scoreboard) {
@@ -671,6 +697,12 @@ public class Client implements Screen {
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
         if (destroyed.getPlayerId() == myPlayerId) {
+            // Deliberately no explosion triggered here (design.md — explosions): this same method
+            // disposes this whole screen a few lines below (returnToShipSelection/goToDeathScreen),
+            // so this Client instance never renders another frame afterward - triggering one would
+            // be dead code, never actually seen. Every other player's destruction (the branch
+            // below) doesn't have this problem, since observing someone else's death doesn't
+            // transition this client anywhere.
             if (myBody != null) {
                 localWorld.destroyBody(myBody);
                 myBody = null;
@@ -688,8 +720,24 @@ public class Client implements Screen {
                 goToDeathScreen();
             }
         } else {
-            ships.remove(destroyed.getPlayerId());
+            RemoteShip ship = ships.remove(destroyed.getPlayerId());
+            if (ship != null) {
+                triggerPooledExplosion(shipExplosionPool, GameAssets.EXPLOSION_PARTICLE, ship.renderX, ship.renderY);
+            }
         }
+    }
+
+    /**
+     * Handles a {@link ProjectileHitMessage} (design.md — explosions) by
+     * triggering a small impact explosion at the reported contact point —
+     * a real hit, unlike a projectile simply expiring after its lifetime
+     * (which broadcasts nothing at all, see that message's Javadoc).
+     *
+     * @param hit the hit message
+     */
+    private void onProjectileHit(ProjectileHitMessage hit) {
+        triggerPooledExplosion(hitExplosionPool, GameAssets.EXPLOSION_SMALL_PARTICLE,
+            hit.getX() * PhysicsConstants.PIXELS_PER_METER, hit.getY() * PhysicsConstants.PIXELS_PER_METER);
     }
 
     private void onLeaveMatchDenied() {
@@ -789,7 +837,7 @@ public class Client implements Screen {
                 // look identical to a real trigger.
                 return new RemoteShip(x, y, state.getAngle(), state.getShipType(),
                     buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats),
-                    createRadarPulseEffect(), state.getRadarPulseCooldownRemaining());
+                    createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE), state.getRadarPulseCooldownRemaining());
             });
             ship.updateFromSnapshot(x, y, state.getAngle(),
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
@@ -1054,6 +1102,8 @@ public class Client implements Screen {
         drawLocalShip(deltaTime);
         drawProjectiles();
         updateAndDrawRemoteMuzzleFlashes(deltaTime);
+        updateAndDrawExplosions(hitExplosionPool, deltaTime);
+        updateAndDrawExplosions(shipExplosionPool, deltaTime);
         drawMissileLockReticle();
         batch.end();
 
@@ -1680,16 +1730,17 @@ public class Client implements Screen {
     }
 
     /**
-     * Creates one radar pulse "energy wave" instance (design.md 2.14's
-     * rendering addendum) from the shared template - one call for the local
-     * player's own ({@link #myRadarPulseEffect}, from {@link #show()}), and
-     * one more per {@link RemoteShip} the first time it's seen.
+     * Creates one {@link OneShotParticleEffect} instance from a template
+     * path - shared factory for every one-shot effect this client uses
+     * (radar pulse wave, both explosion sizes), each just a different
+     * template.
      *
-     * @return a fresh, not-yet-triggered radar pulse effect
+     * @param templatePath the effect's classpath path, see {@link GameAssets}
+     * @return a fresh, not-yet-triggered one-shot effect
      */
-    private RadarPulseEffect createRadarPulseEffect() {
-        ParticleEffect template = game.getAssets().get(GameAssets.RADAR_PULSE_PARTICLE, ParticleEffect.class);
-        return new RadarPulseEffect(template);
+    private OneShotParticleEffect createOneShotEffect(String templatePath) {
+        ParticleEffect template = game.getAssets().get(templatePath, ParticleEffect.class);
+        return new OneShotParticleEffect(template);
     }
 
     /**
@@ -1736,6 +1787,52 @@ public class Client implements Screen {
         MuzzleFlashEffect flash = new MuzzleFlashEffect(template);
         remoteMuzzleFlashPool.add(flash);
         return flash;
+    }
+
+    /**
+     * Triggers one explosion (design.md — explosions) at a fixed world
+     * position, reusing a currently-idle {@link PositionedOneShotEffect}
+     * from {@code pool} or growing it by one if every existing entry is
+     * still mid-playback - shared by {@link #hitExplosionPool} and
+     * {@link #shipExplosionPool} (unlike {@link #obtainPooledMuzzleFlash},
+     * which needs its own copy of this pooling logic since
+     * {@link MuzzleFlashEffect} is a different class).
+     *
+     * @param pool         the pool to search/grow
+     * @param templatePath the effect's classpath path, used only if the pool needs to grow
+     * @param xPixels      the explosion's world position, in pixels
+     * @param yPixels      the explosion's world position, in pixels
+     */
+    private void triggerPooledExplosion(List<PositionedOneShotEffect> pool, String templatePath,
+                                         float xPixels, float yPixels) {
+        for (PositionedOneShotEffect entry : pool) {
+            if (!entry.effect.isPlaying()) {
+                entry.x = xPixels;
+                entry.y = yPixels;
+                entry.effect.trigger();
+                return;
+            }
+        }
+        PositionedOneShotEffect entry = new PositionedOneShotEffect(createOneShotEffect(templatePath));
+        entry.x = xPixels;
+        entry.y = yPixels;
+        entry.effect.trigger();
+        pool.add(entry);
+    }
+
+    /**
+     * Updates and draws every entry in a pooled-explosion list (design.md
+     * — explosions) - called once per frame per pool, not per ship, same
+     * reasoning as {@link #updateAndDrawRemoteMuzzleFlashes}.
+     *
+     * @param pool      the pool to update/draw
+     * @param deltaTime time since the last frame, in seconds
+     */
+    private void updateAndDrawExplosions(List<PositionedOneShotEffect> pool, float deltaTime) {
+        for (PositionedOneShotEffect entry : pool) {
+            entry.effect.update(entry.x, entry.y, deltaTime);
+            entry.effect.draw(batch);
+        }
     }
 
     /**
@@ -2007,7 +2104,7 @@ public class Client implements Screen {
         /** This ship's own damage smoke points (design.md — damage smoke), built once at creation - empty for a ship type with none configured. */
         final List<DamageSmokePoint> damageSmoke;
         /** This ship's own radar pulse "energy wave" (design.md 2.14's rendering addendum), built once at creation - every ship type gets one, unlike thrusters/lights/damage smoke. */
-        final RadarPulseEffect radarPulseEffect;
+        final OneShotParticleEffect radarPulseEffect;
         /** Whether this ship is currently holding its forward-thrust input, straight from the latest {@code ShipState} - not extrapolated, just held. */
         boolean thrusting;
         // Hull current/max, straight from the latest ShipState - not extrapolated, just held,
@@ -2019,7 +2116,7 @@ public class Client implements Screen {
 
         RemoteShip(float x, float y, float angle, ShipType shipType, List<EngineThruster> thrusters,
                    List<ShipLight> lights, List<DamageSmokePoint> damageSmoke,
-                   RadarPulseEffect radarPulseEffect, float radarPulseCooldownRemaining) {
+                   OneShotParticleEffect radarPulseEffect, float radarPulseCooldownRemaining) {
             this.shipType = shipType;
             this.thrusters = thrusters;
             this.lights = lights;
@@ -2111,6 +2208,25 @@ public class Client implements Screen {
 
         MuzzleFlashPoint(PixelPoint attachmentPoint, MuzzleFlashEffect effect) {
             this.attachmentPoint = attachmentPoint;
+            this.effect = effect;
+        }
+    }
+
+    /**
+     * Pairs one {@link OneShotParticleEffect} with the fixed world position
+     * it was last {@link OneShotParticleEffect#trigger() triggered} at —
+     * see {@link #hitExplosionPool}/{@link #shipExplosionPool}. Unlike
+     * {@link EngineThruster}/{@link ShipLight}/{@link MuzzleFlashPoint},
+     * this pairing isn't a fixed per-ship attachment offset — {@code x}/
+     * {@code y} are reassigned by {@link #triggerPooledExplosion} every
+     * time this entry gets reused for a new explosion.
+     */
+    private static final class PositionedOneShotEffect {
+        final OneShotParticleEffect effect;
+        float x;
+        float y;
+
+        PositionedOneShotEffect(OneShotParticleEffect effect) {
             this.effect = effect;
         }
     }

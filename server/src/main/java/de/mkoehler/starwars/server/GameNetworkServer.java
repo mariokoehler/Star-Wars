@@ -24,6 +24,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
@@ -368,7 +369,14 @@ public class GameNetworkServer extends NetworkServer {
         pendingHits.clear();
 
         for (Entity projectile : projectilesToRemove) {
-            world.destroyBody(projectile.getComponent(PhysicsBodyComponent.class).getBody());
+            Body body = projectile.getComponent(PhysicsBodyComponent.class).getBody();
+            // Explosion VFX (design.md — explosions): broadcast before destroying the body, while
+            // its position still reflects (very nearly) the actual point of contact - a real hit
+            // event, unlike a projectile just expiring after its lifetime with nothing to show for
+            // it (design.md 3.5's ProjectileState note: that case broadcasts nothing at all, a
+            // client only infers it from absence in the next snapshot).
+            sendToAllUDP(new ProjectileHitMessage(body.getPosition().x, body.getPosition().y));
+            world.destroyBody(body);
             engine.removeEntity(projectile);
         }
         for (Entity ship : shipsToCheck) {

@@ -12,6 +12,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
@@ -66,7 +67,7 @@ class MessageRegistryTest {
             TurretToggleMessage.class, float[].class, SpawnRequest.class,
             PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class,
             ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class,
-            MissileFireRequest.class
+            MissileFireRequest.class, ProjectileHitMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -301,6 +302,14 @@ class MessageRegistryTest {
     void missileFireRequestSurvivesRoundTrip() {
         MissileFireRequest copy = roundTrip(new MissileFireRequest(), MissileFireRequest.class);
         assertEquals(MissileFireRequest.class, copy.getClass());
+    }
+
+    @Test
+    void projectileHitMessageSurvivesRoundTrip() {
+        ProjectileHitMessage original = new ProjectileHitMessage(12.5f, -7.25f);
+        ProjectileHitMessage copy = roundTrip(original, ProjectileHitMessage.class);
+        assertEquals(12.5f, copy.getX());
+        assertEquals(-7.25f, copy.getY());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

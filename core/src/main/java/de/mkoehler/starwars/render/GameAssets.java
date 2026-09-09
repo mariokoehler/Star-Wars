@@ -93,6 +93,22 @@ public final class GameAssets {
      */
     public static final String MUZZLE_FLASH_PARTICLE = particleEffectPath("muzzle_flash");
 
+    /**
+     * The small impact explosion particle effect (design.md — explosions)
+     * — a one-shot effect played at the contact point whenever a
+     * projectile actually hits a ship (see
+     * {@code de.mkoehler.starwars.net.messages.ProjectileHitMessage}), same
+     * one-shared-template-for-every-ship-type reasoning as every other
+     * one-shot effect above.
+     */
+    public static final String EXPLOSION_SMALL_PARTICLE = particleEffectPath("explosion_small");
+    /**
+     * The full ship-destruction explosion particle effect (design.md —
+     * explosions) — a one-shot effect played centered on a ship's own
+     * position whenever it's destroyed (see {@code ShipDestroyedMessage}).
+     */
+    public static final String EXPLOSION_PARTICLE = particleEffectPath("explosion");
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -177,6 +193,8 @@ public final class GameAssets {
         manager.load(DAMAGE_SMOKE_PARTICLE, ParticleEffect.class);
         manager.load(RADAR_PULSE_PARTICLE, ParticleEffect.class);
         manager.load(MUZZLE_FLASH_PARTICLE, ParticleEffect.class);
+        manager.load(EXPLOSION_SMALL_PARTICLE, ParticleEffect.class);
+        manager.load(EXPLOSION_PARTICLE, ParticleEffect.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);

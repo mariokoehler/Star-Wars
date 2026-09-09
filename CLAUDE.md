@@ -2911,6 +2911,61 @@ this point, so only the client was smoke-tested this time). **Not yet
 live-verified** — needs the user to fire a real shot and confirm the
 flash appears correctly, ideally from another player's shot too.
 
+**Muzzle flash art swapped + explosions implemented — 2026-09-09, same
+session.** User reworked `Muzzle_Flash.p` to use one new image
+(`pre_particle.png`) instead of the old `circle2.png`/`dash.png` pair -
+pure asset re-copy, old runtime copies deleted since nothing else
+referenced them.
+
+**Explosions:** see design.md 4.3's newest addendum for the full
+writeup. `RadarPulseEffect` was renamed/generalized to
+`render.OneShotParticleEffect` (its "non-looping, omnidirectional,
+reposition-while-playing" shape turned out to be exactly what both
+explosion sizes need too, so rather than duplicate it a third time it
+became the shared implementation) - call sites keep their
+radar-pulse-specific variable names, only the type changed. New
+`Explosion.p`/`Explosion_Small.p` wired to two events: a small impact
+explosion wherever a projectile actually hits a ship, and a full
+explosion centered on a ship's own position when it's destroyed.
+
+**The small explosion needed a genuinely new server message** - unlike
+every other effect this session, "a projectile hit something" has no
+existing signal to infer it from (a projectile's disappearance is
+ambiguous between a real hit and simply expiring naturally, which
+broadcasts nothing). New `net.messages.ProjectileHitMessage` (x/y in
+meters), broadcast unconditionally over UDP from
+`GameNetworkServer.resolvePendingHits()` right before each hit
+projectile's body is destroyed - fires uniformly for every projectile
+type, missiles included. **The ship-destruction explosion, by contrast,
+needed zero new wire data** - `ShipDestroyedMessage` already says who
+died, and every client already tracks that ship's last-known render
+position for its own purposes anyway.
+
+**Real, deliberate gap found and left as-is: the local player never
+sees their own destruction's explosion.** `onShipDestroyed`'s local
+branch disposes the whole screen a few lines later
+(`returnToShipSelection()`/`goToDeathScreen()`), so this `Client`
+instance renders no further frames - triggering an explosion there
+would be dead code. Not fixed by delaying the transition (would mean
+touching an already-carefully-debugged disposal sequence for a purely
+cosmetic payoff) - flagged, not silently worked around. Every other
+player's destruction, observed by anyone not the one dying, shows the
+explosion normally.
+
+Both explosion pools use a new `PositionedOneShotEffect` (effect +
+fixed x/y, reused once idle) rather than bare pooled effects, since
+unlike the radar pulse (tracks a moving ship every frame) an explosion
+has nothing left to track after the moment it's triggered - a bare
+pooled list would have had nowhere to remember each entry's position.
+
+**Verified:** full `mvn clean test` (154 tests, +1 for
+`ProjectileHitMessage`'s round trip) and `mvn clean install` green;
+booted a real server + client pair together with zero exceptions (the
+first time this session both ends needed testing together, since the
+new server-side broadcast needed exercising too). **Not yet
+live-verified** — needs the user to land a hit and destroy a ship, and
+confirm both explosion sizes look right.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
