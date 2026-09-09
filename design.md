@@ -2927,6 +2927,59 @@ leave the arena and respawn elsewhere, and (bonus, unasked-for but now
 also fixed) that two crossing shots no longer nudge each other and a shot
 fired near the boundary now cleanly expires past it instead of bouncing.
 
+**Addendum, same day — asteroids on the radar.** User: "let's show the
+asteroids on the radar as blue colored blips." `RadarHud.render` gained a
+second contact list alongside the existing (radar-filtered) ship
+contacts — every currently-active asteroid's position, unfiltered (the
+same broadcast-to-everyone treatment `AsteroidState` already gets over
+the network), reusing the exact same `drawContact` placement/clamp-to-
+edge-chevron logic a ship contact already gets, just tinted a distinct
+blue (`ASTEROID_BLIP_COLOR`) rather than the blip texture's own native
+color — same "save the batch's live mutable color, tint, restore"
+technique `drawTintedLine`'s boundary lines already use. An asteroid
+beyond the ship's own current radar range simply isn't shown at all,
+same "not detected, not shown" treatment the boundary lines get — it's
+still scaled to the scope's own `maxRangeMeters`, not drawn regardless of
+distance just because the underlying network data is unfiltered.
+
+**Speed-linked camera zoom — implemented 2026-09-09, resolving design.md
+4.1's long-standing "still unimplemented" note.** User: "let's finally
+implement the speed-sensitive camera zoom (zoom camera out as the ship
+goes faster, so the player can see ahead a little further, making it
+easier to avoid impacts. let's aim for something like a 25% zoom around
+terminal velocity (ballpark, doesn't need to be exact)." Exactly the
+gameplay rationale 4.1 already documented (more reaction time to react to
+an obstacle at speed) — now doubly relevant with asteroids to dodge, not
+just other ships/the boundary.
+
+`Client.updateCamera` eases `camera.zoom` toward
+`1 + clamp(currentSpeed / SPEED_ZOOM_REFERENCE_METERS_PER_SECOND, 0, 1) *
+0.25`, using the same lerp-toward-target technique already used for
+camera position, but its own independent, deliberately slower easing
+speed (`CAMERA_ZOOM_FOLLOW_SPEED`) — a brief thrust burst shouldn't
+visibly "pulse" the zoom in and out the way position tracking is allowed
+to lag during a hard turn. `SPEED_ZOOM_REFERENCE_METERS_PER_SECOND = 90f`
+is one shared reference across every ship type, not authored per-type —
+matching the user's own "ballpark" framing rather than a precise
+per-ship terminal-velocity derivation (which would need each ship's real
+mass, itself derived from its hitbox polygon's area — not worth the
+complexity for a feel effect the user explicitly said doesn't need to be
+exact). Anchored to a real number already in this project's own history:
+the terminal-velocity-jitter investigation (3.5's addendum) measured the
+X-wing holding steady at ~93.6 m/s, rounded down to 90. `camera.zoom`
+resets to `1f` on every spawn/respawn (`onShipSpawned`), so a fresh life
+starts at rest visually, not easing down from wherever the previous
+life's zoom happened to be.
+
+**Verified:** full `mvn clean test` green (186 tests, unaffected — both
+changes are thin `SpriteBatch`/camera wiring, not logic, matching this
+project's own "skip tests for wiring" convention, same treatment
+`RadarHud` and camera-follow already get); a real packaged client jar
+booted standalone with zero exceptions. **Not yet live-verified** — needs
+the user to fly near an asteroid and confirm the blue blip shows up on
+the scope, and to accelerate to speed and confirm the zoom-out is
+noticeable without feeling jarring.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -4494,11 +4547,16 @@ there's a flyable ship to tune it against:
   lerp/spring toward the target position rather than a hard snap is the
   obvious implementation.
 
-**Partially implemented (2026-09-05):** `Client.java` currently does a
-plain exponential-ease camera follow (lerp toward the ship's position
-every frame) as part of the single-player flight prototype — this is
-just enough to make flying testable, **not** the full speed-linked zoom
-model above, which is still unimplemented.
+**Camera inertia implemented 2026-09-05** as part of the single-player
+flight prototype: a plain exponential-ease camera follow (lerp toward
+the ship's position every frame), `Client.updateCamera`.
+
+**Speed-linked zoom implemented 2026-09-09** (see 2.17's addendum for
+the full writeup) — the same `updateCamera`, easing `camera.zoom` toward
+a target driven by current speed (a linear mapping up to a 90 m/s
+reference speed, +25% zoom at/above it, both untuned/ballpark per the
+user's own framing) via its own independent, slower easing speed than
+position tracking. Both halves of this section are now implemented.
 
 **Window/viewport size — decided:** 1920×1080 initially
 (`Lwjgl3Launcher`'s `setWindowedMode`) — plain 16:9 HD, chosen over the

@@ -175,6 +175,26 @@ public class Client implements Screen {
     /** How quickly the camera eases toward the local ship each frame; not the full model from design.md 4.1. */
     private static final float CAMERA_FOLLOW_SPEED = 3f;
 
+    /**
+     * Speed (design.md 4.1's "speed-linked zoom") at which the camera
+     * reaches its full {@link #SPEED_ZOOM_MAX_INCREASE} zoom-out — a single
+     * shared reference across every ship type, not authored per-type,
+     * matching the user's own "ballpark, doesn't need to be exact" framing
+     * for this feature. Anchored to the X-wing's own empirically-observed
+     * terminal velocity (~93.6 m/s, measured live during the terminal-
+     * velocity-jitter investigation), rounded down. Untuned starting point.
+     */
+    private static final float SPEED_ZOOM_REFERENCE_METERS_PER_SECOND = 90f;
+    /** How far out the camera zooms at/above {@link #SPEED_ZOOM_REFERENCE_METERS_PER_SECOND} — the user's own spec. */
+    private static final float SPEED_ZOOM_MAX_INCREASE = 0.25f;
+    /**
+     * How quickly the camera's zoom eases toward its speed-driven target —
+     * independent of, and deliberately slower than, {@link #CAMERA_FOLLOW_SPEED}'s
+     * position tracking, so a brief thrust burst doesn't visibly "pulse"
+     * the zoom in and out. Untuned.
+     */
+    private static final float CAMERA_ZOOM_FOLLOW_SPEED = 1.5f;
+
     /** Reconciliation error, in meters, beyond which the local prediction hard-snaps to the server's state instead of blending. */
     private static final float RECONCILE_SNAP_THRESHOLD_METERS = 3f;
     /** Fraction of a small reconciliation error corrected per snapshot, rather than all at once. */
@@ -696,6 +716,10 @@ public class Client implements Screen {
         myPreviousX = myBody.getPosition().x;
         myPreviousY = myBody.getPosition().y;
         myPreviousAngle = myBody.getAngle();
+        // A fresh spawn/respawn starts at rest - reset the speed-linked zoom (design.md 4.1)
+        // back to its resting value immediately rather than easing down from whatever it was at
+        // the moment of death/leaving.
+        camera.zoom = 1f;
         // A fresh body means no meaningful "elapsed since last reconciled snapshot" yet either -
         // avoids extrapolating the very first post-spawn snapshot using a stale accumulated value.
         mySnapshotElapsedSeconds = 0f;
@@ -1261,13 +1285,21 @@ public class Client implements Screen {
             contactPositionsMeters.add(new Vector2(
                 ship.renderX / PhysicsConstants.PIXELS_PER_METER, ship.renderY / PhysicsConstants.PIXELS_PER_METER));
         }
+        // Asteroids (design.md — asteroids' radar addendum): broadcast unfiltered to everyone
+        // (unlike ship contacts), so - same as `asteroids` itself - no server-side radar
+        // filtering to mirror here either, just a units conversion.
+        List<Vector2> asteroidPositionsMeters = new ArrayList<>(asteroids.size());
+        for (RemoteAsteroid asteroid : asteroids.values()) {
+            asteroidPositionsMeters.add(new Vector2(
+                asteroid.renderX / PhysicsConstants.PIXELS_PER_METER, asteroid.renderY / PhysicsConstants.PIXELS_PER_METER));
+        }
         // Top-right corner, not part of the bottom-left status/power row (design.md 2.14) - the
         // first play-test found it too small/cramped down there to actually read at a glance.
         float radarX = Gdx.graphics.getWidth() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
         float radarY = Gdx.graphics.getHeight() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
         radarHud.render(batch, ShipStats.forType(myShipType), radarX, radarY, HUD_RADAR_SIZE,
             myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters,
-            myRadarPulseCooldownRemaining);
+            asteroidPositionsMeters, myRadarPulseCooldownRemaining);
     }
 
     /**
@@ -1513,6 +1545,17 @@ public class Client implements Screen {
         }
     }
 
+    /**
+     * Eases the camera toward the local ship's position (design.md 4.1's
+     * "camera inertia") and its zoom toward a speed-driven target
+     * (design.md 4.1's "speed-linked zoom", implemented 2026-09-09) — the
+     * faster the ship is currently flying, the further out the camera
+     * pulls back, trading detail for the forward visibility a player needs
+     * to react to an obstacle (an asteroid, another ship, the arena
+     * boundary) in time at speed.
+     *
+     * @param deltaTime time since the last frame, in seconds
+     */
     private void updateCamera(float deltaTime) {
         if (myBody == null) {
             return;
@@ -1524,6 +1567,13 @@ public class Client implements Screen {
         float lerp = MathUtils.clamp(CAMERA_FOLLOW_SPEED * deltaTime, 0f, 1f);
         camera.position.x += (targetX - camera.position.x) * lerp;
         camera.position.y += (targetY - camera.position.y) * lerp;
+
+        float speedFraction = MathUtils.clamp(
+            myBody.getLinearVelocity().len() / SPEED_ZOOM_REFERENCE_METERS_PER_SECOND, 0f, 1f);
+        float targetZoom = 1f + speedFraction * SPEED_ZOOM_MAX_INCREASE;
+        float zoomLerp = MathUtils.clamp(CAMERA_ZOOM_FOLLOW_SPEED * deltaTime, 0f, 1f);
+        camera.zoom += (targetZoom - camera.zoom) * zoomLerp;
+
         camera.update();
     }
 

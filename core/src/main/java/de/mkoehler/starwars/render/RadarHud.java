@@ -112,6 +112,15 @@ public class RadarHud implements Disposable {
     private static final float BLIP_SIZE_FRACTION = 22f / 512f;
     private static final float CHEVRON_SIZE_FRACTION = 26f / 512f;
 
+    /**
+     * Asteroid blip tint (design.md — asteroids' radar addendum) — a clear
+     * blue, distinct from a ship contact's own native (untinted) blip color
+     * and from every other color already meaningful on this widget (the
+     * scope's green accent, the amber boundary lines, the indicator's
+     * green/red) — reads as "environmental object," not "enemy."
+     */
+    private static final Color ASTEROID_BLIP_COLOR = new Color(0.3f, 0.55f, 1f, 1f);
+
     private static final int COORDS_FONT_SIZE_PX = 14;
     /** Same live-text color convention as {@link ScoreboardHud}'s rows. */
     private static final Color COORDS_TEXT_COLOR = new Color(0.85f, 0.9f, 1f, 1f);
@@ -192,6 +201,13 @@ public class RadarHud implements Disposable {
      * @param contactPositionsMeters every currently-known contact's world position, in meters —
      *                               already radar-filtered server-side (design.md 2.14), so every
      *                               entry here is drawn, none are filtered again client-side
+     * @param asteroidPositionsMeters every currently-active asteroid's world position, in meters
+     *                                (design.md — asteroids) — broadcast unfiltered to everyone,
+     *                                unlike ship contacts, but still only drawn within
+     *                                {@code maxRangeMeters} of the scope, same "not detected, not
+     *                                shown" treatment the boundary lines already get; drawn as a
+     *                                blue-tinted blip ({@link #ASTEROID_BLIP_COLOR}) rather than a
+     *                                ship contact's own native color
      * @param pulseCooldownRemainingSeconds the observer's own active-pulse
      *                                       cooldown ({@code ShipState#getRadarPulseCooldownRemaining()}),
      *                                       {@code <= 0} meaning ready — drives the indicator LED
@@ -200,7 +216,8 @@ public class RadarHud implements Disposable {
      */
     public void render(SpriteBatch batch, ShipStats stats, float x, float y, float size,
                         float observerXMeters, float observerYMeters, float observerAngleRadians,
-                        List<Vector2> contactPositionsMeters, float pulseCooldownRemainingSeconds) {
+                        List<Vector2> contactPositionsMeters, List<Vector2> asteroidPositionsMeters,
+                        float pulseCooldownRemainingSeconds) {
         batch.draw(background, x, y, size, size);
         boolean pulseAvailable = stats.isRadarPulseEnabled() && pulseCooldownRemainingSeconds <= 0f;
         drawIndicator(batch, pulseAvailable, x, y, size);
@@ -232,7 +249,11 @@ public class RadarHud implements Disposable {
 
         for (Vector2 contact : contactPositionsMeters) {
             drawContact(batch, observerXMeters, observerYMeters, contact.x, contact.y, maxRangeMeters,
-                scopeCenterX, scopeCenterY, scopeRadius, size);
+                scopeCenterX, scopeCenterY, scopeRadius, size, null);
+        }
+        for (Vector2 asteroid : asteroidPositionsMeters) {
+            drawContact(batch, observerXMeters, observerYMeters, asteroid.x, asteroid.y, maxRangeMeters,
+                scopeCenterX, scopeCenterY, scopeRadius, size, ASTEROID_BLIP_COLOR);
         }
     }
 
@@ -395,9 +416,21 @@ public class RadarHud implements Disposable {
         batch.draw(cone, drawX, drawY, originX, originY, drawnWidth, drawnHeight, 1f, 1f, rotationDegrees);
     }
 
+    /**
+     * Draws one contact marker — a plain blip in range, a chevron pinned to
+     * the scope's edge if beyond it (see this class's own Javadoc).
+     *
+     * @param tint the color to draw the marker in, or {@code null} to leave
+     *             the batch's current color untouched (a ship contact's own
+     *             native, untinted color); a non-null tint is restored to
+     *             the batch's previous color afterward, same
+     *             save/mutate/restore care {@link #drawTintedLine} already
+     *             takes with {@link SpriteBatch#getColor()}'s live field
+     */
     private void drawContact(SpriteBatch batch, float observerXMeters, float observerYMeters,
                               float contactXMeters, float contactYMeters, float maxRangeMeters,
-                              float scopeCenterX, float scopeCenterY, float scopeRadius, float widgetSize) {
+                              float scopeCenterX, float scopeCenterY, float scopeRadius, float widgetSize,
+                              Color tint) {
         RadarScopeMath.BlipPlacement placement = RadarScopeMath.computeBlipPlacement(
             observerXMeters, observerYMeters, contactXMeters, contactYMeters, maxRangeMeters);
 
@@ -409,6 +442,11 @@ public class RadarHud implements Disposable {
         float contactX = scopeCenterX + offsetX;
         float contactY = scopeCenterY + offsetY;
 
+        Color previousColor = null;
+        if (tint != null) {
+            previousColor = batch.getColor().cpy();
+            batch.setColor(tint);
+        }
         if (placement.clamped()) {
             float size = widgetSize * CHEVRON_SIZE_FRACTION;
             batch.draw(chevron, contactX - size / 2f, contactY - size / 2f, size / 2f, size / 2f,
@@ -416,6 +454,9 @@ public class RadarHud implements Disposable {
         } else {
             float size = widgetSize * BLIP_SIZE_FRACTION;
             batch.draw(blip, contactX - size / 2f, contactY - size / 2f, size, size);
+        }
+        if (previousColor != null) {
+            batch.setColor(previousColor);
         }
     }
 

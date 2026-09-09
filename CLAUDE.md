@@ -13,7 +13,7 @@ flight model, dedicated authoritative server. Full design/architecture is in
 or system architecture. Keep both documents in sync: this file for
 process/gotchas, `design.md` for the game/architecture itself.
 
-- GitHub: https://github.com/mariokoehler/Star-Wars (private)
+- GitHub: https://github.com/mariokoehler/Star-Wars (initially private, public since 2026-09-09)
 
 ### Status / where we left off (2026-09-05)
 
@@ -3501,6 +3501,53 @@ entire time; this was a server-only bug. Full `mvn clean test` green
 (186 tests, +10 `CollisionCategoriesTest`), server jar rebuilt clean.
 **Not yet live-verified** — needs the user to fly with the rebuilt server
 and confirm asteroids actually leave the arena and respawn now.
+
+**Asteroids on the radar + speed-linked camera zoom — implemented
+2026-09-09, same day, right after committing/pushing the asteroids
+feature.** See design.md 2.17/4.1's newest addenda for the full
+writeups. Two small, independent asks in one message.
+
+**Radar:** `RadarHud.render` gained a second contact list (asteroid
+positions, unfiltered — same broadcast-to-everyone treatment
+`AsteroidState` already gets) drawn through the exact same
+placement/clamp-to-edge-chevron logic a ship contact already uses, just
+tinted blue instead of the blip's native color — reused the existing
+save/tint/restore pattern (`drawTintedLine`'s boundary lines) rather
+than inventing a new one.
+
+**Camera zoom:** resolves design.md 4.1's "still unimplemented"
+speed-linked zoom, sitting there as a documented goal since 2026-09-05.
+`Client.updateCamera` now also eases `camera.zoom` toward a
+speed-driven target (25% zoom-out at/above a 90 m/s reference speed,
+both explicitly "ballpark" per the user's own framing — the 90 comes
+from a real number already in this project's history, the X-wing's own
+measured ~93.6 m/s terminal velocity from the earlier terminal-velocity-
+jitter investigation), on its own independent, slower easing speed than
+position tracking so a thrust burst doesn't visibly pulse the zoom.
+Resets to `1f` on every spawn/respawn. One global reference speed, not
+per-ship-type — deliberately not deriving each ship's real terminal
+velocity from its actual mass, since the user was explicit this doesn't
+need to be exact.
+
+**Verification:** full `mvn clean test` green (186 tests, unaffected —
+both are thin `SpriteBatch`/camera-feel wiring, no new pure logic, same
+"skip tests for wiring" treatment `RadarHud`/camera-follow already get);
+a full `mvn clean install` and a real packaged client boot with zero
+exceptions. **Not yet live-verified** — needs the user to fly near an
+asteroid and confirm the blue blip appears on the scope, and to
+accelerate and confirm the zoom-out reads as noticeable but not jarring.
+
+**Housekeeping, same session:** found and killed a stray `--mcp` client
+process (`java ... -jar lwjgl3\target\StarWars-*.jar --mcp`) holding the
+client jar locked during a clean build — almost certainly this session's
+own earlier remote-control test client (the deferred `mcp__starwars-
+client__*` tools disconnected the instant it was killed, confirming it).
+Also found and killed the stale pre-asteroids dedicated server process
+that had been running since before this session's asteroids work
+started (`Responding: True`, not actually frozen — "hung" here meant
+"stale relative to the new wire format," not deadlocked) at the user's
+explicit request, then did a full `mvn clean install` now that nothing
+held either jar locked.
 
 ## Build system
 
