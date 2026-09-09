@@ -39,6 +39,7 @@ import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
 import de.mkoehler.starwars.server.accounts.PlayerAccount;
+import de.mkoehler.starwars.sim.ArenaBounds;
 import de.mkoehler.starwars.sim.KillXp;
 import de.mkoehler.starwars.sim.MissileFactory;
 import de.mkoehler.starwars.sim.PowerSystem;
@@ -48,6 +49,7 @@ import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipTree;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.ShipUnlocks;
+import de.mkoehler.starwars.sim.SpawnPointFinder;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.MissileLockComponent;
@@ -79,6 +81,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -124,7 +127,13 @@ public class GameNetworkServer extends NetworkServer {
     private static final float TICK_STALL_WARN_SECONDS = 0.5f;
 
     private final World world = new World(new Vector2(0, 0), true);
+    // Kept for identity comparison in the ContactListener below - a ship-vs-boundary contact is
+    // recognized by "the other body is this exact reference", not by re-checking filter bits.
+    private final Body arenaBoundaryBody = ArenaBounds.createBoundary(world);
     private final Engine engine = new Engine();
+    // Not seeded - spawn point randomness (design.md - arena bounds) has no reason to be
+    // deterministic across server runs, unlike e.g. SpawnPointFinderTest's own seeded instances.
+    private final Random spawnRandom = new Random();
     // Shared between WeaponSystem and TurretSystem - both fire real projectiles into the same
     // world, so they must draw ids from the same counter or two live projectiles could collide.
     private final AtomicInteger nextProjectileId = new AtomicInteger();
@@ -148,6 +157,7 @@ public class GameNetworkServer extends NetworkServer {
     private final Map<Integer, String> loginByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
+    private final List<WallHitEvent> pendingWallHits = new ArrayList<>();
     private float scoreboardBroadcastTimer;
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
     // Populated (during the pendingActions drain) whenever a player presses "M" - the actual
@@ -201,10 +211,14 @@ public class GameNetworkServer extends NetworkServer {
         world.setContactListener(new ContactListener() {
             @Override
             public void beginContact(Contact contact) {
-                Entity a = asEntity(contact.getFixtureA().getBody());
-                Entity b = asEntity(contact.getFixtureB().getBody());
+                Body bodyA = contact.getFixtureA().getBody();
+                Body bodyB = contact.getFixtureB().getBody();
+                Entity a = asEntity(bodyA);
+                Entity b = asEntity(bodyB);
                 registerPotentialHit(a, b);
                 registerPotentialHit(b, a);
+                registerPotentialWallHit(bodyA, bodyB);
+                registerPotentialWallHit(bodyB, bodyA);
             }
 
             @Override
@@ -228,7 +242,9 @@ public class GameNetworkServer extends NetworkServer {
      * runs every enabled turret's autonomous scan/track/fire behavior
      * (design.md — turret weapons, sharing each ship's weapon capacitor with
      * its main gun), resolves any hits (splitting damage between shield and
-     * hull, see {@link ShipDamage}), regenerates shields, advances every
+     * hull, see {@link ShipDamage}) — both projectile hits and a ship
+     * faceplanting into the arena boundary at speed (design.md — arena
+     * bounds' addendum) — regenerates shields, advances every
      * ship's combat-lock timers (design.md 2.3), expires old projectiles,
      * advances respawn timers, broadcasts the resulting world state to every
      * connected client, and - on its own, much slower cadence, see
@@ -282,6 +298,7 @@ public class GameNetworkServer extends NetworkServer {
         processMissileFireRequests();
 
         resolvePendingHits();
+        resolvePendingWallHits();
         shieldRegenSystem.update(deltaTime);
         combatTimerSystem.update(deltaTime);
         projectileLifetimeSystem.update(deltaTime);
@@ -339,6 +356,67 @@ public class GameNetworkServer extends NetworkServer {
             return; // no self-damage from your own shot
         }
         pendingHits.add(new HitEvent(maybeProjectile, maybeShip));
+    }
+
+    /**
+     * Registers a potential wall-impact hit (design.md — arena bounds'
+     * addendum) if {@code other} is exactly {@link #arenaBoundaryBody} and
+     * {@code maybeShipBody} belongs to a real ship — mirrors
+     * {@link #registerPotentialHit}'s "collect in beginContact, resolve
+     * later" shape, since applying damage that might destroy the ship can't
+     * safely create/destroy Box2D bodies from inside this callback.
+     * <p>
+     * Reads {@code maybeShipBody}'s linear velocity right here, in
+     * {@code beginContact} — Box2D's collision detection runs before that
+     * step's velocity solver, so this is still the ship's <i>approaching</i>
+     * speed, not whatever the bounce reflects it to afterward.
+     */
+    private void registerPotentialWallHit(Body maybeShipBody, Body other) {
+        if (other != arenaBoundaryBody) {
+            return;
+        }
+        Entity ship = asEntity(maybeShipBody);
+        if (ship == null) {
+            return;
+        }
+        float damage = ArenaBounds.wallImpactDamage(maybeShipBody.getLinearVelocity().len());
+        if (damage > 0f) {
+            pendingWallHits.add(new WallHitEvent(ship, damage));
+        }
+    }
+
+    /**
+     * Resolves every wall-impact hit registered this tick
+     * ({@link #registerPotentialWallHit}) — applies damage
+     * ({@link ShipDamage#apply}) and destroys any ship it kills, same
+     * "collect during the callback, act after physics stepping" shape as
+     * {@link #resolvePendingHits}. Unlike a projectile hit, this never
+     * marks {@link CombatTimerComponent} — running into a wall isn't being
+     * engaged by another player, so it shouldn't extend design.md 2.3's
+     * combat-lock window — and never credits a kill to anyone
+     * ({@link #handleShipDestroyed}'s {@code killerPlayerId} is always
+     * {@code null} here), since it's a self-inflicted, not a combat, death.
+     */
+    private void resolvePendingWallHits() {
+        if (pendingWallHits.isEmpty()) {
+            return;
+        }
+        Set<Entity> shipsToCheck = new HashSet<>();
+        for (WallHitEvent hit : pendingWallHits) {
+            HullComponent hull = hit.ship().getComponent(HullComponent.class);
+            if (hull.isDestroyed()) {
+                continue; // already destroyed by something else resolved earlier this tick
+            }
+            ShipDamage.apply(hit.ship().getComponent(ShieldComponent.class), hull, hit.damage());
+            shipsToCheck.add(hit.ship());
+        }
+        pendingWallHits.clear();
+
+        for (Entity ship : shipsToCheck) {
+            if (ship.getComponent(HullComponent.class).isDestroyed()) {
+                handleShipDestroyed(ship, null);
+            }
+        }
     }
 
     private void resolvePendingHits() {
@@ -550,18 +628,36 @@ public class GameNetworkServer extends NetworkServer {
     }
 
     private void respawnShip(int playerId) {
-        // Same fixed spawn point as an initial join for now - map/arena design (design.md 7)
-        // is still an open question.
-        float spawnX = 0f;
-        float spawnY = 0f;
+        Vector2 spawnPoint = findSpawnPoint();
         // The player's requested ship type doesn't change across respawns within a match -
         // recorded once at spawn-request time (see handleSpawnRequest), just read back here.
         ShipType shipType = shipTypeByPlayerId.get(playerId);
-        spawnShip(playerId, spawnX, spawnY, shipType);
+        spawnShip(playerId, spawnPoint.x, spawnPoint.y, shipType);
         Connection connection = connectionsByPlayerId.get(playerId);
         if (connection != null) {
-            connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY, shipType));
+            connection.sendTCP(new ShipSpawnedMessage(playerId, spawnPoint.x, spawnPoint.y, shipType));
         }
+    }
+
+    /**
+     * Picks a spawn/respawn point (design.md — arena bounds): a random
+     * point at least {@link SpawnPointFinder#BOUNDARY_MARGIN_METERS} inside
+     * the arena edge and at least {@link SpawnPointFinder#MIN_ENEMY_DISTANCE_METERS}
+     * from every currently-alive ship — the spawning/respawning player's
+     * own ship is never among them, since {@link #destroyShipEntity} always
+     * removes it from {@link #shipsByPlayerId} before either caller here
+     * runs (immediately, for a granted leave/combat death; via
+     * {@link #tickRespawns} for a respawn).
+     *
+     * @return the chosen spawn point, in meters
+     */
+    private Vector2 findSpawnPoint() {
+        List<Vector2> enemyPositions = new ArrayList<>(shipsByPlayerId.size());
+        for (Entity ship : shipsByPlayerId.values()) {
+            enemyPositions.add(new Vector2(ship.getComponent(PhysicsBodyComponent.class).getBody().getPosition()));
+        }
+        return SpawnPointFinder.findSpawnPoint(ArenaBounds.HALF_SIZE_METERS, SpawnPointFinder.BOUNDARY_MARGIN_METERS,
+            SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, enemyPositions, spawnRandom);
     }
 
     /**
@@ -620,12 +716,10 @@ public class GameNetworkServer extends NetworkServer {
         if (account.isEmpty() || !ShipUnlocks.isUnlocked(shipType, account.get().getUnlockedShips())) {
             return;
         }
-        // Fixed spawn point for now - map/arena design (design.md 7) is still an open question.
-        float spawnX = 0f;
-        float spawnY = 0f;
+        Vector2 spawnPoint = findSpawnPoint();
         shipTypeByPlayerId.put(playerId, shipType);
-        spawnShip(playerId, spawnX, spawnY, shipType);
-        connection.sendTCP(new ShipSpawnedMessage(playerId, spawnX, spawnY, shipType));
+        spawnShip(playerId, spawnPoint.x, spawnPoint.y, shipType);
+        connection.sendTCP(new ShipSpawnedMessage(playerId, spawnPoint.x, spawnPoint.y, shipType));
     }
 
     /**
@@ -1009,5 +1103,14 @@ public class GameNetworkServer extends NetworkServer {
      * One detected, not-yet-resolved projectile-vs-ship contact.
      */
     private record HitEvent(Entity projectile, Entity ship) {
+    }
+
+    /**
+     * One detected, not-yet-resolved ship-vs-arena-boundary impact
+     * (design.md — arena bounds' addendum), with the damage already
+     * computed ({@link ArenaBounds#wallImpactDamage}) from the ship's
+     * speed at the moment contact began.
+     */
+    private record WallHitEvent(Entity ship, float damage) {
     }
 }

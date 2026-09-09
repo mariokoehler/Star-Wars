@@ -3171,6 +3171,110 @@ machine that first surfaced the mismatch: "Turn Left" now both binds
 *and displays* as "Z" when that physical key is pressed, not "Y". Full
 `mvn clean test`/`mvn clean install` green throughout.
 
+**Arena bounds — implemented 2026-09-09.** See design.md 2.16 for the
+full writeup (resolves §7's long-open "map/arena design" question). User
+spec: a fixed 500m×500m square, ships **bounce** off the edge (not
+wrap-around, judged more confusing for this top-down layout than
+helpful). New `core.sim.ArenaBounds.createBoundary(World)` builds one
+static body with a single closed `ChainShape` fixture around the square
+— the idiomatic Box2D way to build a level boundary, not 4 long thin box
+fixtures (Box2D doesn't care about a shape's physical size for
+performance). Called identically by both `GameNetworkServer`'s
+authoritative world and `Client`'s local-prediction `localWorld` — same
+"shared code, can't diverge" reasoning as `ShipFactory`, so a bounce
+never needs correcting via reconciliation. New
+`CollisionCategories.ARENA_BOUNDARY`, masked only into ship fixtures — a
+projectile/missile just flies past and expires on its own lifetime
+timer, no new despawn logic needed.
+
+**Visual:** a glowing "energy containment field" band around the
+perimeter (new `render.ArenaBoundaryRenderer`), not an attempt to
+texture the unbounded space beyond it — nothing's ever out there to see
+it, the existing parallax starfield already covers that for free.
+Source art (`assets/textures/backgrounds/arena_boundary.png`) is a
+self-generated Python/Pillow placeholder — glowing cyan vertical energy
+bars + a bright horizontal core line, alpha-enveloped to fade top/bottom,
+seamlessly tileable (one tile = 10m×8m). **Iterated on live, not shipped
+first-try:** the first version (checked by compositing 5 tiles side by
+side onto a dark backdrop, per this file's own "always composite before
+judging alpha" rule from the radar HUD sessions) tiled seamlessly but
+read as too subtle/dim to actually function as a boundary marker at real
+gameplay scale — fixed by adding an underlying translucent color wash
+under the glowing bars and boosting bar/core opacity, before ever
+touching the game. The two vertical (left/right) edges reuse the exact
+same tiled horizontal quad, just rotated 90° around its own center —
+worked correctly on the first real in-game screenshot, no iteration
+needed there.
+
+**Spawn points — resolving the other standing "always (0,0)"
+limitation**, flagged repeatedly since the very first combat milestone.
+User's own spec: random point, ≥20m inside the arena edge, ≥100m from
+every other currently-alive ship. New pure `core.sim.SpawnPointFinder`
+(try up to 50 random candidates; if none satisfy both constraints,
+fall back to whichever kept the largest minimum enemy distance) —
+directly unit-tested (`SpawnPointFinderTest`), same "logic-heavy
+component gets tests" convention as `ShipDamage`/`PowerDistribution`.
+`GameNetworkServer.findSpawnPoint()` reads live positions straight out
+of `shipsByPlayerId` (the spawning/respawning player's own ship is
+never in that map yet at either call site — `handleSpawnRequest` for an
+initial join, `respawnShip` after a death), replacing the old hardcoded
+`(0f, 0f)` at both.
+
+**Verified live by the user directly, not just this session's own
+screenshot checks** — flew from spawn to a boundary edge and back:
+"the barriers are rendering correct all around the arena. the size of
+the arena feels decently large, i like it." Full `mvn clean test`/
+`mvn clean install` (all 4 modules) green throughout.
+
+**Wall-impact damage + radar coordinate readout — implemented same day,
+right after the user tried the bounce live.** Two follow-up requests in
+one message: "nothing funnier than self-destructing by faceplanting
+into the wall" (make a hard hit actually hurt), and show the player's
+own arena coordinates somewhere, ideally on the radar HUD, rounded to
+the nearest meter.
+
+New `ArenaBounds.wallImpactDamage(float)` — pure, linear above a 20m/s
+threshold (a routine bounce during normal flying costs nothing), 1.5
+damage per m/s above it (untuned, chosen so a genuinely fast deliberate
+faceplant can plausibly kill a ship outright against its ~100+100
+hull/shield pool) — reuses the exact same `ShipDamage.apply` shield/hull
+split every other damage source already goes through, so it interacts
+correctly with shields for free. `GameNetworkServer`'s `ContactListener`
+gained a parallel `registerPotentialWallHit`/`resolvePendingWallHits`
+pair, identical "collect during `beginContact`, resolve after physics
+stepping" shape as the existing projectile-hit pipeline — applying
+damage that might destroy the ship can't safely create/destroy a Box2D
+body from inside the callback itself. Impact speed is read from
+`Body.getLinearVelocity()` right in `beginContact`, before that step's
+velocity solver runs, so it's genuinely the ship's approaching speed,
+not whatever the bounce reflects it to afterward. **Deliberately not
+treated as combat:** never calls `CombatTimerComponent.markHit()`
+(running into a wall isn't being engaged by another player, shouldn't
+extend the ESC combat-lock window) and never credits a kill to anyone
+(`killerPlayerId` is always `null`) — the victim still gets a recorded
+death, same as any other self-inflicted end to a life. New
+`ArenaBoundsTest` cases cover the threshold/linear shape.
+
+`RadarHud` gained a live `BitmapFont` (same "SF Distant Galaxy"
+convention as `ScoreboardHud`/`Tooltip`) drawing `round(x) + ", " +
+round(y)` in the background art's otherwise-empty bottom-left corner
+(bottom-right is already the pulse-cooldown indicator's tab) — an
+untuned placeholder position, not measured off the art the precise way
+the scope-geometry constants are. **This is the first time `RadarHud`
+has owned a disposable resource** — its own class Javadoc used to say
+"owns nothing, needs no `dispose()`"; now implements `Disposable`, and
+`Client.dispose()` was updated to actually call it.
+
+Full `mvn clean test`/`mvn clean install` (all 4 modules) green
+throughout. **Wall-impact damage confirmed live by the user, same
+session:** "i tested it and the boundary now damages the ship and even
+kills it eventually, just like we wanted." The 20 m/s threshold / 1.5
+damage-per-m/s scale needed no immediate adjustment — kept as-is rather
+than second-guessed, per this project's own standing rule for hand-tuned
+numbers a real play-test already validated. **The radar coordinate
+readout is still unconfirmed** — the user's feedback covered the wall
+damage specifically, not the "x, y" text; revisit if they mention it.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

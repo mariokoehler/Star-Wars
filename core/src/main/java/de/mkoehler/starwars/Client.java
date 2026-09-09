@@ -40,6 +40,7 @@ import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.render.ArenaBoundaryRenderer;
 import de.mkoehler.starwars.render.DamageSmokeEffect;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
@@ -52,6 +53,7 @@ import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipLightEffect;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.render.ThrusterEffect;
+import de.mkoehler.starwars.sim.ArenaBounds;
 import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
@@ -288,6 +290,7 @@ public class Client implements Screen {
     private TextureRegion missileLockReticleInnerRegion;
     private TextureRegion missileLockReticleCenterRegion;
     private ParallaxBackground background;
+    private ArenaBoundaryRenderer arenaBoundaryRenderer;
     private ShipStatusHud statusHud;
     private PowerDistributionHud powerHud;
     private RadarHud radarHud;
@@ -559,6 +562,7 @@ public class Client implements Screen {
             new ParallaxBackground.Layer(game.getAssets().get(GameAssets.BLUE_NEBULA, Texture.class), 0.1f, false),
             new ParallaxBackground.Layer(PlaceholderStarfield.generate(512, 120, 1L), 0.4f)
         );
+        arenaBoundaryRenderer = new ArenaBoundaryRenderer(game.getAssets());
         statusHud = new ShipStatusHud(game.getAssets());
         powerHud = new PowerDistributionHud(game.getAssets());
         radarHud = new RadarHud(game.getAssets());
@@ -658,6 +662,10 @@ public class Client implements Screen {
         if (localWorld == null) {
             localWorld = new World(new Vector2(0, 0), true);
             localPhysicsSystem = new PhysicsSystem(localWorld);
+            // Same boundary GameNetworkServer builds into its own authoritative World - a bounce
+            // predicted differently here than the server actually resolves would otherwise fight
+            // reconciliation every time the local ship touches a wall (design.md - arena bounds).
+            ArenaBounds.createBoundary(localWorld);
         } else if (myBody != null) {
             // Respawning after death (see onShipDestroyed) - the old body was already destroyed.
             localWorld.destroyBody(myBody);
@@ -1119,6 +1127,7 @@ public class Client implements Screen {
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
         background.render(batch, camera);
+        arenaBoundaryRenderer.render(batch);
         drawRemoteShips(deltaTime);
         drawLocalShip(deltaTime);
         drawProjectiles();
@@ -2075,6 +2084,7 @@ public class Client implements Screen {
         // procedurally-generated starfield layer, which this screen alone owns (see #show()).
         background.dispose();
         scoreboardHud.dispose();
+        radarHud.dispose();
 
         Gdx.app.log(TAG, "dispose() took " + (System.currentTimeMillis() - disposeStartMillis) + "ms total");
     }

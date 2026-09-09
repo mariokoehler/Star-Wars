@@ -113,8 +113,8 @@ public final class ShipFactory {
 
     /**
      * Creates a ship's Box2D body, with no Ashley entity around it. The
-     * fixture is set up to collide with both other ships and projectiles
-     * (see {@link CollisionCategories}).
+     * fixture is set up to collide with other ships, projectiles, and the
+     * arena boundary (see {@link CollisionCategories}/{@link ArenaBounds}).
      * <p>
      * Uses a convex polygon built from {@link ShipStats#getSpriteMetadata()}'s
      * hitbox points (design.md 2.4) when at least 3 have been authored via
@@ -147,7 +147,8 @@ public final class ShipFactory {
         fixtureDef.friction = 0f;
         fixtureDef.restitution = 0.2f;
         fixtureDef.filter.categoryBits = CollisionCategories.SHIP;
-        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE);
+        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
+            | CollisionCategories.ARENA_BOUNDARY);
         body.createFixture(fixtureDef);
 
         shape.dispose();

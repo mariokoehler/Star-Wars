@@ -39,6 +39,7 @@ public final class GameAssets {
     public static final String LOGO = "textures/menu/logo.png";
     public static final String MENU_STARFIELD = "textures/backgrounds/menu_starfield.png";
     public static final String BLUE_NEBULA = "textures/backgrounds/blue_nebula.png";
+    public static final String ARENA_BOUNDARY = "textures/backgrounds/arena_boundary.png";
     public static final String WARNING_BANNER = "textures/hud/hud_warning_ejection_locked.png";
     public static final String HUD_STATUS_BACKGROUND = "textures/hud/hud_status_background.png";
     public static final String HUD_STATUS_SHIELD = "textures/hud/hud_status_shield.png";
@@ -173,6 +174,7 @@ public final class GameAssets {
         manager.load(LOGO, Texture.class);
         manager.load(MENU_STARFIELD, Texture.class);
         manager.load(BLUE_NEBULA, Texture.class);
+        manager.load(ARENA_BOUNDARY, Texture.class);
         manager.load(WARNING_BANNER, Texture.class);
         manager.load(HUD_STATUS_BACKGROUND, Texture.class);
         manager.load(HUD_STATUS_SHIELD, Texture.class);

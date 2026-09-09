@@ -19,6 +19,14 @@ public final class CollisionCategories {
      */
     public static final short PROJECTILE = 0x0002;
 
+    /**
+     * Category for the arena boundary fixture ({@link ArenaBounds}) — only
+     * masked into ship fixtures (design.md — arena bounds), so a
+     * projectile/missile simply keeps flying past the edge and expires on
+     * its own lifetime timer instead of bouncing or being destroyed there.
+     */
+    public static final short ARENA_BOUNDARY = 0x0004;
+
     private CollisionCategories() {
     }
 }

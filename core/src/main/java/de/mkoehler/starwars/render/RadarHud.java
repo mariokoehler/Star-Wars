@@ -1,11 +1,14 @@
 package de.mkoehler.starwars.render;
 
 import com.badlogic.gdx.assets.AssetManager;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.utils.Disposable;
 import de.mkoehler.starwars.sim.ShipStats;
 
 import java.util.List;
@@ -32,10 +35,18 @@ import java.util.List;
  * <p>
  * All seven source images are read from the shared {@link AssetManager} (see
  * {@link ShipStatusHud}'s class Javadoc for the same reasoning) rather than
- * loaded/disposed by this class itself, so this class owns nothing and
- * needs no {@code dispose()}.
+ * loaded/disposed by this class itself.
+ * <p>
+ * Also draws the observer's own position (design.md — arena bounds), rounded
+ * to the nearest meter, in the background art's otherwise-empty bottom-left
+ * corner (the bottom-right is already spoken for by the pulse-cooldown
+ * indicator's "extrusion" tab) — a simple orientation aid for "which part of
+ * the arena did I spawn into," not tied to the circular scope's own
+ * geometry at all. This is the one thing about this widget that isn't just
+ * pre-made art, so — same reasoning as {@link ScoreboardHud}/{@link Tooltip}
+ * — it owns a live {@link BitmapFont} and needs {@link #dispose()} called.
  */
-public class RadarHud {
+public class RadarHud implements Disposable {
 
     /**
      * The redesigned background art's (2026-09-09) own native pixel size —
@@ -88,6 +99,20 @@ public class RadarHud {
     private static final float BLIP_SIZE_FRACTION = 22f / 512f;
     private static final float CHEVRON_SIZE_FRACTION = 26f / 512f;
 
+    private static final int COORDS_FONT_SIZE_PX = 14;
+    /** Same live-text color convention as {@link ScoreboardHud}'s rows. */
+    private static final Color COORDS_TEXT_COLOR = new Color(0.85f, 0.9f, 1f, 1f);
+    /**
+     * Where the coordinate readout's baseline sits, as a fraction of the
+     * widget's drawn size — the background art's bottom-left corner, clear
+     * of both the circular scope (centered, {@link #SCOPE_RADIUS_FRACTION}
+     * from the middle) and the indicator LED's tab (bottom-right) —
+     * untuned placeholder position, not measured off the art the precise
+     * way {@link #SCOPE_CENTER_X_FRACTION} etc. are.
+     */
+    private static final float COORDS_X_FRACTION = 0.06f;
+    private static final float COORDS_Y_FRACTION = 0.045f;
+
     private final TextureRegion background;
     private final TextureRegion ring;
     private final TextureRegion cone;
@@ -95,6 +120,7 @@ public class RadarHud {
     private final TextureRegion chevron;
     private final TextureRegion indicatorGreen;
     private final TextureRegion indicatorRed;
+    private final BitmapFont coordsFont = GameFonts.generateSfDistantGalaxy(COORDS_FONT_SIZE_PX);
 
     /**
      * Creates the widget, reading its seven source textures from
@@ -146,6 +172,7 @@ public class RadarHud {
         batch.draw(background, x, y, size, size);
         boolean pulseAvailable = stats.isRadarPulseEnabled() && pulseCooldownRemainingSeconds <= 0f;
         drawIndicator(batch, pulseAvailable, x, y, size);
+        drawCoordinates(batch, observerXMeters, observerYMeters, x, y, size);
 
         float maxRangeMeters = stats.getRadarMaxRangeMeters();
         if (maxRangeMeters <= 0f) {
@@ -196,6 +223,18 @@ public class RadarHud {
         float topY = y + size - size * INDICATOR_OFFSET_Y_PIXELS_FROM_TOP / BACKGROUND_TEXTURE_HEIGHT;
         float bottomY = topY - heightPixels;
         batch.draw(region, leftX, bottomY, widthPixels, heightPixels);
+    }
+
+    /**
+     * Draws the observer's own position, rounded to the nearest meter, as
+     * plain "x, y" text (design.md — arena bounds) — a simple orientation
+     * aid, not tied to any particular coordinate convention beyond "the same
+     * meters everything else in the simulation already uses."
+     */
+    private void drawCoordinates(SpriteBatch batch, float observerXMeters, float observerYMeters, float x, float y, float size) {
+        String text = Math.round(observerXMeters) + ", " + Math.round(observerYMeters);
+        coordsFont.setColor(COORDS_TEXT_COLOR);
+        coordsFont.draw(batch, text, x + size * COORDS_X_FRACTION, y + size * COORDS_Y_FRACTION);
     }
 
     private void drawRing(SpriteBatch batch, boolean enabled, float rangeMeters, float maxRangeMeters,
@@ -263,5 +302,10 @@ public class RadarHud {
             float size = widgetSize * BLIP_SIZE_FRACTION;
             batch.draw(blip, contactX - size / 2f, contactY - size / 2f, size, size);
         }
+    }
+
+    @Override
+    public void dispose() {
+        coordsFont.dispose();
     }
 }

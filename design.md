@@ -2386,6 +2386,133 @@ logic-heavy pure functions). Verified: `mvn clean test` (153 tests) and
 `mvn clean install` green; build/tests only, same "you can leave the
 play testing to me" standing instruction.
 
+### 2.16 Arena bounds (2026-09-09)
+
+**Decision, resolving §7's long-open "map/arena design" question:** a
+single fixed **500m × 500m square arena**, centered on the origin, that
+ships **bounce off** rather than fly past or wrap around. Reasoning
+(the user's own): large enough for real "cat and mouse" — room to hide,
+escape, or hunt — but small enough that finding an opponent doesn't
+become tedious; and a discernible, bouncing edge is easier to orient
+yourself against than an invisible wrap-around teleport, which would be
+more confusing than helpful for a top-down arena like this one. A quick
+sanity check in the decision's favor: even the strongest detection
+mechanism (the 200m active pulse, 2.14) covers under half the arena's
+500m width, so finding someone genuinely takes searching, not a given.
+
+**Box2D implementation:** a single static body with one closed
+`ChainShape` fixture looping through the square's 4 corners — the
+standard, idiomatic Box2D way to build a level boundary (a long, thin
+box fixture per edge was considered and rejected as unnecessary: Box2D
+doesn't care about a shape's physical size for performance, a static
+chain costs essentially nothing regardless of extent). New
+`core.sim.ArenaBounds` builds it (`createBoundary(World)`), called
+identically by both `GameNetworkServer`'s authoritative `World` and
+`Client`'s local-prediction `localWorld` — same "shared code, can't
+diverge" reasoning as `ShipFactory`, since a bounce the client predicts
+differently from the server's own would otherwise fight reconciliation
+every time a ship touches a wall. The wall's own restitution (`0.6`,
+untuned) is set on its fixture, not the ship's (which keeps its existing
+low `0.2f`, tuned for soft ship-vs-ship bumps) — Box2D mixes two
+fixtures' restitution via `max(...)` by default, so the wall's own value
+dominates regardless. Friction is near-zero, deliberately, so a bounce
+reads as a clean reflection rather than inducing spin from an off-angle
+hit. New `CollisionCategories.ARENA_BOUNDARY` bit, masked only into ship
+fixtures — a projectile/missile simply keeps flying past the edge and
+expires on its own lifetime timer, rather than needing new hit-detection/
+despawn logic for a case that essentially never matters (nobody's out
+there to hit).
+
+**Visual — a glowing "energy containment field" band around the
+perimeter**, not an attempt to texture the (much larger, effectively
+unbounded) space beyond the wall — nothing ever gets out there to look
+at it, so the existing starfield/nebula parallax already covers it for
+free; only the wall itself needed art. New `render.ArenaBoundaryRenderer`
+tiles a single seamlessly-horizontally-tileable source texture
+(`assets/textures/backgrounds/arena_boundary.png`, one tile = 10m×8m of
+world space) around all 4 edges — the two vertical edges reuse the exact
+same tiled quad, rotated 90° around its own center, rather than a second
+authored orientation. Source art is a Python/Pillow placeholder (see
+CLAUDE.md for the generation technique) — glowing cyan vertical energy
+bars plus a bright horizontal "core" line, alpha-enveloped to fade
+top/bottom so it reads as a field cross-section rather than a hard-edged
+box; explicitly a placeholder the user may want to replace later, but
+confirmed live as looking good enough to plausibly keep.
+
+**Spawn/respawn points — resolving the other standing "always spawns at
+the same (0,0) point" limitation** (flagged repeatedly since the first
+combat milestone): a new pure `core.sim.SpawnPointFinder.findSpawnPoint(...)`
+picks a random point at least `BOUNDARY_MARGIN_METERS` (20m) inside the
+arena edge and at least `MIN_ENEMY_DISTANCE_METERS` (100m) from every
+currently-alive enemy ship — the user's own spec, chosen as the simple
+option for a first pass over anything smarter (fixed spawn zones,
+spread-maximizing placement). Tries up to 50 random candidates; if none
+satisfy both constraints (an unusually crowded arena), falls back to
+whichever candidate kept the largest minimum distance to any enemy —
+best-effort, not a failure. `GameNetworkServer.findSpawnPoint()` gathers
+every entry in `shipsByPlayerId` as "enemies" (the spawning/respawning
+player's own ship is never in that map yet at either call site), used by
+both `handleSpawnRequest` (initial join) and `respawnShip` (after a
+death), replacing the old fixed `(0f, 0f)` at both sites. Pure and
+directly unit-tested (`SpawnPointFinderTest`, `ArenaBoundsTest`) — same
+"logic-heavy component gets tests" convention as `ShipDamage`/
+`PowerDistribution`.
+
+**Verified live:** a real server + client, flown from spawn to a
+boundary edge and back, confirmed live by the user directly (not just
+this session's own screenshot-based checks) — "the barriers are
+rendering correct all around the arena. the size of the arena feels
+decently large, i like it." Full `mvn clean test`/`mvn clean install`
+(all 4 modules) green throughout.
+
+**Addendum, same day — wall-impact damage.** The user's own follow-up
+request, right after confirming the bounce/wall art: "nothing funnier
+than self-destructing by faceplanting into the wall" — hitting the
+boundary hard enough now actually hurts, reusing the exact same
+`ShipDamage.apply` shield/hull split every other damage source in
+this game already goes through. New `ArenaBounds.wallImpactDamage(float
+impactSpeedMetersPerSecond)` — a pure linear-above-a-threshold formula,
+harmless below `20 m/s` (an ordinary bounce during normal maneuvering
+costs nothing) and `1.5` damage per m/s above it (untuned, chosen so a
+genuinely fast, deliberate faceplant can plausibly kill a ship outright
+against its ~100+100 hull/shield pool). `GameNetworkServer`'s existing
+`ContactListener` gained a parallel `registerPotentialWallHit`/
+`resolvePendingWallHits` pair, identical "collect during `beginContact`,
+resolve after physics stepping" shape as the existing projectile-hit
+pipeline (`registerPotentialHit`/`resolvePendingHits`) — applying damage
+that might destroy the ship can't safely create/destroy a Box2D body
+from inside the callback. Impact speed is read from the ship's own
+`Body.getLinearVelocity()` at the instant `beginContact` fires — Box2D's
+collision detection runs before that step's velocity solver, so this is
+still the ship's true *approaching* speed, not whatever the bounce
+reflects it to afterward. A wall death is deliberately **not** treated
+as combat: it never calls `CombatTimerComponent.markHit()` (running into
+a wall isn't being engaged by another player, so it shouldn't extend
+2.3's ESC combat-lock window) and never credits a kill to anyone
+(`killerPlayerId` is always `null` for `handleShipDestroyed`) — the
+victim gets a recorded death (and, per 2.11, no kill goes to anyone
+else), same as any other self-inflicted end to a life. New
+`ArenaBoundsTest` cases cover the threshold/linear shape. **Confirmed
+live by the user, same day:** "i tested it and the boundary now damages
+the ship and even kills it eventually, just like we wanted." The 20 m/s
+threshold / 1.5 damage-per-m/s numbers needed no adjustment after this
+first real test — kept as-is, per this project's standing rule for
+hand-tuned values a real play-test already validated.
+
+**Addendum, same day — arena coordinates on the radar HUD.** Second
+follow-up request: "display the players coordinates within the arena
+somewhere? maybe as part of the radar hud... rounded to the next full
+meter." `RadarHud` gained a live `BitmapFont` (`GameFonts`, same
+"SF Distant Galaxy" convention as `ScoreboardHud`/`Tooltip`) and now
+draws `Math.round(x) + ", " + Math.round(y)` in the background art's
+otherwise-empty bottom-left corner (the bottom-right is already spoken
+for by the pulse-cooldown indicator's tab) — an untuned placeholder
+position, not measured off the art the precise way the scope-geometry
+constants are. `RadarHud` previously "owned nothing and needed no
+`dispose()`" (its class Javadoc's own words) — now implements
+`Disposable` for the font's sake, and `Client.dispose()` was updated to
+call it.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -5479,9 +5606,14 @@ the relevant section above once decided.
   asked to) — no faction-exclusivity decision has actually been made,
   this is the current behavior by default rather than a deliberate
   choice either way.
-- **Map/arena design**: single arena to start — size, obstacles (asteroid
-  fields? capital ship hulls?), boundary handling (do you die if you fly off
-  the edge, or is it wrapped/bounded?).
+- **~~Map/arena design~~ — size and boundary handling built, see 2.16.**
+  (Was: single arena to start — size, obstacles, boundary handling all
+  open. Now real: a fixed 500m×500m square, ships bounce off the edge
+  — with wall-impact damage — rather than wrap or fly off; spawn/respawn
+  now picks a random valid point instead of always `(0,0)`.)
+  **Still genuinely open, not addressed by 2.16:** obstacles (asteroid
+  fields? capital ship hulls?) — none exist yet, the arena is still an
+  empty square besides its own boundary.
 - **Tick rate / snapshot rate** for the netcode.
 - **Lag compensation** for hit detection (rewind-time hit registration vs.
   simple current-state checks) — matters more as ping increases.
