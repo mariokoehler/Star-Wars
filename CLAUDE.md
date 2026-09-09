@@ -2966,6 +2966,29 @@ new server-side broadcast needed exercising too). **Not yet
 live-verified** — needs the user to land a hit and destroy a ship, and
 confirm both explosion sizes look right.
 
+**Muzzle flash lag bug, found by the user, fixed 2026-09-09, same
+session.** See design.md 2.4's addendum for the full writeup. User
+noticed the flash trailing behind a fast-moving ship and asked directly
+whether the already-fixed projectile-spawn-lag bug had resurfaced here
+too, rather than assuming either way. Checked first: `predictLocalWeapon`'s
+flash-trigger position is the exact same `myBody.getPosition() +
+offset` expression the (already-fixed, confirmed-working) projectile
+spawn uses, in the same loop - that specific bug class couldn't apply,
+confirmed rather than guessed. **Real, different cause:** the flash's
+own particles never inherited the shooter's velocity the way a real
+projectile explicitly does (`ProjectileFactory`'s 2026-09-06 fix) - fine
+at a standstill, but a fast ship outruns its own flash within its
+~50-100ms life otherwise. Fixed by leaning on the effect's own
+`attached: true` authoring: `MuzzleFlashEffect.trigger` now records the
+shooter's velocity, and `update` nudges the emitter's position forward
+along it every frame, dragging every already-spawned spark along for
+free (no per-particle API needed/available). Works for remote shots too
+by looking up the shooter's `RemoteShip.velocityX/Y` if currently
+detected, falling back to `0` otherwise. Verified: full `mvn clean
+test` (154 tests) and `mvn clean install` green, real client boot, zero
+exceptions. **Not yet live-verified** — needs the user to confirm the
+flash now keeps up with a fast-moving ship.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

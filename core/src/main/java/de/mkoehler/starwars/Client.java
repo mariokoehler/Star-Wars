@@ -896,12 +896,19 @@ public class Client implements Screen {
                     // the local player's own shot (those are always matched/adopted above, already
                     // flashed immediately when fired, see predictLocalWeapon) - so this is another
                     // player's shot. Flashed directly at its own spawn position/travel direction,
-                    // no shooter-ship lookup needed at all, since every projectile is already
-                    // broadcast to everyone unfiltered (design.md 2.14).
+                    // no shooter-ship lookup needed for *position* at all, since every projectile is
+                    // already broadcast to everyone unfiltered (design.md 2.14) - only looked up here
+                    // for its current velocity, so the flash can be carried along with it the same
+                    // way a real shot inherits it (design.md — explosions' addendum on this exact
+                    // bug). Zero if the shooter isn't currently a detected/rendered RemoteShip -
+                    // exactly as good as it gets without that ship's own data to draw on.
                     if (state.getTrackedTargetPlayerId() == ProjectileComponent.NO_TRACKED_TARGET) {
                         float travelAngleDegrees = MathUtils.atan2(-state.getVelocityX(), state.getVelocityY())
                             * MathUtils.radiansToDegrees;
-                        obtainPooledMuzzleFlash().trigger(x, y, travelAngleDegrees);
+                        RemoteShip shooter = ships.get(state.getOwnerPlayerId());
+                        float shooterVelocityX = shooter != null ? shooter.velocityX : 0f;
+                        float shooterVelocityY = shooter != null ? shooter.velocityY : 0f;
+                        obtainPooledMuzzleFlash().trigger(x, y, travelAngleDegrees, shooterVelocityX, shooterVelocityY);
                     }
                 }
                 projectiles.put(state.getProjectileId(), projectile);
@@ -1317,7 +1324,9 @@ public class Client implements Screen {
                 if (i < myMuzzleFlashes.size()) {
                     float flashXPixels = (myBody.getPosition().x + PREDICTED_SPAWN_OFFSET.x) * PhysicsConstants.PIXELS_PER_METER;
                     float flashYPixels = (myBody.getPosition().y + PREDICTED_SPAWN_OFFSET.y) * PhysicsConstants.PIXELS_PER_METER;
-                    myMuzzleFlashes.get(i).effect.trigger(flashXPixels, flashYPixels, shipAngleDegrees);
+                    myMuzzleFlashes.get(i).effect.trigger(flashXPixels, flashYPixels, shipAngleDegrees,
+                        myBody.getLinearVelocity().x * PhysicsConstants.PIXELS_PER_METER,
+                        myBody.getLinearVelocity().y * PhysicsConstants.PIXELS_PER_METER);
                 }
             }
         }

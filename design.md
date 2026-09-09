@@ -4389,6 +4389,57 @@ broadcast needed exercising too, not just client-side asset loading).
 destroy a ship, and confirm both explosion sizes appear at the right
 place, sized correctly relative to each other.
 
+**Muzzle flash bug found and fixed, 2026-09-09, same session: the flash
+visibly drifted behind a fast-moving ship, the same shape as the
+already-closed projectile-spawn-lag investigation earlier this
+addendum, but not the same root cause.** User noticed the muzzle flash
+lagging behind their ship's own motion at speed and asked directly
+whether the old fix (local shot prediction) had been missed here too,
+before assuming it was something else. Checked first, rather than
+guessing: `predictLocalWeapon`'s muzzle-flash trigger position is
+computed from `myBody.getPosition() + PREDICTED_SPAWN_OFFSET` — the
+exact same expression, in the same loop, same frame, as the projectile
+spawn position right next to it. The local flash was never on a
+separate, round-trip-latent path to begin with, so that specific bug
+class structurally couldn't apply here — confirmed, not assumed.
+
+**Actual cause: the flash's own particles never inherited the
+shooter's velocity, unlike the real projectile.** `ProjectileFactory`
+explicitly adds the shooter's current velocity on top of muzzle speed
+(the 2026-09-06 fix, this same addendum) — that's specifically *why*
+the shot keeps pace with a fast-moving ship. `Muzzle_Flash.p`'s own
+particles (up to 1000 px/s per the user's latest tuning) only ever move
+relative to the world, with zero contribution from whatever was moving
+when they spawned — invisible at a standstill, but a ship above roughly
+that speed visibly outruns its own flash within its ~50-100ms life, in
+exactly the "trailing behind, worse at speed" shape the user described.
+Same underlying "a fired effect needs to explicitly inherit the
+shooter's motion, nothing does that automatically" lesson as the
+2026-09-06 fix, just never applied to this second, later-added effect.
+
+**Fix: lean on the effect's own `attached: true` authoring rather than
+touch individual particles.** The classic 2D `ParticleEffect` API
+doesn't expose a way to add a velocity to particles already spawned —
+but `ParticleEmitter.setPosition(x, y)`, when `attached` is `true`,
+translates every currently-active particle by however much the position
+just moved (already relied on by `ThrusterEffect`/`OneShotParticleEffect`
+for a moving emitter). `MuzzleFlashEffect.trigger` now also records the
+shooter's velocity, and `update` nudges the emitter's position forward
+along it every frame the flash is still playing — every spark already
+spawned rides along for free, without any per-particle API needed.
+Local shots pull `myBody.getLinearVelocity()` (same body the position
+came from); remote shots look up the shooter's `RemoteShip.velocityX/Y`
+if that ship is currently detected/rendered (falling back to `0` if
+not — the shooter simply isn't visible enough to know, same class of
+graceful degradation already accepted elsewhere for a purely cosmetic
+effect).
+
+**Verified:** full `mvn clean test` (154 tests, unaffected — no new
+logic-heavy code) and `mvn clean install` green; booted a real packaged
+client with zero exceptions. **Not yet live-verified** — needs the user
+to confirm the flash now stays with a fast-moving ship instead of
+trailing behind it.
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain
