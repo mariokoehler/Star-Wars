@@ -4116,6 +4116,81 @@ not just the one this was authored against. **Not yet live-verified in
 actual flight** — needs the user to confirm the red/green lights show up
 on the correct wingtip/side for each ship and blink as expected.
 
+**Positioning-light "left behind" bug found and fixed, same day, once
+the user actually flew it.** The user correctly self-diagnosed it as
+their own particle-editor setting rather than asking for a code fix
+first: a spawned light particle stayed at its fixed world-space spawn
+point instead of moving with the ship. Root cause, confirmed by reading
+`ParticleEmitter.setPosition(x, y)`'s real source: it only translates
+already-active particles by the position delta when the emitter's own
+`attached` flag is `true` — `Light_Red.p`/`Light_Green.p` were both
+authored `attached: false` (correct for `Thruster_Blue.p`'s exhaust,
+wrong for a light meant to be a fixed feature of the hull). User flipped
+it to `true` in both `assets-raw` source files; the actual fix was
+purely re-copying the two `.p` files into `assets/textures/particles/`
+— no code changed, since `ShipLightEffect` already just calls
+`ParticleEffect.setPosition(...)` every frame and lets the effect's own
+`attached` flag decide the rest.
+
+**Damage smoke — implemented 2026-09-09, same session.** New
+`render.DamageSmokeEffect` wires the user's `Smoke.p`/`particle-cloud.png`
+(copied to `assets/textures/particles/smoke.p`/`particle-cloud.png`,
+same "keep the image alongside the `.p` file" convention as every other
+particle effect here) into each ship type's `"DAMAGE_SMOKE"` attachment
+points. Per the user's own spec: a ship's first `DAMAGE_SMOKE` point
+activates once hull damage exceeds 10% (`1 - hullCurrent/hullMax > 0.10`);
+a second point, if the ship has one, additionally activates past 50%
+damage — `Client.DAMAGE_SMOKE_THRESHOLDS = {0.10f, 0.50f}`, indexed by
+each point's authored order. No current ship has a third point, so a
+ship with one was left as an unconfirmed default (reusing the second
+threshold) rather than asked about. Actual point counts: X-wing has
+exactly one (so it only ever gets the 10% plume); every other ship with
+any `DAMAGE_SMOKE` points has exactly two (Falcon, Snowspeeder, A-Wing,
+TIE Fighter, TIE Interceptor); the Star Destroyer has none at all
+(no smoke ever, for it) — none of this needed deciding, just reading
+what's already authored in each `.meta.json`.
+
+`Smoke.p` is authored `attached: false` (unlike the just-fixed lights)
+and its puffs already drift outward with their own small random
+velocity — correct for smoke that should linger and trail behind a
+moving ship rather than stick to the hull, the exact opposite lesson
+from the light-effect bug just above. Because of that, `DamageSmokeEffect`
+needs no rotation logic at all (unlike `ThrusterEffect`) — only the
+attachment point's own position needs converting into world space each
+frame, same as `ShipLightEffect`. Unlike the engine effect (per-ship
+configurable) but like the two light colors, **one shared `Smoke.p`
+template serves every ship type** (`GameAssets.DAMAGE_SMOKE_PARTICLE`,
+queued unconditionally) — a ship type doesn't get to customize what its
+own damage smoke looks like.
+
+Hull current/max are already broadcast for every ship in `ShipState`
+(design.md 2.5/2.14, from well before this feature), so — unlike engine
+thrusters, which needed a new `thrusting` wire field — **no protocol
+change was needed at all** to make damage smoke visible on remote ships:
+every client already has everything it needs to compute the same
+threshold crossing for anyone's ship. `RemoteShip` gained plain
+`hullCurrent`/`hullMax` fields (held directly from the latest
+`ShipState`, not extrapolated, same as `turretAimAngles`/`thrusting`)
+purely so `drawRemoteShips` can compute a damage fraction the same way
+`drawLocalShip` already does from `myHullCurrent`/`myHullMax`.
+
+Each smoke point's on/off gating and discard-on-reactivate behavior
+mirrors `ThrusterEffect.update` exactly (`DamageSmokeEffect.update`) —
+robust even though, given hull damage never decreases mid-life in this
+project (no hull regen, only shields regen per design.md 2.5/2.2), a
+point in practice only ever transitions inactive→active once per ship
+life, never flickers back off.
+
+**Verified:** full `mvn clean test` (153 tests, unaffected — no new
+protocol/logic-heavy code, just wiring) and `mvn clean install` green;
+booted a real packaged server + client pair with zero exceptions (same
+splash-screen `.meta.json`-parsing check as the `LIGHT_RED`/`LIGHT_GREEN`
+rename above, incidentally exercising every ship's `DAMAGE_SMOKE` point
+count too). **Not yet live-verified** — needs the user to actually take
+damage past each threshold, on both their own ship and (ideally) a
+second client's ship, and confirm the right plume(s) appear from the
+right attachment point(s) and trail behind correctly as the ship moves.
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain

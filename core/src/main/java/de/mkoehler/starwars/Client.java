@@ -37,6 +37,7 @@ import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.render.DamageSmokeEffect;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
@@ -322,6 +323,18 @@ public class Client implements Screen {
      * needed for {@code RemoteShip.lights} to work the same way.
      */
     private final List<ShipLight> myLights = new ArrayList<>();
+    /**
+     * The local player's own damage smoke plume(s) (design.md — damage
+     * smoke), one per {@code "DAMAGE_SMOKE"} attachment point on the
+     * current {@link #myShipType} - rebuilt alongside {@link #myThrusters}/
+     * {@link #myLights} on every {@link #onShipSpawned}, each activating
+     * once this ship's hull damage crosses that point's own threshold
+     * ({@link #buildDamageSmokePoints}). No per-ship "is it on" wire state
+     * is needed for {@code RemoteShip.damageSmoke} either - hull current/max
+     * are already broadcast for every ship (design.md 2.5/2.14), so every
+     * client can compute the same threshold crossing for anyone's ship.
+     */
+    private final List<DamageSmokePoint> myDamageSmoke = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -608,6 +621,8 @@ public class Client implements Screen {
         myThrusters.addAll(buildEngineThrusters(myStats));
         myLights.clear();
         myLights.addAll(buildShipLights(myStats));
+        myDamageSmoke.clear();
+        myDamageSmoke.addAll(buildDamageSmokePoints(myStats));
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -717,7 +732,7 @@ public class Client implements Screen {
             RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id -> {
                 ShipStats remoteStats = ShipStats.forType(state.getShipType());
                 return new RemoteShip(x, y, state.getAngle(), state.getShipType(),
-                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats));
+                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats));
             });
             ship.updateFromSnapshot(x, y, state.getAngle(),
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
@@ -725,6 +740,8 @@ public class Client implements Screen {
                 state.getAngularVelocity());
             ship.turretAimAngles = state.getTurretAimAngles();
             ship.thrusting = state.isThrusting();
+            ship.hullCurrent = state.getHullCurrent();
+            ship.hullMax = state.getHullMax();
         }
         ships.keySet().removeIf(id -> !presentShipIds.contains(id));
 
@@ -1278,6 +1295,9 @@ public class Client implements Screen {
                 ship.renderX, ship.renderY, ship.renderAngle, ship.thrusting, deltaTime);
             updateAndDrawLights(ship.lights, stats.getPixelsPerMeter(),
                 ship.renderX, ship.renderY, ship.renderAngle, deltaTime);
+            float shipDamageFraction = ship.hullMax > 0f ? 1f - (ship.hullCurrent / ship.hullMax) : 0f;
+            updateAndDrawDamageSmoke(ship.damageSmoke, stats.getPixelsPerMeter(),
+                ship.renderX, ship.renderY, ship.renderAngle, shipDamageFraction, deltaTime);
         }
         batch.setColor(Color.WHITE);
     }
@@ -1366,6 +1386,8 @@ public class Client implements Screen {
         updateAndDrawThrusters(myThrusters, myStats.getPixelsPerMeter(), x, y, angle,
             Gdx.input.isKeyPressed(Input.Keys.W), deltaTime);
         updateAndDrawLights(myLights, myStats.getPixelsPerMeter(), x, y, angle, deltaTime);
+        float myDamageFraction = myHullMax > 0f ? 1f - (myHullCurrent / myHullMax) : 0f;
+        updateAndDrawDamageSmoke(myDamageSmoke, myStats.getPixelsPerMeter(), x, y, angle, myDamageFraction, deltaTime);
     }
 
     /**
@@ -1490,6 +1512,77 @@ public class Client implements Screen {
         for (PixelPoint point : points) {
             lights.add(new ShipLight(point, new ShipLightEffect(template)));
         }
+    }
+
+    /**
+     * The hull-damage fraction (1 - current/max) beyond which each
+     * successive {@code "DAMAGE_SMOKE"} attachment point activates
+     * (design.md — damage smoke, the user's own spec): the first point at
+     * more than 10% damage, the second at more than 50% - indexed by
+     * authored order. A ship type with more than two points (none does
+     * today) reuses the last threshold for every point beyond the second -
+     * an unconfirmed default, since the user's spec only covered exactly
+     * one or two points.
+     */
+    private static final float[] DAMAGE_SMOKE_THRESHOLDS = {0.10f, 0.50f};
+
+    /**
+     * Updates and draws one ship's damage smoke plume(s), if any
+     * (design.md — damage smoke) — each point independently active once
+     * {@code damageFraction} exceeds its own threshold
+     * ({@link #DAMAGE_SMOKE_THRESHOLDS}), see {@link DamageSmokeEffect#update}.
+     * Shared by both the local player's own ship ({@link #drawLocalShip})
+     * and every other visible ship ({@link #drawRemoteShips}) - hull
+     * current/max are already broadcast for every ship, so no new wire
+     * state was needed to support the latter.
+     *
+     * @param points           this ship's damage smoke points, empty for a ship type with none configured
+     * @param pixelsPerMeter   this ship type's own pixels-per-meter, for converting attachment offsets
+     * @param shipScreenX      the ship's current on-screen position
+     * @param shipScreenY      the ship's current on-screen position
+     * @param shipAngleRadians the ship's current facing
+     * @param damageFraction   this ship's current hull damage, as a fraction of its max hull (0 = undamaged, 1 = destroyed)
+     * @param deltaTime        time since the last frame, in seconds
+     */
+    private void updateAndDrawDamageSmoke(List<DamageSmokePoint> points, float pixelsPerMeter,
+                                           float shipScreenX, float shipScreenY, float shipAngleRadians,
+                                           float damageFraction, float deltaTime) {
+        for (DamageSmokePoint point : points) {
+            PixelPoint attachment = point.attachmentPoint;
+            ATTACHMENT_OFFSET.set(attachment.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
+                attachment.getY() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER).rotateRad(shipAngleRadians);
+            boolean active = damageFraction > point.damageThresholdFraction;
+            point.effect.update(shipScreenX + ATTACHMENT_OFFSET.x, shipScreenY + ATTACHMENT_OFFSET.y, active, deltaTime);
+            point.effect.draw(batch);
+        }
+    }
+
+    /**
+     * Builds one ship type's damage smoke points (design.md — damage
+     * smoke) — one {@link DamageSmokeEffect} per {@code "DAMAGE_SMOKE"}
+     * attachment point, in authored order, each paired with its own
+     * threshold from {@link #DAMAGE_SMOKE_THRESHOLDS}, all sharing the
+     * same global template ({@link GameAssets#DAMAGE_SMOKE_PARTICLE})
+     * regardless of ship type. Empty (never {@code null}) if the type has
+     * no such attachment points authored (e.g. the Star Destroyer).
+     *
+     * @param stats the ship type's stats
+     * @return that type's damage smoke points, or an empty list if it has none
+     */
+    private List<DamageSmokePoint> buildDamageSmokePoints(ShipStats stats) {
+        List<DamageSmokePoint> points = new ArrayList<>();
+        stats.getSpriteMetadata().ifPresent(metadata -> {
+            List<PixelPoint> smokePoints = metadata.getAttachmentPoints().get(DamageSmokeEffect.DAMAGE_SMOKE_ATTACHMENT_NAME);
+            if (smokePoints == null || smokePoints.isEmpty()) {
+                return;
+            }
+            ParticleEffect template = game.getAssets().get(GameAssets.DAMAGE_SMOKE_PARTICLE, ParticleEffect.class);
+            for (int i = 0; i < smokePoints.size(); i++) {
+                float threshold = DAMAGE_SMOKE_THRESHOLDS[Math.min(i, DAMAGE_SMOKE_THRESHOLDS.length - 1)];
+                points.add(new DamageSmokePoint(smokePoints.get(i), threshold, new DamageSmokeEffect(template)));
+            }
+        });
+        return points;
     }
 
     private void drawProjectiles() {
@@ -1743,14 +1836,21 @@ public class Client implements Screen {
         final List<EngineThruster> thrusters;
         /** This ship's own positioning lights (design.md — positioning lights), built once at creation - empty for a ship type with none configured. */
         final List<ShipLight> lights;
+        /** This ship's own damage smoke points (design.md — damage smoke), built once at creation - empty for a ship type with none configured. */
+        final List<DamageSmokePoint> damageSmoke;
         /** Whether this ship is currently holding its forward-thrust input, straight from the latest {@code ShipState} - not extrapolated, just held. */
         boolean thrusting;
+        // Hull current/max, straight from the latest ShipState - not extrapolated, just held,
+        // same as turretAimAngles/thrusting above - drives damageSmoke's threshold checks.
+        float hullCurrent;
+        float hullMax;
 
-        RemoteShip(float x, float y, float angle, ShipType shipType,
-                   List<EngineThruster> thrusters, List<ShipLight> lights) {
+        RemoteShip(float x, float y, float angle, ShipType shipType, List<EngineThruster> thrusters,
+                   List<ShipLight> lights, List<DamageSmokePoint> damageSmoke) {
             this.shipType = shipType;
             this.thrusters = thrusters;
             this.lights = lights;
+            this.damageSmoke = damageSmoke;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;
@@ -1801,6 +1901,25 @@ public class Client implements Screen {
 
         ShipLight(PixelPoint attachmentPoint, ShipLightEffect effect) {
             this.attachmentPoint = attachmentPoint;
+            this.effect = effect;
+        }
+    }
+
+    /**
+     * Pairs one {@link DamageSmokeEffect} with the local-frame pixel offset
+     * (from the ship's own {@code "DAMAGE_SMOKE"} attachment point
+     * metadata) it should be positioned at each frame, and the hull-damage
+     * fraction beyond which it should be active — see
+     * {@link #buildDamageSmokePoints}/{@link #myDamageSmoke}.
+     */
+    private static final class DamageSmokePoint {
+        final PixelPoint attachmentPoint;
+        final float damageThresholdFraction;
+        final DamageSmokeEffect effect;
+
+        DamageSmokePoint(PixelPoint attachmentPoint, float damageThresholdFraction, DamageSmokeEffect effect) {
+            this.attachmentPoint = attachmentPoint;
+            this.damageThresholdFraction = damageThresholdFraction;
             this.effect = effect;
         }
     }

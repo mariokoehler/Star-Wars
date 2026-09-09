@@ -2788,6 +2788,61 @@ in actual flight**, for the lights or the extended engine trails —
 needs the user to confirm another player's engine trail is visible, and
 that each ship's red/green lights show up on the correct side and blink.
 
+**Positioning-light "left behind" bug, found by the user, fixed the same
+day.** User: a spawned light particle stayed at its fixed world-space
+spawn point instead of moving with the ship as it flew away — correctly
+guessed it was their own particle-editor setting, not a code bug, and
+asked whether libGDX supports it. Confirmed by reading
+`ParticleEmitter.setPosition(x, y)`'s actual source: it only translates
+already-active particles by the position delta when the emitter's own
+`attached` flag is `true`. `Light_Red.p`/`Light_Green.p` were both
+authored `attached: false` (right for `Thruster_Blue.p`'s exhaust,
+wrong for a light that's a fixed hull feature). User fixed both source
+files in `assets-raw/`; asked to have the copies actually wired into the
+game updated too — just a re-copy, `assets/textures/particles/light_red
+.p`/`light_green.p` overwritten from the corrected sources, no code
+change (`ShipLightEffect` already just forwards to `ParticleEffect
+.setPosition(...)` every frame and lets the effect's own `attached` flag
+decide the rest). Committed as `fe6729d`.
+
+**Damage smoke — implemented 2026-09-09, same session.** See design.md
+4.3's addendum for the full writeup. New `render.DamageSmokeEffect`
+wires the user's `Smoke.p`/`particle-cloud.png` into each ship's
+`"DAMAGE_SMOKE"` attachment points, per the user's own spec: a ship's
+first `DAMAGE_SMOKE` point activates past 10% hull damage, a second
+point (if present) additionally activates past 50% —
+`Client.DAMAGE_SMOKE_THRESHOLDS = {0.10f, 0.50f}`, indexed by authored
+order (a ship with a hypothetical third point would reuse the 50%
+threshold — unconfirmed default, no current ship has one to test
+against). Real counts, just read off each `.meta.json`: X-wing has one
+point, Falcon/Snowspeeder/A-Wing/TIE Fighter/TIE Interceptor have two,
+Star Destroyer has none.
+
+**No protocol change needed at all this time** — unlike engine
+thrusters (which needed a new `thrusting` wire field), hull current/max
+were already broadcast for every ship long before this feature existed,
+so every client already has what it needs to compute the same damage
+fraction for anyone's ship. `RemoteShip` just gained plain
+`hullCurrent`/`hullMax` fields (held directly, not extrapolated, same
+as `turretAimAngles`/`thrusting`) so `drawRemoteShips` can compute it
+the same way `drawLocalShip` already does. `Smoke.p`'s own puffs already
+drift outward with their own small random velocity and are authored
+`attached: false` (correctly, unlike the light bug above — smoke should
+linger behind a moving ship, not stick to the hull), so
+`DamageSmokeEffect` needs no rotation logic at all, only the attachment
+point's own position, same as `ShipLightEffect`. One shared `Smoke.p`
+template for every ship type (`GameAssets.DAMAGE_SMOKE_PARTICLE`, queued
+unconditionally), same "not per-ship-configurable" convention as the
+two light colors.
+
+**Verified:** full `mvn clean test` (153 tests, unaffected) and `mvn
+clean install` green; booted a real packaged server + client pair with
+zero exceptions (the same splash-screen `.meta.json`-parsing check
+already exercises every ship's `DAMAGE_SMOKE` point count too). **Not
+yet live-verified** — needs the user to actually take damage past each
+threshold and confirm the right plume(s) show up and trail correctly,
+on both their own ship and someone else's.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

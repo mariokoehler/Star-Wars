@@ -67,6 +67,14 @@ public final class GameAssets {
     public static final String LIGHT_RED_PARTICLE = particleEffectPath("light_red");
     public static final String LIGHT_GREEN_PARTICLE = particleEffectPath("light_green");
 
+    /**
+     * The damage smoke particle effect (design.md — damage smoke) — one
+     * shared effect for every ship type's {@code "DAMAGE_SMOKE"} attachment
+     * points, same "one global template regardless of ship type" reasoning
+     * as {@link #LIGHT_RED_PARTICLE}/{@link #LIGHT_GREEN_PARTICLE}.
+     */
+    public static final String DAMAGE_SMOKE_PARTICLE = particleEffectPath("smoke");
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -148,6 +156,7 @@ public final class GameAssets {
         manager.load(RADAR_INDICATOR_RED, Texture.class);
         manager.load(LIGHT_RED_PARTICLE, ParticleEffect.class);
         manager.load(LIGHT_GREEN_PARTICLE, ParticleEffect.class);
+        manager.load(DAMAGE_SMOKE_PARTICLE, ParticleEffect.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);
