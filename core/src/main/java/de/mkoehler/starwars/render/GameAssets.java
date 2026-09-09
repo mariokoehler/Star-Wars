@@ -57,6 +57,16 @@ public final class GameAssets {
     public static final String RADAR_INDICATOR_GREEN = "textures/hud/hud_radar_indicator_green.png";
     public static final String RADAR_INDICATOR_RED = "textures/hud/hud_radar_indicator_red.png";
 
+    /**
+     * The positioning-light particle effects (design.md — positioning
+     * lights) — one shared red and one shared green effect for every ship
+     * type's {@code "LIGHT_RED"}/{@code "LIGHT_GREEN"} attachment points,
+     * unlike a ship's own configurable engine effect
+     * ({@link de.mkoehler.starwars.sim.ShipTypeConfig#getEngineParticleEffect()}).
+     */
+    public static final String LIGHT_RED_PARTICLE = particleEffectPath("light_red");
+    public static final String LIGHT_GREEN_PARTICLE = particleEffectPath("light_green");
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -136,6 +146,8 @@ public final class GameAssets {
         manager.load(RADAR_CHEVRON, Texture.class);
         manager.load(RADAR_INDICATOR_GREEN, Texture.class);
         manager.load(RADAR_INDICATOR_RED, Texture.class);
+        manager.load(LIGHT_RED_PARTICLE, ParticleEffect.class);
+        manager.load(LIGHT_GREEN_PARTICLE, ParticleEffect.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);

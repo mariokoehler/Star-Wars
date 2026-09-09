@@ -9,8 +9,10 @@ import java.util.Map;
  * Per-ship-type data authored visually against a ship's sprite, rather than
  * derived from a formula: a collision hitbox polygon, and named attachment
  * points (e.g. {@code "PROJECTILE"} for where a weapon's shots originate,
- * {@code "ENGINE"} for engine glow, {@code "LIGHT"}/{@code "DAMAGE_SMOKE"}
- * for future particle effects — design.md 2.4/4.3).
+ * {@code "ENGINE"} for engine glow, {@code "LIGHT_RED"}/{@code "LIGHT_GREEN"}
+ * for positioning lights (like a real plane/ship's red-left/green-right
+ * navigation lights), {@code "DAMAGE_SMOKE"} for a future particle effect
+ * — design.md 2.4/4.3).
  * <p>
  * Authored with the sprite metadata editor (the {@code dev-tools} module,
  * not shipped in the game), stored as one JSON file per ship under

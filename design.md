@@ -4045,20 +4045,76 @@ teleporting once its position later jumps to wherever the ship has since
 moved. Untested against a real fade-out; revisit if the hard cutoff reads
 as too abrupt once seen live.
 
-**Deliberately local-player-only for now, not every ship:** `ShipState`
-doesn't currently broadcast whether a remote ship is holding its
-thrust key, so there's nothing to drive the same effect for anyone
-else's ship with — extending this to other players would need a new
-wire field (cheap, same "broadcast for everyone even though only one
-consumer needs it yet" pattern already used for hull/shield/turret aim/
-radar-pulse-cooldown in `ShipState`), not attempted this session since
-it wasn't asked for. Revisit once more than one ship type has an engine
-effect worth seeing on other players' ships too.
+**Live-verified 2026-09-09** (same day): user flew the Snowspeeder and
+confirmed "it looks awesome" — flame renders at the tail, tracks
+rotation, only shows while W is held.
 
-**Not yet live-verified** — build/tests only this session; needs the
-user to actually fly the Snowspeeder and confirm the flame renders at
-the tail, points the right way through a turn, and only shows while W is
-held.
+**Extended to every ship the same day, right after live confirmation —
+other players' engine trails now visible too.** `ShipState` gained
+`thrusting` (whether that ship currently holds its forward-thrust
+input), computed server-side from its own `NetworkInputComponent` in
+`GameNetworkServer.broadcastSnapshot()` — same "broadcast for everyone
+even though the original consumer only needed their own" pattern already
+used for hull/shield/turret aim/radar-pulse-cooldown. `Client`'s
+thruster rendering was refactored into one shared
+`updateAndDrawThrusters(...)`/`buildEngineThrusters(...)` pair used by
+both the local player's own ship and every `RemoteShip` (which now also
+carries its own `thrusters` list, built once when first seen, plus a
+`thrusting` flag set directly from each snapshot — not extrapolated,
+just held, same as `turretAimAngles`).
+
+**Positioning lights — `LIGHT` split into `LIGHT_RED`/`LIGHT_GREEN`,
+implemented 2026-09-09, same session.** The single `"LIGHT"` attachment
+type (authored on every ship already, but never actually wired to
+anything) is now two: `"LIGHT_RED"`/`"LIGHT_GREEN"`, matching a real
+plane/ship's red-left/green-right navigation lights. Purely a naming/
+data change at the metadata level — `ShipSpriteMetadata`'s attachment
+points are still just a `Map<String, List<PixelPoint>>`, so nothing
+about the format itself changed, only which string keys are meaningful.
+dev-tools' `SpriteCanvas.SUGGESTED_ATTACHMENT_NAMES` dropdown updated to
+offer the two new names instead of the old one — the only other place
+in the codebase that referenced `"LIGHT"` by name (attachment points are
+otherwise handled generically everywhere, by iterating the map, with no
+per-name special-casing to update).
+
+**Every ship's existing `LIGHT` points converted by hand, per the user's
+rule:** a ship with only one point would get green (not exercised — no
+current ship has exactly one); a ship with more than one splits by
+which half of the ship's width each point's local X coordinate falls
+into (attachment-point space is centered on the sprite, per
+`PixelPoint`'s own convention, so this is just the sign of X — negative
+= left = red, positive = right = green). Falcon (3 points) ended up
+2 red / 1 green; every other ship (2 points each: A-Wing, Snowspeeder,
+Star Destroyer, TIE Fighter, TIE Interceptor, X-wing) ended up 1 red /
+1 green as expected.
+
+**The two particle effects wired to them are shared by every ship type,
+unlike the engine effect** — one global `light_red.p`/`light_green.p`
+pair (`GameAssets.LIGHT_RED_PARTICLE`/`LIGHT_GREEN_PARTICLE`), queued
+unconditionally rather than per-ship-type-conditional, since a
+positioning light isn't something a ship type customizes the way an
+engine glow color might be. New `render.ShipLightEffect` is deliberately
+simpler than `ThrusterEffect`: a positioning light is never toggled by
+player input (it just emits for as long as the ship exists) and its
+authored particles have zero velocity (a stationary blink, `Count` maxed
+at 1 active particle at a time), so there's nothing to rotate to match
+the ship's facing — only the attachment point's own position needs
+rotating into world space, the same offset math every other
+attachment-point consumer here already does. Wired into both the local
+player's own ship and every `RemoteShip` identically (no new wire state
+needed, unlike engine thrusters — a light's "on" state doesn't depend on
+anything a remote client wouldn't already know).
+
+**Verified:** full `mvn clean test` (153 tests, extended
+`MessageRegistryTest` coverage for `ShipState.thrusting`) and
+`mvn clean install` green; booted a real packaged server + client pair
+with zero exceptions — notably, `Client`'s splash-screen asset queuing
+calls `ShipStats.forType(...)` for every `ShipType`, which eagerly
+parses every ship's `.meta.json` too, so this boot check exercised the
+`LIGHT_RED`/`LIGHT_GREEN` rename across all 7 ships' real metadata files,
+not just the one this was authored against. **Not yet live-verified in
+actual flight** — needs the user to confirm the red/green lights show up
+on the correct wingtip/side for each ship and blink as expected.
 
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's

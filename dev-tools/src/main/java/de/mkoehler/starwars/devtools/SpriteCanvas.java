@@ -57,7 +57,7 @@ class SpriteCanvas extends JPanel {
     private static final Color HITBOX_COLOR = new Color(255, 90, 90);
     private static final Color ATTACHMENT_COLOR = new Color(90, 220, 255);
 
-    private static final String[] SUGGESTED_ATTACHMENT_NAMES = {"PROJECTILE", "ENGINE", "LIGHT", "DAMAGE_SMOKE", "TURRET"};
+    private static final String[] SUGGESTED_ATTACHMENT_NAMES = {"PROJECTILE", "ENGINE", "LIGHT_RED", "LIGHT_GREEN", "DAMAGE_SMOKE", "TURRET"};
 
     private final Consumer<String> statusListener;
 

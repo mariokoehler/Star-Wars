@@ -60,6 +60,12 @@ import de.mkoehler.starwars.sim.ShipType;
  * ship here if the receiving player's radar currently detects it (or it's
  * their own ship, always included) — not every currently-connected ship
  * unconditionally, the way it was before radar existed.
+ * <p>
+ * {@link #isThrusting()} (design.md — engine particle effects) carries
+ * whether this ship is currently holding its forward-thrust input, so
+ * every client can render the correct ship's engine glow, not just the
+ * local player's own — same broadcast-for-every-ship convention as
+ * hull/shield/turret aim above.
  */
 public class ShipState {
 
@@ -87,6 +93,7 @@ public class ShipState {
     private boolean missileLockAcquired;
     private boolean targetedByMissileLock;
     private boolean targetedByMissileLockAcquired;
+    private boolean thrusting;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -119,13 +126,15 @@ public class ShipState {
      * @param targetedByMissileLock       whether any enemy ship currently has this ship as their
      *                                    lock target (acquiring or acquired)
      * @param targetedByMissileLockAcquired whether any such lock on this ship is fully acquired
+     * @param thrusting                   whether this ship is currently holding its forward-thrust input
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
                       float hullCurrent, float hullMax, float shieldCurrent, float shieldMax,
                       ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining,
                       int missileLockTargetPlayerId, boolean missileLockAcquired,
-                      boolean targetedByMissileLock, boolean targetedByMissileLockAcquired) {
+                      boolean targetedByMissileLock, boolean targetedByMissileLockAcquired,
+                      boolean thrusting) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -144,6 +153,7 @@ public class ShipState {
         this.missileLockAcquired = missileLockAcquired;
         this.targetedByMissileLock = targetedByMissileLock;
         this.targetedByMissileLockAcquired = targetedByMissileLockAcquired;
+        this.thrusting = thrusting;
     }
 
     /**
@@ -311,5 +321,16 @@ public class ShipState {
      */
     public boolean isTargetedByMissileLockAcquired() {
         return targetedByMissileLockAcquired;
+    }
+
+    /**
+     * Returns whether this ship is currently holding its forward-thrust
+     * input — drives every client's rendering of this ship's engine
+     * particle effect(s), if it has any configured.
+     *
+     * @return {@code true} if this ship is currently thrusting
+     */
+    public boolean isThrusting() {
+        return thrusting;
     }
 }

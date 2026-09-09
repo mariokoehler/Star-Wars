@@ -2723,6 +2723,71 @@ that boot check**: needs the user to actually fly the Snowspeeder and
 confirm the flame renders at the tail, tracks rotation through a turn,
 and only shows while W is held.
 
+**Live-verified 2026-09-09, same day: user flew it and confirmed "it
+looks awesome."** Committed and pushed (`7cc11bd`) along with several
+more particle assets the user authored in parallel (`Light_Green.p`/
+`Light_Red.p`/`Smoke.p`/`Thruster_Blue_Long.p` + images) — not yet wired
+into anything. Also fixed, same commit: a stray `ss` the user had
+accidentally typed at the end of `tieinterceptor.stats.json` (would have
+broken JSON parsing for that ship — caught by `git status` showing an
+unexpected modification, flagged rather than silently committed, per
+the standing "investigate before touching unfamiliar changes" rule).
+
+**Engine trails extended to every ship, same day, user request right
+after confirming the Snowspeeder's own.** See design.md 4.3's addendum.
+`ShipState` gained `thrusting` (server computes it from each ship's own
+`NetworkInputComponent`); `Client`'s thruster rendering was refactored
+into one shared `updateAndDrawThrusters`/`buildEngineThrusters` pair
+used by both the local ship and every `RemoteShip` (which now carries
+its own `thrusters` list + a `thrusting` flag, set directly from each
+snapshot like `turretAimAngles`). No ship type besides the Snowspeeder
+has an engine effect configured yet, so this has nothing to show for the
+other six until one does — infrastructure-complete, not yet visible.
+
+**`LIGHT` attachment type split into `LIGHT_RED`/`LIGHT_GREEN` +
+positioning lights wired in, same day.** See design.md 4.3's addendum
+for the full writeup. User: wanted red/green navigation lights like a
+real plane's, so the single `LIGHT` type (authored on every ship
+already but never wired to anything) became two. Renamed in the one
+other place that referenced it by name, dev-tools'
+`SpriteCanvas.SUGGESTED_ATTACHMENT_NAMES` dropdown — attachment points
+are otherwise handled generically everywhere (iterate the map, no
+per-name special-casing), so nothing else needed updating for the rename
+itself. Converted every ship's existing `LIGHT` points by hand per the
+user's own rule (single point → green, not exercised — no ship has
+exactly one; multiple points → split by which half of the ship's width
+each point's local X falls into, i.e. the sign of X since attachment
+points are already sprite-centered): Falcon (3 points) → 2 red/1 green;
+every other ship (2 points each) → 1 red/1 green.
+
+New `render.ShipLightEffect` wraps the user's `Light_Red.p`/
+`Light_Green.p` (copied to `assets/textures/particles/light_red.p`/
+`light_green.p`/`particle.png`, same "keep the image alongside the .p
+file" convention as the thruster effect) — deliberately simpler than
+`ThrusterEffect`: never toggled by input (just runs for as long as the
+ship exists) and the authored particles have zero velocity (a
+stationary single-particle blink), so there's nothing to rotate to
+match facing, only the attachment point's own position. Unlike the
+engine effect, **the same two templates are shared by every ship type**
+(`GameAssets.LIGHT_RED_PARTICLE`/`LIGHT_GREEN_PARTICLE`, queued
+unconditionally) rather than a per-ship-configurable stats.json field —
+a positioning light isn't something this game needs to vary per ship
+type. Wired into both the local ship and every `RemoteShip` with no new
+wire state needed (a light's "on" state needs nothing a remote client
+doesn't already know).
+
+**Verification, all three pieces of this session:** full `mvn clean
+test` (153 tests, extended `MessageRegistryTest` for `ShipState
+.thrusting`) and `mvn clean install` green; booted a real packaged
+server + client pair with zero exceptions. Worth noting: `Client`'s
+splash-screen asset queuing calls `ShipStats.forType(...)` for every
+`ShipType`, which eagerly parses every ship's `.meta.json` too — so this
+one boot check actually exercised the `LIGHT_RED`/`LIGHT_GREEN` rename
+across all 7 ships' real metadata, not just one. **Not yet live-verified
+in actual flight**, for the lights or the extended engine trails —
+needs the user to confirm another player's engine trail is visible, and
+that each ship's red/green lights show up on the correct side and blink.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

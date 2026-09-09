@@ -157,9 +157,9 @@ class MessageRegistryTest {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
                 new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0], 12f,
-                    5, true, true, false),
+                    5, true, true, false, true),
                 new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.STARDESTROYER,
-                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f, ShipState.NO_MISSILE_LOCK_TARGET, false, false, false)
+                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f, ShipState.NO_MISSILE_LOCK_TARGET, false, false, false, false)
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 3f, 48f, 5)
@@ -180,6 +180,8 @@ class MessageRegistryTest {
         assertTrue(copy.getShips()[0].isMissileLockAcquired());
         assertTrue(copy.getShips()[0].isTargetedByMissileLock());
         assertEquals(false, copy.getShips()[0].isTargetedByMissileLockAcquired());
+        assertTrue(copy.getShips()[0].isThrusting());
+        assertEquals(false, copy.getShips()[1].isThrusting());
         assertEquals(ShipState.NO_MISSILE_LOCK_TARGET, copy.getShips()[1].getMissileLockTargetPlayerId());
         assertEquals(false, copy.getShips()[1].isMissileLockAcquired());
         assertEquals(false, copy.getShips()[1].isTargetedByMissileLock());

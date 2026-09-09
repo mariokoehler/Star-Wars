@@ -43,6 +43,7 @@ import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.RadarHud;
 import de.mkoehler.starwars.render.ScoreboardHud;
+import de.mkoehler.starwars.render.ShipLightEffect;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.render.ThrusterEffect;
 import de.mkoehler.starwars.sim.MissileStats;
@@ -71,6 +72,7 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -171,8 +173,8 @@ public class Client implements Screen {
 
     /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
     private static final Vector2 TURRET_OFFSET = new Vector2();
-    /** Scratch vector for {@link #drawLocalShip}'s engine-thruster-position math - avoids an allocation per thruster per frame. */
-    private static final Vector2 ENGINE_OFFSET = new Vector2();
+    /** Scratch vector for {@link #updateAndDrawThrusters}/{@link #updateAndDrawLights}'s attachment-point-position math - avoids an allocation per thruster/light per frame. */
+    private static final Vector2 ATTACHMENT_OFFSET = new Vector2();
     /** Scratch vector for {@link #predictLocalWeapon}'s spawn-offset math - avoids an allocation per shot. */
     private static final Vector2 PREDICTED_SPAWN_OFFSET = new Vector2();
     /** Scratch vector for {@link #spawnPredictedProjectile}'s velocity math - avoids an allocation per shot. */
@@ -304,12 +306,22 @@ public class Client implements Screen {
      * pixel offset - rebuilt from scratch on every {@link #onShipSpawned}
      * (spawn or respawn) since a different ship type may have a different
      * engine effect/attachment layout, or none at all. Empty (not null) for
-     * a ship type with no engine effect configured yet. Only the local
-     * player's own ship gets this - {@code ShipState} doesn't (yet) broadcast
-     * whether a remote ship is currently thrusting, so there's nothing to
-     * drive the same effect for anyone else's ship with.
+     * a ship type with no engine effect configured yet. Every other visible
+     * ship gets its own equivalent list too ({@code RemoteShip.thrusters}) -
+     * {@code ShipState} broadcasts whether each ship is currently thrusting
+     * (design.md's addendum), so this isn't local-player-only anymore.
      */
     private final List<EngineThruster> myThrusters = new ArrayList<>();
+    /**
+     * The local player's own positioning lights (design.md — positioning
+     * lights), one per {@code "LIGHT_RED"}/{@code "LIGHT_GREEN"} attachment
+     * point on the current {@link #myShipType} - rebuilt alongside
+     * {@link #myThrusters} on every {@link #onShipSpawned}. Unlike engine
+     * thrusters, lights are never toggled by input - they simply emit for as
+     * long as the ship exists, so no per-ship "is it on" wire state is
+     * needed for {@code RemoteShip.lights} to work the same way.
+     */
+    private final List<ShipLight> myLights = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -593,17 +605,9 @@ public class Client implements Screen {
         predictedProjectiles.clear();
 
         myThrusters.clear();
-        List<PixelPoint> enginePoints = myStats.getSpriteMetadata()
-            .map(metadata -> metadata.getAttachmentPoints().get(ThrusterEffect.ENGINE_ATTACHMENT_NAME))
-            .orElse(null);
-        if (enginePoints != null && !enginePoints.isEmpty()) {
-            myStats.getEngineParticleEffect().ifPresent(effectName -> {
-                ParticleEffect template = game.getAssets().get(GameAssets.particleEffectPath(effectName), ParticleEffect.class);
-                for (PixelPoint point : enginePoints) {
-                    myThrusters.add(new EngineThruster(point, new ThrusterEffect(template)));
-                }
-            });
-        }
+        myThrusters.addAll(buildEngineThrusters(myStats));
+        myLights.clear();
+        myLights.addAll(buildShipLights(myStats));
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -710,13 +714,17 @@ public class Client implements Screen {
             presentShipIds.add(state.getPlayerId());
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
-            RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(),
-                id -> new RemoteShip(x, y, state.getAngle(), state.getShipType()));
+            RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id -> {
+                ShipStats remoteStats = ShipStats.forType(state.getShipType());
+                return new RemoteShip(x, y, state.getAngle(), state.getShipType(),
+                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats));
+            });
             ship.updateFromSnapshot(x, y, state.getAngle(),
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
                 state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
                 state.getAngularVelocity());
             ship.turretAimAngles = state.getTurretAimAngles();
+            ship.thrusting = state.isThrusting();
         }
         ships.keySet().removeIf(id -> !presentShipIds.contains(id));
 
@@ -950,7 +958,7 @@ public class Client implements Screen {
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
         background.render(batch, camera);
-        drawRemoteShips();
+        drawRemoteShips(deltaTime);
         drawLocalShip(deltaTime);
         drawProjectiles();
         drawMissileLockReticle();
@@ -1243,7 +1251,7 @@ public class Client implements Screen {
         camera.update();
     }
 
-    private void drawRemoteShips() {
+    private void drawRemoteShips(float deltaTime) {
         batch.setColor(OTHER_SHIP_TINT);
         for (RemoteShip ship : ships.values()) {
             ShipStats stats = ShipStats.forType(ship.shipType);
@@ -1262,6 +1270,14 @@ public class Client implements Screen {
                 1f, 1f,
                 ship.renderAngle * MathUtils.radiansToDegrees);
             drawTurrets(ship.shipType, stats, ship.renderX, ship.renderY, ship.renderAngle, ship.turretAimAngles);
+            // Not affected by the OTHER_SHIP_TINT color above - ParticleEmitter draws each
+            // Particle (a Sprite) with its own already-baked vertex color, unlike the
+            // TextureRegion-based hull/turret draw calls above, which do read the batch's
+            // current default color.
+            updateAndDrawThrusters(ship.thrusters, stats.getPixelsPerMeter(),
+                ship.renderX, ship.renderY, ship.renderAngle, ship.thrusting, deltaTime);
+            updateAndDrawLights(ship.lights, stats.getPixelsPerMeter(),
+                ship.renderX, ship.renderY, ship.renderAngle, deltaTime);
         }
         batch.setColor(Color.WHITE);
     }
@@ -1347,32 +1363,132 @@ public class Client implements Screen {
             1f, 1f,
             angle * MathUtils.radiansToDegrees);
         drawTurrets(myShipType, myStats, x, y, angle, myTurretAimAngles);
-        drawThrusters(myStats, x, y, angle, deltaTime);
+        updateAndDrawThrusters(myThrusters, myStats.getPixelsPerMeter(), x, y, angle,
+            Gdx.input.isKeyPressed(Input.Keys.W), deltaTime);
+        updateAndDrawLights(myLights, myStats.getPixelsPerMeter(), x, y, angle, deltaTime);
     }
 
     /**
-     * Updates and draws the local player's own engine thruster glow(s), if
-     * any (design.md — engine particle effects; {@link #myThrusters} is
-     * empty for a ship type with none configured) — only actually visible
-     * while the forward-thrust key is held, see {@link ThrusterEffect#update}.
-     * Only the local player's own ship gets this (see {@link #myThrusters}'s
-     * Javadoc for why).
+     * Updates and draws one ship's engine thruster glow(s), if any
+     * (design.md — engine particle effects) — only actually visible while
+     * {@code thrusting} is {@code true}, see {@link ThrusterEffect#update}.
+     * Shared by both the local player's own ship ({@link #drawLocalShip})
+     * and every other visible ship ({@link #drawRemoteShips}) — the latter
+     * only possible since {@code ShipState} now broadcasts whether a ship is
+     * currently holding its forward-thrust input (design.md's addendum).
+     *
+     * @param thrusters        this ship's thrusters, empty for a ship type with none configured
+     * @param pixelsPerMeter   this ship type's own pixels-per-meter, for converting attachment offsets
+     * @param shipScreenX      the ship's current on-screen position
+     * @param shipScreenY      the ship's current on-screen position
+     * @param shipAngleRadians the ship's current facing
+     * @param thrusting        whether this ship is currently holding its forward-thrust input
+     * @param deltaTime        time since the last frame, in seconds
      */
-    private void drawThrusters(ShipStats myStats, float shipScreenX, float shipScreenY,
-                                float shipAngleRadians, float deltaTime) {
-        if (myThrusters.isEmpty()) {
+    private void updateAndDrawThrusters(List<EngineThruster> thrusters, float pixelsPerMeter,
+                                         float shipScreenX, float shipScreenY, float shipAngleRadians,
+                                         boolean thrusting, float deltaTime) {
+        if (thrusters.isEmpty()) {
             return;
         }
-        boolean thrusting = Gdx.input.isKeyPressed(Input.Keys.W);
-        float pixelsPerMeter = myStats.getPixelsPerMeter();
         float shipAngleDegrees = shipAngleRadians * MathUtils.radiansToDegrees;
-        for (EngineThruster thruster : myThrusters) {
+        for (EngineThruster thruster : thrusters) {
             PixelPoint point = thruster.attachmentPoint;
-            ENGINE_OFFSET.set(point.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
+            ATTACHMENT_OFFSET.set(point.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
                 point.getY() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER).rotateRad(shipAngleRadians);
-            thruster.effect.update(shipScreenX + ENGINE_OFFSET.x, shipScreenY + ENGINE_OFFSET.y,
+            thruster.effect.update(shipScreenX + ATTACHMENT_OFFSET.x, shipScreenY + ATTACHMENT_OFFSET.y,
                 shipAngleDegrees, thrusting, deltaTime);
             thruster.effect.draw(batch);
+        }
+    }
+
+    /**
+     * Builds one ship type's engine thrusters (design.md — engine particle
+     * effects) — one {@link ThrusterEffect} per {@code "ENGINE"} attachment
+     * point, sharing that type's configured particle effect template. Empty
+     * (never {@code null}) if the type has no attachment points, or no
+     * effect configured, for one.
+     *
+     * @param stats the ship type's stats
+     * @return that type's thrusters, or an empty list if it has none
+     */
+    private List<EngineThruster> buildEngineThrusters(ShipStats stats) {
+        List<PixelPoint> enginePoints = stats.getSpriteMetadata()
+            .map(metadata -> metadata.getAttachmentPoints().get(ThrusterEffect.ENGINE_ATTACHMENT_NAME))
+            .orElse(null);
+        if (enginePoints == null || enginePoints.isEmpty()) {
+            return List.of();
+        }
+        Optional<String> effectName = stats.getEngineParticleEffect();
+        if (effectName.isEmpty()) {
+            return List.of();
+        }
+        ParticleEffect template = game.getAssets().get(GameAssets.particleEffectPath(effectName.get()), ParticleEffect.class);
+        List<EngineThruster> thrusters = new ArrayList<>();
+        for (PixelPoint point : enginePoints) {
+            thrusters.add(new EngineThruster(point, new ThrusterEffect(template)));
+        }
+        return thrusters;
+    }
+
+    /**
+     * Updates and draws one ship's positioning light(s), if any (design.md
+     * — positioning lights) — unlike {@link #updateAndDrawThrusters}, these
+     * are never gated on player input; they simply run for as long as the
+     * ship exists. Shared by both the local player's own ship
+     * ({@link #drawLocalShip}) and every other visible ship
+     * ({@link #drawRemoteShips}) — no wire state is needed for the latter,
+     * since a positioning light's "on" state doesn't depend on anything a
+     * remote client wouldn't already know (the ship exists and has one).
+     *
+     * @param lights           this ship's lights, empty for a ship type with none configured
+     * @param pixelsPerMeter   this ship type's own pixels-per-meter, for converting attachment offsets
+     * @param shipScreenX      the ship's current on-screen position
+     * @param shipScreenY      the ship's current on-screen position
+     * @param shipAngleRadians the ship's current facing
+     * @param deltaTime        time since the last frame, in seconds
+     */
+    private void updateAndDrawLights(List<ShipLight> lights, float pixelsPerMeter,
+                                      float shipScreenX, float shipScreenY, float shipAngleRadians, float deltaTime) {
+        for (ShipLight light : lights) {
+            PixelPoint point = light.attachmentPoint;
+            ATTACHMENT_OFFSET.set(point.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
+                point.getY() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER).rotateRad(shipAngleRadians);
+            light.effect.update(shipScreenX + ATTACHMENT_OFFSET.x, shipScreenY + ATTACHMENT_OFFSET.y, deltaTime);
+            light.effect.draw(batch);
+        }
+    }
+
+    /**
+     * Builds one ship type's positioning lights (design.md — positioning
+     * lights) — one {@link ShipLightEffect} per {@code "LIGHT_RED"}/
+     * {@code "LIGHT_GREEN"} attachment point, all sharing the same two
+     * global templates ({@link GameAssets#LIGHT_RED_PARTICLE}/
+     * {@link GameAssets#LIGHT_GREEN_PARTICLE}) regardless of ship type.
+     * Empty (never {@code null}) if the type has neither kind of attachment
+     * point authored.
+     *
+     * @param stats the ship type's stats
+     * @return that type's lights, or an empty list if it has none
+     */
+    private List<ShipLight> buildShipLights(ShipStats stats) {
+        List<ShipLight> lights = new ArrayList<>();
+        stats.getSpriteMetadata().ifPresent(metadata -> {
+            addShipLights(lights, metadata.getAttachmentPoints().get(ShipLightEffect.LIGHT_RED_ATTACHMENT_NAME),
+                GameAssets.LIGHT_RED_PARTICLE);
+            addShipLights(lights, metadata.getAttachmentPoints().get(ShipLightEffect.LIGHT_GREEN_ATTACHMENT_NAME),
+                GameAssets.LIGHT_GREEN_PARTICLE);
+        });
+        return lights;
+    }
+
+    private void addShipLights(List<ShipLight> lights, List<PixelPoint> points, String templatePath) {
+        if (points == null || points.isEmpty()) {
+            return;
+        }
+        ParticleEffect template = game.getAssets().get(templatePath, ParticleEffect.class);
+        for (PixelPoint point : points) {
+            lights.add(new ShipLight(point, new ShipLightEffect(template)));
         }
     }
 
@@ -1623,9 +1739,18 @@ public class Client implements Screen {
         // Turret aim is entirely server-simulated and never predicted/extrapolated (same
         // reasoning as projectiles) - just held at whatever the latest snapshot reported.
         float[] turretAimAngles = new float[0];
+        /** This ship's own engine thrusters (design.md — engine particle effects), built once at creation - empty for a ship type with none configured. */
+        final List<EngineThruster> thrusters;
+        /** This ship's own positioning lights (design.md — positioning lights), built once at creation - empty for a ship type with none configured. */
+        final List<ShipLight> lights;
+        /** Whether this ship is currently holding its forward-thrust input, straight from the latest {@code ShipState} - not extrapolated, just held. */
+        boolean thrusting;
 
-        RemoteShip(float x, float y, float angle, ShipType shipType) {
+        RemoteShip(float x, float y, float angle, ShipType shipType,
+                   List<EngineThruster> thrusters, List<ShipLight> lights) {
             this.shipType = shipType;
+            this.thrusters = thrusters;
+            this.lights = lights;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;
@@ -1659,6 +1784,22 @@ public class Client implements Screen {
         final ThrusterEffect effect;
 
         EngineThruster(PixelPoint attachmentPoint, ThrusterEffect effect) {
+            this.attachmentPoint = attachmentPoint;
+            this.effect = effect;
+        }
+    }
+
+    /**
+     * Pairs one {@link ShipLightEffect} with the local-frame pixel offset
+     * (from the ship's own {@code "LIGHT_RED"}/{@code "LIGHT_GREEN"}
+     * attachment point metadata) it should be positioned at each frame —
+     * see {@link #myLights}.
+     */
+    private static final class ShipLight {
+        final PixelPoint attachmentPoint;
+        final ShipLightEffect effect;
+
+        ShipLight(PixelPoint attachmentPoint, ShipLightEffect effect) {
             this.attachmentPoint = attachmentPoint;
             this.effect = effect;
         }
