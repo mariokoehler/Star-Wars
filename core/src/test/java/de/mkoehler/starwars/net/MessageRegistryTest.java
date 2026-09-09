@@ -3,6 +3,7 @@ package de.mkoehler.starwars.net;
 import com.esotericsoftware.kryo.Kryo;
 import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
+import de.mkoehler.starwars.net.messages.AsteroidState;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
@@ -28,6 +29,7 @@ import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipType;
 import org.junit.jupiter.api.Test;
@@ -67,7 +69,8 @@ class MessageRegistryTest {
             TurretToggleMessage.class, float[].class, SpawnRequest.class,
             PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class,
             ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class,
-            MissileFireRequest.class, ProjectileHitMessage.class
+            MissileFireRequest.class, ProjectileHitMessage.class,
+            AsteroidType.class, AsteroidState.class, AsteroidState[].class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -164,6 +167,9 @@ class MessageRegistryTest {
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 3f, 48f, 5)
+            },
+            new AsteroidState[]{
+                new AsteroidState(9, AsteroidType.ASTEROID3, -40f, 15f, 0.7f, 1.5f, -2f, 0.05f)
             });
         WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
         assertEquals(2, copy.getShips().length);
@@ -199,6 +205,15 @@ class MessageRegistryTest {
         assertEquals(3f, copy.getProjectiles()[0].getVelocityX());
         assertEquals(48f, copy.getProjectiles()[0].getVelocityY());
         assertEquals(5, copy.getProjectiles()[0].getTrackedTargetPlayerId());
+        assertEquals(1, copy.getAsteroids().length);
+        assertEquals(9, copy.getAsteroids()[0].getAsteroidId());
+        assertEquals(AsteroidType.ASTEROID3, copy.getAsteroids()[0].getType());
+        assertEquals(-40f, copy.getAsteroids()[0].getX());
+        assertEquals(15f, copy.getAsteroids()[0].getY());
+        assertEquals(0.7f, copy.getAsteroids()[0].getAngle());
+        assertEquals(1.5f, copy.getAsteroids()[0].getVelocityX());
+        assertEquals(-2f, copy.getAsteroids()[0].getVelocityY());
+        assertEquals(0.05f, copy.getAsteroids()[0].getAngularVelocity());
     }
 
     @Test

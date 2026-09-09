@@ -2580,6 +2580,353 @@ constants are. `RadarHud` previously "owned nothing and needed no
 `Disposable` for the font's sake, and `Client.dispose()` was updated to
 call it.
 
+**Addendum, same day — the user's own hazard-tape boundary texture, and
+boundary lines on the radar.** Two follow-ups from the same play-test
+session as the coordinate readout above. First: the user replaced the
+generated placeholder with their own art
+(`assets-raw/backgrounds/Boundary.png`, a 1024×50px hazard-tape tile — a
+very different aspect ratio than the 320×256 placeholder it replaced).
+`ArenaBoundaryRenderer.thicknessMeters` was already derived from the
+loaded texture's own real aspect ratio at construction time
+(`TILE_LENGTH_METERS * texture.getHeight() / texture.getWidth()`) rather
+than a second hardcoded constant, specifically so a re-authored texture
+with a different ratio couldn't silently stretch/squash — this was the
+exact case that flexibility existed for, and the swap needed no code
+change at all, just the new file dropped in at the same path. The user's
+own Photoshop source, `assets-raw/psd/Boundary.psd`, was committed
+alongside it (same "keep source files in the repo" convention as every
+other user-authored art asset).
+
+Second: "do you see any chance to render the boundaries on the radar as
+well? just as simple lines?" New `RadarScopeMath.computeBoundaryLine`
+(6 new test cases) computes one edge segment's on-screen placement —
+generic over which world axis is "along" the edge and which is
+"perpendicular" to it, so one method covers all 4 edges (top/bottom swap
+which axis is which relative to left/right). Leverages the same
+algebraic simplification this class's own Javadoc already documents for
+contact placement (the north-up fixed scope's bearing-based math reduces
+to a plain scaled identity once the trig cancels) — an axis-aligned world
+line stays axis-aligned on the scope too, so this is just a circle/line-
+segment intersection (how far the visible chord extends either side of
+the observer's own position along the edge) followed by that same
+scaling, clipped to the edge's own finite extent so a corner doesn't
+overshoot past where the physical wall actually ends. `RadarHud.
+drawBoundaryLines` draws whichever of the 4 edges are within range as a
+tinted stretched-1×1-pixel line (same "no pre-made art needed for a
+solid rectangle" technique `Tooltip`/`FlatButton` already use), amber-
+tinted to read as a hazard marker consistent with the boundary texture's
+own coloring.
+
+**Verified live by the user, same session — both pieces:** "looks great,
+you're awesome :-)" The math itself was covered by its own 6 new unit
+tests rather than independently live-verified by this session directly —
+the user was already testing the same running server concurrently at the
+time, so this session stopped its own parallel verification attempt
+deliberately rather than risk interfering.
+
+### 2.17 Asteroids (2026-09-09)
+
+The user's own spec, in full: natural obstacles ships can collide with
+and be damaged by, built as real physics bodies from the user's own
+authored art (`assets-raw/asteroids/asteroid[2-8].png`) and hand-placed
+hitbox polygons (`asteroid[2-8].meta.json`, authored in the same
+`dev-tools` sprite metadata editor and exact JSON format as ship
+hitboxes). Always exactly 4 active, randomly picked from the 8 available
+textures with no two active asteroids sharing a texture. Each spawns at
+a random point at least 100m from any player (so nothing pops into
+existence in view), with a random slow velocity and a random slow initial
+spin, and — the user's explicit ask — **no drag on either**: once spawned,
+an asteroid keeps its exact initial speed and spin forever. Asteroids
+never interact with each other or the arena boundary; one that drifts
+outside the arena simply despawns and a new one spawns elsewhere.
+Indestructible — projectiles/missiles hit them (and are destroyed by the
+impact) but never damage or split them.
+
+**Data model.** New `sim.AsteroidType` (8 values, one per texture) is the
+first per-type `pixelsPerMeter` in this project computed from a literal
+constant in the enum body rather than an authored `.stats.json` field —
+each type's largest source-art pixel dimension (measured directly from
+the PNGs, 63×184 up to 500×500) divided by a shared
+`TARGET_LARGEST_DIMENSION_METERS = 20f`, so every asteroid's long axis
+reads as roughly the same real-world size ("a large, hulking obstacle" —
+clearly bigger than a 4m ship, small relative to the 500m arena) despite
+wildly different source resolutions — same "hardcode pixels-per-meter
+per type, the headless server can't read a texture's real dimensions"
+reasoning already learned once for ships (2026-09-06's per-ship
+`pixelsPerMeter` fix). New `sim.AsteroidStats` mirrors `ShipStats`'
+per-type-cached-loader shape but is much smaller — an asteroid has no
+`.stats.json` at all (density/speed/etc. are shared constants, not
+per-type), just a **required** `ShipSpriteMetadata` (unlike a ship's
+optional one — every asteroid type was authored with a real hitbox from
+the start, so there's no legacy "not authored yet" fallback case to
+support). New `sim.components.AsteroidComponent` (id + type, no health —
+asteroids carry no damage state of their own).
+
+**Physics tuning — a real correctness question caught by advisor review
+before implementation, not discovered by testing.** The first instinct
+("give them a high density... not easily bounced around") was to reach
+for something very large (an early sketch used `50`, by loose analogy to
+a ship's `density=1`). An advisor review caught the actual math: Box2D
+mass is density × fixture area, and an asteroid's hitbox polygon (up to
+~20m across) is roughly 15-20× a ship's own hitbox area — so density
+`50` would have made the largest asteroid roughly *1000×* a ship's mass,
+which reads as immovable, not "reacts to impacts but isn't easily
+bounced." `AsteroidFactory.DENSITY` is `3f` instead — combined with the
+area ratio already at play, this lands an asteroid at roughly 30-60× a
+ship's mass: heavy enough to feel solid and barely nudge on a hit,
+light enough that a hit is still visibly a two-body collision, not a
+wall. `RESTITUTION = 0.1f` (a visible bounce, well short of the arena
+wall's own `0.6f` elastic feel) and `FRICTION = 0f` (same "clean
+reflection, not chaotic spin" reasoning as the wall). Untuned starting
+points, flagged for the user's own feel-testing like every other physics
+number in this project. `linearDamping`/`angularDamping` are both
+explicitly `0f` — Box2D bodies default to zero damping anyway, but set
+explicitly here (unlike relying on the default) to document that this is
+deliberate, not an oversight, the one place in this project's physics
+code where *not* damping something is the actual requirement.
+
+**Collision categories.** New `CollisionCategories.ASTEROID = 0x0008`.
+An asteroid's fixture is masked to collide with ships and projectiles
+only — never the arena boundary, never another asteroid (the user's own
+spec) — so no `ContactFilter` changes were needed at all, just the same
+additive categoryBits/maskBits pattern the arena boundary itself already
+established (2.16): ship fixtures gained `ASTEROID` in their maskBits,
+and both `ProjectileFactory`'s and `MissileFactory`'s fixtures gained it
+too (a missile is built independently of `ProjectileFactory` — see
+`MissileFactory`'s own class Javadoc — so both factories needed the same
+one-line change).
+
+**Damage — a relative-velocity formula, not a copy of the wall's
+absolute one.** A ship-vs-asteroid hit reuses `ArenaBounds.
+wallImpactDamage`'s exact threshold/scale formula outright — but applied
+to the ship's speed *relative to the asteroid's own current velocity*
+(`shipBody.getLinearVelocity().cpy().sub(asteroidBody.getLinearVelocity())
+.len()`), not the ship's bare speed the way a (stationary) wall impact
+uses it. Also caught by advisor review: an asteroid is itself moving, so
+a ship drifting alongside one at a matched velocity and grazing it
+gently shouldn't take wall-tier damage just because both happen to be
+moving fast in world-frame terms. Reusing the existing formula (rather
+than inventing a new `CollisionDamage` class) keeps the one meaningful
+difference — relative vs. absolute speed — the only thing that's
+actually different between the two cases.
+
+**Contact resolution: two new paths sharing existing machinery where it
+already fit, new machinery only where it didn't.**
+`GameNetworkServer`'s `ContactListener` gained
+`registerPotentialAsteroidHit(Entity, Entity)`, called symmetrically in
+`beginContact` alongside the existing wall/projectile checks. A
+ship-vs-asteroid contact is queued into the *same* pending list a wall
+impact already used — `pendingWallHits`/`WallHitEvent`/
+`resolvePendingWallHits` were renamed to `pendingEnvironmentalHits`/
+`EnvironmentalHitEvent`/`resolvePendingEnvironmentalHits`, since
+"non-combat, self-inflicted/environmental ship damage with no kill
+credit" is exactly what both a wall and an asteroid impact are — no new
+resolution logic needed, just a more honest name for what was already
+there. A projectile/missile-vs-asteroid contact is different in kind (it
+destroys the *projectile*, not the ship, and deals no damage at all) and
+got its own new `pendingAsteroidProjectileHits`/
+`resolvePendingAsteroidProjectileHits` pair — reuses the exact same
+impact-explosion VFX broadcast (`ProjectileHitMessage`) a ship hit
+already gets, just with no `ShipDamage`/kill-credit call. **One real
+double-destroy risk, caught and fixed before ever running it:** a
+projectile could in principle be registered as hitting both a ship and
+an asteroid in the same tick (two separate `beginContact` events), and
+both pending lists are resolved in the same tick — destroying the same
+Box2D body twice is undefined behavior. Fixed with a small per-tick
+`projectilesDestroyedThisTick` set, cleared and populated by
+`resolvePendingHits` (which always runs first each tick) and checked by
+`resolvePendingAsteroidProjectileHits` before it destroys anything.
+
+**Spawn/despawn — a real robustness fix suggested by advisor review, not
+just a direct reuse of the ship spawn path.** `SpawnPointFinder.
+findSpawnPoint`'s existing best-effort fallback (2.16: return the
+least-bad candidate tried, if none satisfies the full distance
+constraint) is exactly right for a *ship*, which must spawn somewhere
+right now — but wrong for an asteroid, where accepting a too-close
+fallback would recreate the very "pops into existence near a player"
+problem the 100m rule exists to prevent, and an asteroid has the luxury
+of simply waiting. New `SpawnPointFinder.isFarEnoughFromEnemies` (public,
+tested) lets `GameNetworkServer.trySpawnAsteroid` reject the fallback
+outright and retry on a later tick instead of ever accepting it.
+`GameNetworkServer.tickAsteroids` (called once per server tick, after
+this tick's physics stepping — same "don't spawn a body that gets swept
+forward before its first broadcast" rule every other spawn point in this
+codebase already follows) despawns any asteroid whose position has left
+the `[-250, 250]` arena square, then tops back up to `AsteroidSpawner.
+ACTIVE_COUNT` (4) one attempt per tick if short. New, pure, unit-tested
+`sim.AsteroidSpawner` picks the new asteroid's texture (never one already
+among the currently-active 4, falling back to any type in the
+essentially-impossible case all 8 are somehow active at once), initial
+velocity (3-8 m/s, uniformly random direction — "slow and hulking, not
+speeding like a pebble"), and initial angular velocity (±0.3 rad/s —
+"a random slow initial rotation"). All three ranges are untuned starting
+points.
+
+**Networking — unfiltered broadcast, same scope boundary as
+projectiles.** New `net.messages.AsteroidState` (id, type, x/y, angle,
+velocityX/Y, angularVelocity) is a 3rd array on `WorldSnapshotMessage`
+(alongside `ships`/`projectiles`), built once per tick in
+`broadcastSnapshot` and included unfiltered in every player's
+personalized snapshot — not radar-gated, the same deliberate scope
+boundary 2.14 already drew around projectiles (an asteroid, like a shot,
+is a large always-visible environmental object, not something fog-of-war
+should hide). An asteroid has no despawn notification of its own, same
+"presence in the snapshot means alive" convention as a projectile.
+`AsteroidType`/`AsteroidState`/`AsteroidState[]` were appended to
+`MessageRegistry` at the end, append-only per this project's standing
+rule.
+
+**Client rendering.** New `render`-side `RemoteAsteroid` (in `Client`,
+alongside `RemoteShip`/`RemoteProjectile`) is dead-reckoned the same way
+as a remote ship — extrapolated using its own reported velocity/angular
+velocity, held constant between snapshots (correct here specifically
+*because* asteroids never accelerate or drag) — but carries none of a
+ship's player-specific state (no thrusters, lights, damage smoke,
+turrets, hull). `drawAsteroids()` draws them right after the arena
+boundary and before any ship, so ships/projectiles always render on top
+of the environmental backdrop. New `textures/asteroids.atlas`
+(`AtlasPacker.pack("asteroids", "asteroids")`, `assets-raw/asteroids/`
+is a flat folder so region names are exactly the source filenames —
+`"asteroid"`, `"asteroid2"`, etc., no bank-frame index suffix the way
+ship hull regions need). The 8 `.meta.json` hitbox files were copied
+into `assets/asteroids/` (the classpath resource root
+`AsteroidStats`/`ShipSpriteMetadataLoader` reads from) — the client
+itself never loads them (it only needs `AsteroidType.getPixelsPerMeter()`
+and the atlas region, both available without touching the hitbox
+polygon at all), only the server does, to build each asteroid's Box2D
+body.
+
+**Client-side local prediction needs asteroids too — caught by advisor
+review, not by testing.** `Client`'s own ship isn't rendered from
+snapshots like everyone else's — it's predicted locally in a second,
+client-owned Box2D `localWorld` (design.md 3.5), which is exactly why
+`ArenaBounds.createBoundary(localWorld)` already mirrors the arena wall
+into it (that class's own Javadoc: "a bounce the client predicts
+differently from what the server actually does would otherwise fight
+reconciliation every time a ship touches a wall"). An asteroid is the
+same situation with a *moving* body — without a mirror, the locally-
+predicted ship would fly straight through an asteroid the server is
+actually bouncing it off, manufacturing a large, fast-growing
+reconciliation error the instant the next snapshot arrived (this
+project has already independently root-caused this exact symptom class
+twice — terminal-velocity jitter, projectile spawn lag — both were some
+flavor of "predicted and authoritative state disagree by more than
+noise"). New `AsteroidFactory.createLocalMirrorBody(World, AsteroidType,
+x, y, angle)` — a client-only `KinematicBody` (not a full dynamic
+mirror: the client always knows an asteroid's true state from the next
+`AsteroidState`, it never needs to simulate *how* one moves, and a
+kinematic body can't be pushed around by the client's own predicted
+ship, a reasonable approximation given an asteroid outweighs a ship by
+many times over anyway). `Client.onWorldSnapshot` creates one on first
+sight, hard-syncs its transform/velocity/angular-velocity to the
+server's own reported values on every subsequent snapshot (so it can
+never accumulate drift the way the *rendered*, purely-dead-reckoned
+`RemoteAsteroid` deliberately can between snapshots), and destroys it
+the same tick the asteroid drops out of the snapshot — same
+presence-based prune as everything else asteroid-related.
+
+**Verification status: build/tests only, not live-verified — a
+deliberate scope call this session, not an oversight.** The user's own
+dedicated server was running throughout this work (found via its jar
+holding a lock during `mvn clean`, same "investigate before touching an
+unfamiliar running process" rule this project has followed before) —
+connecting a freshly-built client against it would have broken
+immediately at the wire-serialization boundary (`WorldSnapshotMessage`'s
+shape changed, new enum/message types were appended to
+`MessageRegistry`), the same "client and server must share the exact
+same message shape, not just be individually correct" rule this
+project's own history has hit more than once. Rather than restart the
+user's own live server mid-session, verification stayed at: full `mvn
+clean test` (142 core + 30 server + 4 dev-tools = 176 tests, +5
+`AsteroidSpawnerTest` +1 `AsteroidStatsTest` (confirms every one of the 8
+`.meta.json` files actually resolves from the classpath and parses to a
+real hitbox — the one thing nothing else exercises, since the client
+never calls `AsteroidStats.forType` at all, only the server does) +2
+`SpawnPointFinderTest` +1 extended `MessageRegistryTest` round trip)
+green; `mvn -pl server process-resources` confirmed
+`assets/asteroids/*.meta.json` actually lands on the server's own
+classpath, not just assumed from the existing `shipdata/` precedent;
+`mvn install -pl core,lwjgl3`
+(the server module's jar was left alone, still locked); the atlas
+regenerated and its 8 new regions confirmed present by name; and a real
+packaged client jar booted standalone (not connected to any server) to
+confirm the new `asteroids.atlas` load and every ship type's splash-
+screen asset queuing (which already exercises every `.meta.json`
+parse) still complete with zero exceptions. **Needs the user to rebuild
+and restart their own server** (same standing rule as every wire-shape
+change in this project) before any of this is actually flyable — once
+that happens, the real open questions are exactly the ones flagged as
+untuned above: does density 3/restitution 0.1 actually feel like
+"reacts but isn't easily bounced," do the 3-8 m/s / ±0.3 rad/s ranges
+read as "slow and hulking," and does 20m read as the right size relative
+to a 4m ship and the 500m arena.
+
+**Addendum, once the user actually rebuilt and ran the new server: a real,
+significant, pre-existing bug found via the user's own play-testing, not
+this session's own verification.** The user: "the asteroids are currently
+bouncing off the arena boundary, so they will never leave the arena... my
+concern is that over time they will probably naturally accumulate in the
+corners." Correct diagnosis, but the actual root cause turned out to be
+much bigger than an asteroid-specific oversight.
+
+**Root cause, confirmed by reading `World.java`'s real JNI binding (the
+gdx-box2d sources jar, not guessed): installing any custom `ContactFilter`
+on a Box2D `World` completely replaces its native default category/mask/
+group filtering, rather than layering on top of it.**
+`GameNetworkServer.world.setContactFilter(...)` was first added at the
+very first weapons milestone (design.md 2.4) for one specific, narrow
+purpose — stopping a freshly-fired projectile from physically colliding
+with its own shooter's ship — but its lambda only ever implemented that
+one exclusion and unconditionally returned `true` for every other pair.
+Since a custom filter is the *only* filter Box2D consults once installed,
+this meant every `CollisionCategories` bit set on every fixture in the
+game — ship, projectile, boundary, and now asteroid — had done **nothing**
+at the actual collision-detection level since that day. `ArenaBoundary`
+only being masked into ship fixtures, `PROJECTILE` fixtures explicitly
+*not* masking each other, `ASTEROID` deliberately excluding the boundary
+and other asteroids — all of it was true only in the `Filter` data sitting
+unread on each fixture, never in what Box2D's contact manager actually did
+with it.
+
+**Why this went unnoticed for months:** every category/mask exclusion that
+was silently broken happened to involve interactions too brief or too
+rare to register as visibly wrong. A projectile passing "through" the
+boundary happens in well under a second, indistinguishable at a glance
+from a projectile that expired on its own lifetime timer nearby. Two
+projectiles briefly overlapping paths and nudging each other is a
+one-frame, easy-to-miss deflection on a fast-moving object nobody was
+watching that closely. **Asteroids were the first body large, slow, and
+long-lived enough to make the bug impossible to miss** — a multi-second,
+repeated, visually obvious bounce off a wall it was explicitly built not
+to interact with at all.
+
+**Fix: new `CollisionCategories.shouldCollide(Filter, Filter)`** — a pure,
+Box2D-native-free (a plain `Filter` needs no native init to construct)
+replication of Box2D's actual default filtering algorithm (a nonzero
+matching group-index override, otherwise a symmetric category/mask AND
+check) — directly unit-tested (`CollisionCategoriesTest`, 10 cases,
+mirroring every real fixture pairing this project's factories actually
+build: ship/projectile/boundary/asteroid in every combination, plus the
+group-index edge case). `GameNetworkServer`'s `ContactFilter` lambda now
+calls it first and short-circuits to `false` if it disallows the pair,
+*before* the existing same-owner-projectile exclusion — restoring every
+category/mask exclusion this project has ever documented as intentional,
+all at once, from one fix: ships still collide with everything they
+should; projectiles no longer collide with each other or the boundary;
+asteroids no longer collide with the boundary or each other. `Client`'s
+own local-prediction `localWorld` was independently confirmed **not**
+affected — it never installs a custom `ContactFilter` at all, so it was
+using Box2D's real default filtering correctly the entire time; this bug
+was server-only.
+
+**Verified:** full `mvn clean test` green (186 tests, +10
+`CollisionCategoriesTest`); a fresh server jar packaged and confirmed
+compiling clean. **Not yet live-verified this specific fix** — needs the
+user to fly with the rebuilt server and confirm asteroids now actually
+leave the arena and respawn elsewhere, and (bonus, unasked-for but now
+also fixed) that two crossing shots no longer nudge each other and a shot
+fired near the boundary now cleanly expires past it instead of bouncing.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape

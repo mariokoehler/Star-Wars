@@ -80,6 +80,23 @@ public final class SpawnPointFinder {
         return best;
     }
 
+    /**
+     * Returns whether {@code point} keeps at least {@code minEnemyDistance}
+     * from every position in {@code enemyPositions} — lets a caller reject
+     * {@link #findSpawnPoint}'s best-effort fallback outright rather than
+     * accepting it, for a spawn (design.md — asteroids) where popping up
+     * near a player at all is unacceptable and simply retrying later
+     * (unlike a ship, which must spawn somewhere right now) is an option.
+     *
+     * @param point            the candidate point
+     * @param minEnemyDistance minimum distance the point must keep from every position in {@code enemyPositions}
+     * @param enemyPositions   every currently-alive enemy ship's position; an empty list always passes
+     * @return {@code true} if {@code point} satisfies the distance constraint
+     */
+    public static boolean isFarEnoughFromEnemies(Vector2 point, float minEnemyDistance, List<Vector2> enemyPositions) {
+        return minDistanceTo(point.x, point.y, enemyPositions) >= minEnemyDistance;
+    }
+
     private static float minDistanceTo(float x, float y, List<Vector2> positions) {
         if (positions.isEmpty()) {
             return Float.MAX_VALUE;

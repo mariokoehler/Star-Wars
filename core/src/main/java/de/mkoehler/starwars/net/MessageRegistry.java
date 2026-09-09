@@ -1,6 +1,7 @@
 package de.mkoehler.starwars.net;
 
 import com.esotericsoftware.kryo.Kryo;
+import de.mkoehler.starwars.net.messages.AsteroidState;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
@@ -26,6 +27,7 @@ import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipType;
 
@@ -87,5 +89,8 @@ public final class MessageRegistry {
         kryo.register(RadarPulseRequest.class);
         kryo.register(MissileFireRequest.class);
         kryo.register(ProjectileHitMessage.class);
+        kryo.register(AsteroidType.class);
+        kryo.register(AsteroidState.class);
+        kryo.register(AsteroidState[].class);
     }
 }

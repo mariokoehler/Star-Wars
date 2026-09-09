@@ -5,6 +5,7 @@ import com.badlogic.ashley.core.Entity;
 import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.Contact;
@@ -15,6 +16,7 @@ import com.badlogic.gdx.physics.box2d.Manifold;
 import com.badlogic.gdx.physics.box2d.World;
 import com.esotericsoftware.kryonet.Connection;
 import de.mkoehler.starwars.net.NetworkServer;
+import de.mkoehler.starwars.net.messages.AsteroidState;
 import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
@@ -40,6 +42,10 @@ import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
 import de.mkoehler.starwars.server.accounts.PlayerAccount;
 import de.mkoehler.starwars.sim.ArenaBounds;
+import de.mkoehler.starwars.sim.AsteroidFactory;
+import de.mkoehler.starwars.sim.AsteroidSpawner;
+import de.mkoehler.starwars.sim.AsteroidType;
+import de.mkoehler.starwars.sim.CollisionCategories;
 import de.mkoehler.starwars.sim.KillXp;
 import de.mkoehler.starwars.sim.MissileFactory;
 import de.mkoehler.starwars.sim.PowerSystem;
@@ -50,6 +56,7 @@ import de.mkoehler.starwars.sim.ShipTree;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.ShipUnlocks;
 import de.mkoehler.starwars.sim.SpawnPointFinder;
+import de.mkoehler.starwars.sim.components.AsteroidComponent;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.MissileLockComponent;
@@ -157,7 +164,14 @@ public class GameNetworkServer extends NetworkServer {
     private final Map<Integer, String> loginByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
-    private final List<WallHitEvent> pendingWallHits = new ArrayList<>();
+    private final List<EnvironmentalHitEvent> pendingEnvironmentalHits = new ArrayList<>();
+    // A projectile can register more than one contact event in a single tick (e.g. it also hit a
+    // ship the same tick, resolved earlier by resolvePendingHits) - this set is how
+    // resolvePendingAsteroidProjectileHits avoids destroying an already-destroyed Box2D body.
+    // Cleared and populated by resolvePendingHits at the start of every tick, since that method
+    // always runs first (see tick()'s own ordering).
+    private final Set<Entity> projectilesDestroyedThisTick = new HashSet<>();
+    private final Set<Entity> pendingAsteroidProjectileHits = new HashSet<>();
     private float scoreboardBroadcastTimer;
     private final Queue<Runnable> pendingActions = new ConcurrentLinkedQueue<>();
     // Populated (during the pendingActions drain) whenever a player presses "M" - the actual
@@ -167,6 +181,13 @@ public class GameNetworkServer extends NetworkServer {
     // comment on that ordering) - creating it directly inside a pendingActions Runnable would
     // reintroduce that exact bug class.
     private final Set<Integer> pendingMissileFireRequests = new HashSet<>();
+    // The arena's asteroid field (design.md - asteroids), maintained at AsteroidSpawner.ACTIVE_COUNT
+    // by tickAsteroids() - not Ashley-family-driven like ships/projectiles, since maintaining the
+    // target count needs GameNetworkServer's own context (player positions, currently-active
+    // textures), same reasoning findSpawnPoint()/respawnShip() already live here rather than in a
+    // dedicated Ashley System.
+    private final Map<Integer, Entity> asteroidsById = new HashMap<>();
+    private final AtomicInteger nextAsteroidId = new AtomicInteger();
     // Resolved via Gdx.files.local (relative to wherever the server process is launched from,
     // design.md 3.6) rather than hardcoded, but AccountStore itself has no libGDX dependency -
     // it's directly unit-tested against a plain java.nio.file.Path.
@@ -189,16 +210,31 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(missileLockSystem);
         engine.addSystem(missileGuidanceSystem);
 
-        // Without this, a freshly-fired projectile would generate a real Box2D collision
-        // against its own shooter's ship the instant it spawns (previously spawned exactly at
-        // the ship's center, now just ahead of the hull - see WeaponSystem - but this filter is
-        // the actual fix regardless of spawn offset: it stops the collision from being generated
-        // at all, rather than relying on positioning to avoid it). Found via play-testing: shots
-        // fired while turning visibly flew in the wrong direction past 180 degrees of rotation -
-        // Box2D was resolving the spawn-time overlap by pushing the projectile along some fixed
-        // fallback axis (two exactly-coincident circles have no defined separation direction),
-        // unrelated to the ship's actual facing.
+        // Without the isOwnShip exclusion below, a freshly-fired projectile would generate a real
+        // Box2D collision against its own shooter's ship the instant it spawns (previously spawned
+        // exactly at the ship's center, now just ahead of the hull - see WeaponSystem - but this
+        // filter is the actual fix regardless of spawn offset: it stops the collision from being
+        // generated at all, rather than relying on positioning to avoid it). Found via
+        // play-testing: shots fired while turning visibly flew in the wrong direction past 180
+        // degrees of rotation - Box2D was resolving the spawn-time overlap by pushing the
+        // projectile along some fixed fallback axis (two exactly-coincident circles have no
+        // defined separation direction), unrelated to the ship's actual facing.
+        //
+        // Also replicates Box2D's own default category/mask filtering (CollisionCategories
+        // .shouldCollide) explicitly, on top of that exclusion - installing ANY custom
+        // ContactFilter here completely replaces Box2D's native default filtering rather than
+        // layering on top of it (see CollisionCategories' own Javadoc for how this was confirmed,
+        // by reading World.java's actual JNI binding). Missing this meant every category/mask bit
+        // on every fixture in the game silently did nothing from the very first weapons milestone
+        // onward - ships/projectiles/asteroids all collided with everything they overlapped,
+        // masks or no. Only actually visible once asteroids gave it a body large, slow, and
+        // long-lived enough to make a wrongly-generated boundary bounce obvious (design.md -
+        // asteroids' addendum) - a projectile passing through the boundary in under a second, or
+        // two projectiles briefly nudging each other, was never conspicuous enough to notice.
         world.setContactFilter((fixtureA, fixtureB) -> {
+            if (!CollisionCategories.shouldCollide(fixtureA.getFilterData(), fixtureB.getFilterData())) {
+                return false;
+            }
             Entity a = asEntity(fixtureA.getBody());
             Entity b = asEntity(fixtureB.getBody());
             return !isOwnShip(a, b) && !isOwnShip(b, a);
@@ -219,6 +255,8 @@ public class GameNetworkServer extends NetworkServer {
                 registerPotentialHit(b, a);
                 registerPotentialWallHit(bodyA, bodyB);
                 registerPotentialWallHit(bodyB, bodyA);
+                registerPotentialAsteroidHit(a, b);
+                registerPotentialAsteroidHit(b, a);
             }
 
             @Override
@@ -242,12 +280,16 @@ public class GameNetworkServer extends NetworkServer {
      * runs every enabled turret's autonomous scan/track/fire behavior
      * (design.md — turret weapons, sharing each ship's weapon capacitor with
      * its main gun), resolves any hits (splitting damage between shield and
-     * hull, see {@link ShipDamage}) — both projectile hits and a ship
-     * faceplanting into the arena boundary at speed (design.md — arena
-     * bounds' addendum) — regenerates shields, advances every
-     * ship's combat-lock timers (design.md 2.3), expires old projectiles,
-     * advances respawn timers, broadcasts the resulting world state to every
-     * connected client, and - on its own, much slower cadence, see
+     * hull, see {@link ShipDamage}) — both projectile hits (including a
+     * projectile/missile hitting an asteroid, which destroys the projectile
+     * but never damages the indestructible asteroid, design.md — asteroids)
+     * and a ship faceplanting into the arena boundary or an asteroid at
+     * speed (design.md — arena bounds' addendum / asteroids) — regenerates
+     * shields, advances every ship's combat-lock timers (design.md 2.3),
+     * expires old projectiles, advances respawn timers, maintains the
+     * arena's asteroid field (design.md — asteroids), broadcasts the
+     * resulting world state to every connected client, and - on its own,
+     * much slower cadence, see
      * {@link #broadcastScoreboard()} - the scoreboard overlay's data
      * (design.md 2.11).
      *
@@ -298,11 +340,16 @@ public class GameNetworkServer extends NetworkServer {
         processMissileFireRequests();
 
         resolvePendingHits();
-        resolvePendingWallHits();
+        resolvePendingEnvironmentalHits();
+        resolvePendingAsteroidProjectileHits();
         shieldRegenSystem.update(deltaTime);
         combatTimerSystem.update(deltaTime);
         projectileLifetimeSystem.update(deltaTime);
         tickRespawns(deltaTime);
+        // Same "after this tick's physics stepping" placement as weapons/turrets/missiles above,
+        // for the same reason - a newly-spawned asteroid isn't swept forward by this tick's own
+        // physics steps before its first broadcast (design.md - asteroids).
+        tickAsteroids();
 
         // Recomputed against this tick's freshest (post-physics-step) positions, immediately
         // before broadcastSnapshot() reads it to decide what each player actually sees.
@@ -381,28 +428,71 @@ public class GameNetworkServer extends NetworkServer {
         }
         float damage = ArenaBounds.wallImpactDamage(maybeShipBody.getLinearVelocity().len());
         if (damage > 0f) {
-            pendingWallHits.add(new WallHitEvent(ship, damage));
+            pendingEnvironmentalHits.add(new EnvironmentalHitEvent(ship, damage));
         }
     }
 
     /**
-     * Resolves every wall-impact hit registered this tick
-     * ({@link #registerPotentialWallHit}) — applies damage
+     * Registers a potential ship-vs-asteroid or projectile-vs-asteroid
+     * contact (design.md — asteroids) — {@code other} must belong to a real
+     * asteroid, or this is a no-op. A ship impact is queued into
+     * {@link #pendingEnvironmentalHits} (resolved identically to a wall
+     * impact — same {@link #resolvePendingEnvironmentalHits}, see that
+     * method's Javadoc for why: neither counts as combat, neither credits a
+     * kill), computed from the ship's speed <em>relative to the asteroid's
+     * own</em> (not the ship's bare speed, unlike a wall — an asteroid is
+     * itself moving, so a ship drifting alongside one at a matched velocity
+     * shouldn't take damage from a gentle touch). A projectile/missile
+     * impact is queued into {@link #pendingAsteroidProjectileHits} instead —
+     * an asteroid is indestructible and has no {@link HullComponent}, so it
+     * can't go through {@link #registerPotentialHit}'s ship-shaped path at
+     * all.
+     *
+     * @param maybeShipOrProjectile the other body in the contact
+     * @param maybeAsteroid         the body to test for being an asteroid
+     */
+    private void registerPotentialAsteroidHit(Entity maybeShipOrProjectile, Entity maybeAsteroid) {
+        if (maybeShipOrProjectile == null || maybeAsteroid == null) {
+            return;
+        }
+        if (maybeAsteroid.getComponent(AsteroidComponent.class) == null) {
+            return;
+        }
+        if (maybeShipOrProjectile.getComponent(ProjectileComponent.class) != null) {
+            pendingAsteroidProjectileHits.add(maybeShipOrProjectile);
+            return;
+        }
+        if (maybeShipOrProjectile.getComponent(PlayerIdComponent.class) != null) {
+            Body shipBody = maybeShipOrProjectile.getComponent(PhysicsBodyComponent.class).getBody();
+            Body asteroidBody = maybeAsteroid.getComponent(PhysicsBodyComponent.class).getBody();
+            float relativeSpeed = shipBody.getLinearVelocity().cpy().sub(asteroidBody.getLinearVelocity()).len();
+            float damage = ArenaBounds.wallImpactDamage(relativeSpeed);
+            if (damage > 0f) {
+                pendingEnvironmentalHits.add(new EnvironmentalHitEvent(maybeShipOrProjectile, damage));
+            }
+        }
+    }
+
+    /**
+     * Resolves every non-combat ship impact registered this tick — a wall
+     * ({@link #registerPotentialWallHit}) or an asteroid
+     * ({@link #registerPotentialAsteroidHit}) — applies damage
      * ({@link ShipDamage#apply}) and destroys any ship it kills, same
      * "collect during the callback, act after physics stepping" shape as
      * {@link #resolvePendingHits}. Unlike a projectile hit, this never
-     * marks {@link CombatTimerComponent} — running into a wall isn't being
-     * engaged by another player, so it shouldn't extend design.md 2.3's
-     * combat-lock window — and never credits a kill to anyone
-     * ({@link #handleShipDestroyed}'s {@code killerPlayerId} is always
-     * {@code null} here), since it's a self-inflicted, not a combat, death.
+     * marks {@link CombatTimerComponent} — running into a wall or an
+     * asteroid isn't being engaged by another player, so it shouldn't
+     * extend design.md 2.3's combat-lock window — and never credits a kill
+     * to anyone ({@link #handleShipDestroyed}'s {@code killerPlayerId} is
+     * always {@code null} here), since it's a self-inflicted/environmental,
+     * not a combat, death.
      */
-    private void resolvePendingWallHits() {
-        if (pendingWallHits.isEmpty()) {
+    private void resolvePendingEnvironmentalHits() {
+        if (pendingEnvironmentalHits.isEmpty()) {
             return;
         }
         Set<Entity> shipsToCheck = new HashSet<>();
-        for (WallHitEvent hit : pendingWallHits) {
+        for (EnvironmentalHitEvent hit : pendingEnvironmentalHits) {
             HullComponent hull = hit.ship().getComponent(HullComponent.class);
             if (hull.isDestroyed()) {
                 continue; // already destroyed by something else resolved earlier this tick
@@ -410,7 +500,7 @@ public class GameNetworkServer extends NetworkServer {
             ShipDamage.apply(hit.ship().getComponent(ShieldComponent.class), hull, hit.damage());
             shipsToCheck.add(hit.ship());
         }
-        pendingWallHits.clear();
+        pendingEnvironmentalHits.clear();
 
         for (Entity ship : shipsToCheck) {
             if (ship.getComponent(HullComponent.class).isDestroyed()) {
@@ -419,7 +509,36 @@ public class GameNetworkServer extends NetworkServer {
         }
     }
 
+    /**
+     * Resolves every projectile/missile-vs-asteroid contact registered this
+     * tick ({@link #registerPotentialAsteroidHit}): destroys the projectile
+     * with the same impact-explosion VFX a ship hit gets
+     * ({@link ProjectileHitMessage}), but deals no damage to the asteroid
+     * (indestructible, design.md — asteroids) and credits no kill. Skips
+     * any projectile {@link #resolvePendingHits} already destroyed this
+     * same tick (a projectile that hit a ship first) — Box2D bodies can't
+     * be destroyed twice.
+     */
+    private void resolvePendingAsteroidProjectileHits() {
+        if (pendingAsteroidProjectileHits.isEmpty()) {
+            return;
+        }
+        for (Entity projectile : pendingAsteroidProjectileHits) {
+            if (!projectilesDestroyedThisTick.add(projectile)) {
+                continue;
+            }
+            Body body = projectile.getComponent(PhysicsBodyComponent.class).getBody();
+            sendToAllUDP(new ProjectileHitMessage(body.getPosition().x, body.getPosition().y));
+            world.destroyBody(body);
+            engine.removeEntity(projectile);
+        }
+        pendingAsteroidProjectileHits.clear();
+    }
+
     private void resolvePendingHits() {
+        // Always runs first, exactly once per tick (see tick()'s own ordering) - the one place
+        // this per-tick dedupe set is reset, see its own field Javadoc.
+        projectilesDestroyedThisTick.clear();
         if (pendingHits.isEmpty()) {
             return;
         }
@@ -445,6 +564,7 @@ public class GameNetworkServer extends NetworkServer {
             }
         }
         pendingHits.clear();
+        projectilesDestroyedThisTick.addAll(projectilesToRemove);
 
         for (Entity projectile : projectilesToRemove) {
             Body body = projectile.getComponent(PhysicsBodyComponent.class).getBody();
@@ -652,12 +772,82 @@ public class GameNetworkServer extends NetworkServer {
      * @return the chosen spawn point, in meters
      */
     private Vector2 findSpawnPoint() {
-        List<Vector2> enemyPositions = new ArrayList<>(shipsByPlayerId.size());
-        for (Entity ship : shipsByPlayerId.values()) {
-            enemyPositions.add(new Vector2(ship.getComponent(PhysicsBodyComponent.class).getBody().getPosition()));
-        }
         return SpawnPointFinder.findSpawnPoint(ArenaBounds.HALF_SIZE_METERS, SpawnPointFinder.BOUNDARY_MARGIN_METERS,
-            SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, enemyPositions, spawnRandom);
+            SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, allShipPositions(), spawnRandom);
+    }
+
+    /**
+     * Returns every currently-alive ship's position — shared by
+     * {@link #findSpawnPoint} and {@link #trySpawnAsteroid}, both of which
+     * need "stay away from every player" as an input.
+     *
+     * @return every ship's current position, in meters
+     */
+    private List<Vector2> allShipPositions() {
+        List<Vector2> positions = new ArrayList<>(shipsByPlayerId.size());
+        for (Entity ship : shipsByPlayerId.values()) {
+            positions.add(new Vector2(ship.getComponent(PhysicsBodyComponent.class).getBody().getPosition()));
+        }
+        return positions;
+    }
+
+    /**
+     * Maintains the arena's asteroid field at exactly
+     * {@link AsteroidSpawner#ACTIVE_COUNT} (design.md — asteroids): despawns
+     * any asteroid that's drifted outside the arena — they never bounce off
+     * the boundary or each other, unlike ships (an asteroid's fixture simply
+     * isn't masked to collide with either, see {@link AsteroidFactory}) —
+     * then tops back up to the target count, one attempt per tick (see
+     * {@link #trySpawnAsteroid}).
+     */
+    private void tickAsteroids() {
+        Iterator<Map.Entry<Integer, Entity>> iterator = asteroidsById.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Entity asteroid = iterator.next().getValue();
+            Vector2 position = asteroid.getComponent(PhysicsBodyComponent.class).getBody().getPosition();
+            if (Math.abs(position.x) > ArenaBounds.HALF_SIZE_METERS || Math.abs(position.y) > ArenaBounds.HALF_SIZE_METERS) {
+                world.destroyBody(asteroid.getComponent(PhysicsBodyComponent.class).getBody());
+                engine.removeEntity(asteroid);
+                iterator.remove();
+            }
+        }
+        if (asteroidsById.size() < AsteroidSpawner.ACTIVE_COUNT) {
+            trySpawnAsteroid();
+        }
+    }
+
+    /**
+     * Attempts to spawn one new asteroid at a random point at least
+     * {@link SpawnPointFinder#MIN_ENEMY_DISTANCE_METERS} from every
+     * currently-alive ship (design.md — asteroids: "a player never sees one
+     * popping into existence"). Unlike a ship's own spawn point
+     * ({@link #findSpawnPoint}), this deliberately does <b>not</b> accept
+     * {@link SpawnPointFinder#findSpawnPoint}'s best-effort fallback when
+     * the arena is too crowded to satisfy that distance exactly — an
+     * asteroid can simply wait and retry ({@link #tickAsteroids} calls this
+     * again every tick it's short of the target count), where a ship
+     * spawning right now cannot.
+     */
+    private void trySpawnAsteroid() {
+        List<Vector2> playerPositions = allShipPositions();
+        Vector2 point = SpawnPointFinder.findSpawnPoint(ArenaBounds.HALF_SIZE_METERS, SpawnPointFinder.BOUNDARY_MARGIN_METERS,
+            SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, playerPositions, spawnRandom);
+        if (!SpawnPointFinder.isFarEnoughFromEnemies(point, SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, playerPositions)) {
+            return;
+        }
+
+        Set<AsteroidType> activeTypes = new HashSet<>();
+        for (Entity asteroid : asteroidsById.values()) {
+            activeTypes.add(asteroid.getComponent(AsteroidComponent.class).getType());
+        }
+        AsteroidType type = AsteroidSpawner.pickType(activeTypes, spawnRandom);
+        Vector2 velocity = AsteroidSpawner.pickVelocity(spawnRandom);
+        float angularVelocity = AsteroidSpawner.pickAngularVelocity(spawnRandom);
+        float angle = spawnRandom.nextFloat() * MathUtils.PI2;
+
+        Entity asteroid = AsteroidFactory.createAsteroid(engine, world, nextAsteroidId.getAndIncrement(), type,
+            point.x, point.y, angle, velocity.x, velocity.y, angularVelocity);
+        asteroidsById.put(asteroid.getComponent(AsteroidComponent.class).getAsteroidId(), asteroid);
     }
 
     /**
@@ -1030,6 +1220,18 @@ public class GameNetworkServer extends NetworkServer {
                 body.getLinearVelocity().x, body.getLinearVelocity().y, projectile.getTrackedTargetPlayerId());
         }
 
+        // Asteroids, like projectiles (design.md 2.14's own scope boundary), are broadcast
+        // unfiltered to everyone - not radar-gated, computed once here rather than per-player.
+        AsteroidState[] asteroidStates = new AsteroidState[asteroidsById.size()];
+        int a = 0;
+        for (Entity asteroid : asteroidsById.values()) {
+            AsteroidComponent asteroidComponent = asteroid.getComponent(AsteroidComponent.class);
+            Body body = asteroid.getComponent(PhysicsBodyComponent.class).getBody();
+            asteroidStates[a++] = new AsteroidState(asteroidComponent.getAsteroidId(), asteroidComponent.getType(),
+                body.getPosition().x, body.getPosition().y, body.getAngle(),
+                body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity());
+        }
+
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
             int playerId = entry.getKey();
             Connection connection = connectionsByPlayerId.get(playerId);
@@ -1045,7 +1247,7 @@ public class GameNetworkServer extends NetworkServer {
                     visibleShips.add(detected);
                 }
             }
-            connection.sendUDP(new WorldSnapshotMessage(visibleShips.toArray(new ShipState[0]), projectileStates));
+            connection.sendUDP(new WorldSnapshotMessage(visibleShips.toArray(new ShipState[0]), projectileStates, asteroidStates));
         }
     }
 
@@ -1106,11 +1308,13 @@ public class GameNetworkServer extends NetworkServer {
     }
 
     /**
-     * One detected, not-yet-resolved ship-vs-arena-boundary impact
-     * (design.md — arena bounds' addendum), with the damage already
-     * computed ({@link ArenaBounds#wallImpactDamage}) from the ship's
-     * speed at the moment contact began.
+     * One detected, not-yet-resolved ship-vs-arena-boundary
+     * (design.md — arena bounds' addendum) or ship-vs-asteroid
+     * (design.md — asteroids) impact, with the damage already computed
+     * ({@link ArenaBounds#wallImpactDamage}) from the ship's speed (a wall
+     * impact) or the ship's speed relative to the asteroid's own (an
+     * asteroid impact) at the moment contact began.
      */
-    private record WallHitEvent(Entity ship, float damage) {
+    private record EnvironmentalHitEvent(Entity ship, float damage) {
     }
 }

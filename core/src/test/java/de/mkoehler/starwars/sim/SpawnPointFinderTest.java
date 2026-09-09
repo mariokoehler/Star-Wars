@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -68,6 +69,18 @@ class SpawnPointFinderTest {
             enemies, new Random(3));
 
         assertWithinBoundaryMargin(point);
+    }
+
+    @Test
+    void isFarEnoughFromEnemiesRejectsAPointInsideTheMinimumDistance() {
+        List<Vector2> enemies = List.of(new Vector2(0f, 0f));
+        assertTrue(SpawnPointFinder.isFarEnoughFromEnemies(new Vector2(150f, 0f), MIN_ENEMY_DISTANCE, enemies));
+        assertFalse(SpawnPointFinder.isFarEnoughFromEnemies(new Vector2(50f, 0f), MIN_ENEMY_DISTANCE, enemies));
+    }
+
+    @Test
+    void isFarEnoughFromEnemiesAcceptsAnyPointWhenThereAreNoEnemies() {
+        assertTrue(SpawnPointFinder.isFarEnoughFromEnemies(new Vector2(0f, 0f), MIN_ENEMY_DISTANCE, List.of()));
     }
 
     private static void assertWithinBoundaryMargin(Vector2 point) {

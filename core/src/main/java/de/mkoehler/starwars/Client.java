@@ -22,6 +22,7 @@ import de.mkoehler.starwars.input.GameAction;
 import de.mkoehler.starwars.input.KeyBindings;
 import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
+import de.mkoehler.starwars.net.messages.AsteroidState;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
@@ -54,6 +55,8 @@ import de.mkoehler.starwars.render.ShipLightEffect;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.render.ThrusterEffect;
 import de.mkoehler.starwars.sim.ArenaBounds;
+import de.mkoehler.starwars.sim.AsteroidFactory;
+import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
@@ -289,6 +292,8 @@ public class Client implements Screen {
     private TextureRegion missileLockReticleOuterRegion;
     private TextureRegion missileLockReticleInnerRegion;
     private TextureRegion missileLockReticleCenterRegion;
+    private TextureAtlas asteroidsAtlas;
+    private final Map<AsteroidType, TextureRegion> asteroidRegionsByType = new EnumMap<>(AsteroidType.class);
     private ParallaxBackground background;
     private ArenaBoundaryRenderer arenaBoundaryRenderer;
     private ShipStatusHud statusHud;
@@ -304,6 +309,19 @@ public class Client implements Screen {
     private final Queue<Runnable> pendingUpdates = new ConcurrentLinkedQueue<>();
     private final Map<Integer, RemoteShip> ships = new HashMap<>();
     private final Map<Integer, RemoteProjectile> projectiles = new HashMap<>();
+    private final Map<Integer, RemoteAsteroid> asteroids = new HashMap<>();
+    /**
+     * Client-side "puppet" Box2D bodies mirroring each currently-active
+     * asteroid into {@link #localWorld} (design.md — asteroids' addendum) —
+     * without these, the locally-predicted {@link #myBody} would fly
+     * straight through an asteroid the server is actually bouncing it off,
+     * same reasoning {@link ArenaBounds#createBoundary} already documents
+     * for the arena wall. Kept separate from {@link #asteroids} (the
+     * render-only, dead-reckoned state) since this map only exists once
+     * {@link #localWorld} does (a snapshot can in principle arrive before
+     * the first {@code ShipSpawnedMessage} creates it).
+     */
+    private final Map<Integer, Body> localAsteroidBodies = new HashMap<>();
     /**
      * Locally-predicted shots (design.md 2.4's addendum) that this client has
      * already spawned and started rendering, but that the server hasn't
@@ -550,6 +568,10 @@ public class Client implements Screen {
         missileLockReticleOuterRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Outer");
         missileLockReticleInnerRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Inner");
         missileLockReticleCenterRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Center");
+        asteroidsAtlas = game.getAssets().get(GameAssets.ASTEROIDS_ATLAS, TextureAtlas.class);
+        for (AsteroidType type : AsteroidType.values()) {
+            asteroidRegionsByType.put(type, asteroidsAtlas.findRegion(type.getResourceName()));
+        }
         // One shared effect regardless of ship type, unlike myThrusters/myLights/myDamageSmoke -
         // built once here rather than rebuilt per-spawn, since it depends on no ship-type-specific
         // attachment metadata.
@@ -945,6 +967,45 @@ public class Client implements Screen {
                 state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER);
         }
         projectiles.keySet().removeIf(id -> !presentIds.contains(id));
+
+        // Same presence-based prune as ships/projectiles above - an asteroid has no
+        // despawned notification of its own (design.md — asteroids), a client infers it's gone
+        // simply by its id no longer appearing in a subsequent snapshot.
+        Set<Integer> presentAsteroidIds = new HashSet<>();
+        for (AsteroidState state : snapshot.getAsteroids()) {
+            presentAsteroidIds.add(state.getAsteroidId());
+            float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
+            float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
+            RemoteAsteroid asteroid = asteroids.computeIfAbsent(state.getAsteroidId(),
+                id -> new RemoteAsteroid(x, y, state.getAngle(), state.getType()));
+            asteroid.updateFromSnapshot(x, y, state.getAngle(),
+                state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
+                state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
+                state.getAngularVelocity());
+
+            // Local-prediction physics mirror (see #localAsteroidBodies' own Javadoc) - meters,
+            // not the pixel-scaled x/y above; only once localWorld actually exists (it's created
+            // on the first ShipSpawnedMessage, which a snapshot could in principle race ahead of).
+            if (localWorld != null) {
+                Body localBody = localAsteroidBodies.computeIfAbsent(state.getAsteroidId(),
+                    id -> AsteroidFactory.createLocalMirrorBody(localWorld, state.getType(),
+                        state.getX(), state.getY(), state.getAngle()));
+                localBody.setTransform(state.getX(), state.getY(), state.getAngle());
+                localBody.setLinearVelocity(state.getVelocityX(), state.getVelocityY());
+                localBody.setAngularVelocity(state.getAngularVelocity());
+            }
+        }
+        asteroids.keySet().removeIf(id -> !presentAsteroidIds.contains(id));
+        if (localWorld != null) {
+            Iterator<Map.Entry<Integer, Body>> localAsteroidIterator = localAsteroidBodies.entrySet().iterator();
+            while (localAsteroidIterator.hasNext()) {
+                Map.Entry<Integer, Body> entry = localAsteroidIterator.next();
+                if (!presentAsteroidIds.contains(entry.getKey())) {
+                    localWorld.destroyBody(entry.getValue());
+                    localAsteroidIterator.remove();
+                }
+            }
+        }
     }
 
     /**
@@ -1121,6 +1182,7 @@ public class Client implements Screen {
 
         extrapolateRemoteShips(deltaTime);
         extrapolateProjectiles(deltaTime);
+        extrapolateAsteroids(deltaTime);
         updateCamera(deltaTime);
         missileReticleAnimationSeconds += deltaTime;
 
@@ -1128,6 +1190,7 @@ public class Client implements Screen {
         batch.begin();
         background.render(batch, camera);
         arenaBoundaryRenderer.render(batch);
+        drawAsteroids();
         drawRemoteShips(deltaTime);
         drawLocalShip(deltaTime);
         drawProjectiles();
@@ -1420,6 +1483,33 @@ public class Client implements Screen {
             if (projectile.elapsedSinceUpdate > PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS) {
                 predictedIterator.remove();
             }
+        }
+    }
+
+    private void extrapolateAsteroids(float deltaTime) {
+        for (RemoteAsteroid asteroid : asteroids.values()) {
+            asteroid.extrapolate(deltaTime);
+        }
+    }
+
+    /**
+     * Draws every currently-active asteroid (design.md — asteroids) — dead
+     * reckoned the same way as {@link #drawRemoteShips}/{@link #drawProjectiles},
+     * but with no tint, thrusters, lights, or turrets to consider (an
+     * asteroid is a plain environmental obstacle, not a player-owned ship).
+     */
+    private void drawAsteroids() {
+        for (RemoteAsteroid asteroid : asteroids.values()) {
+            TextureRegion region = asteroidRegionsByType.get(asteroid.type);
+            float screenScale = PhysicsConstants.PIXELS_PER_METER / asteroid.type.getPixelsPerMeter();
+            float widthPixels = region.getRegionWidth() * screenScale;
+            float heightPixels = region.getRegionHeight() * screenScale;
+            batch.draw(region,
+                asteroid.renderX - widthPixels / 2f, asteroid.renderY - heightPixels / 2f,
+                widthPixels / 2f, heightPixels / 2f,
+                widthPixels, heightPixels,
+                1f, 1f,
+                asteroid.renderAngle * MathUtils.radiansToDegrees);
         }
     }
 
@@ -2078,7 +2168,7 @@ public class Client implements Screen {
             localWorld.dispose();
         }
         batch.dispose();
-        // shipsAtlas/projectilesAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
+        // shipsAtlas/projectilesAtlas/asteroidsAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
         // owned by StarWarsGame#getAssets() (design.md - asset loading), not this screen -
         // disposed once, at app shutdown, not here. background.dispose() below still frees the
         // procedurally-generated starfield layer, which this screen alone owns (see #show()).
@@ -2163,6 +2253,53 @@ public class Client implements Screen {
             this.damageSmoke = damageSmoke;
             this.radarPulseEffect = radarPulseEffect;
             this.radarPulseCooldownRemaining = radarPulseCooldownRemaining;
+            baseX = renderX = x;
+            baseY = renderY = y;
+            baseAngle = renderAngle = angle;
+        }
+
+        void updateFromSnapshot(float x, float y, float angle, float velocityX, float velocityY, float angularVelocity) {
+            baseX = x;
+            baseY = y;
+            baseAngle = angle;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
+            this.angularVelocity = angularVelocity;
+            elapsedSinceUpdate = 0f;
+        }
+
+        void extrapolate(float deltaTime) {
+            elapsedSinceUpdate += deltaTime;
+            renderX = baseX + velocityX * elapsedSinceUpdate;
+            renderY = baseY + velocityY * elapsedSinceUpdate;
+            renderAngle = baseAngle + angularVelocity * elapsedSinceUpdate;
+        }
+    }
+
+    /**
+     * An asteroid (design.md — asteroids). Rendered by dead reckoning, same
+     * shape as {@link RemoteShip} — extrapolated using its own reported
+     * velocity/angular velocity, both held constant between snapshots since
+     * an asteroid never accelerates or experiences drag once spawned (the
+     * user's own spec) — but with none of {@link RemoteShip}'s
+     * player-ship-specific state (thrusters, lights, damage smoke, turrets,
+     * hull) to carry.
+     */
+    private static final class RemoteAsteroid {
+        final AsteroidType type;
+        float baseX;
+        float baseY;
+        float baseAngle;
+        float velocityX;
+        float velocityY;
+        float angularVelocity;
+        float elapsedSinceUpdate;
+        float renderX;
+        float renderY;
+        float renderAngle;
+
+        RemoteAsteroid(float x, float y, float angle, AsteroidType type) {
+            this.type = type;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;

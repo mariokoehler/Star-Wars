@@ -3333,6 +3333,175 @@ user's own concurrent work (maybe toward the still-open "obstacles"
 half of the arena-bounds question, design.md §7) — left completely
 alone, not investigated or touched.
 
+**Asteroids — implemented 2026-09-09, same day.** See design.md 2.17 for
+the full writeup. User spec: 4 always-active asteroids (of 8 available
+textures, never repeating), spawned ≥100m from any player with a random
+slow velocity/spin, **no drag at all** (they keep their initial motion
+forever), real Box2D obstacles ships take damage from hitting, never
+interacting with each other or the boundary (despawn + respawn elsewhere
+once they drift outside the arena), indestructible to weapons fire. The
+user had already provided the 8 PNGs plus hand-authored `.meta.json`
+hitbox files (same format/editor as ship hitboxes) in a prior session.
+
+**Consulted `advisor` before writing any code, given the scope (~15 files
+across physics, networking, spawn logic, damage) — caught two real
+issues before they became bugs, not after:**
+1. **Density.** A first-instinct density of `50` (loose analogy to a
+   ship's `1`) would have made the largest asteroid ~1000× a ship's mass
+   given the area difference — effectively immovable, not "reacts to
+   impacts." Landed on `3f` instead (~30-60× a ship's mass, given the
+   area ratio already at play) after actually reasoning through the area
+   math rather than guessing a bigger number felt "high density."
+2. **Damage formula.** The initial plan reused `ArenaBounds.
+   wallImpactDamage` on the ship's own absolute speed, same as a wall
+   hit — wrong, since an asteroid is itself moving: a ship drifting
+   alongside one at matched velocity would take wall-tier damage from a
+   gentle touch. Fixed by computing the ship's speed *relative to the
+   asteroid's own* before applying the same formula — same threshold/
+   scale, different input.
+3. Also flagged (and applied): don't accept `SpawnPointFinder`'s
+   best-effort fallback for an asteroid spawn the way a ship's own spawn
+   must — an asteroid can just wait and retry next tick, so a too-close
+   fallback point is rejected outright rather than ever spawning near a
+   player. New `SpawnPointFinder.isFarEnoughFromEnemies` is the check
+   that lets a caller reject the fallback like this.
+
+**Real double-destroy bug caught by reasoning through the contact-
+resolution ordering before ever running it, not by hitting an
+exception:** a projectile could register a contact against both a ship
+and an asteroid in the same tick, and both pending-hit lists are
+resolved in the same tick — destroying the same Box2D body twice is
+undefined behavior. Fixed with a small per-tick
+`projectilesDestroyedThisTick` dedupe set, populated by whichever
+resolution runs first (`resolvePendingHits`) and checked by the new
+asteroid-projectile resolution before it destroys anything.
+
+**Renamed, not duplicated:** `GameNetworkServer`'s existing
+`pendingWallHits`/`resolvePendingWallHits` (arena-bounds' addendum,
+2.16) became `pendingEnvironmentalHits`/`resolvePendingEnvironmentalHits`
+— a ship-vs-asteroid impact is resolved by the *exact same* logic a
+wall impact already used (apply damage, no combat-lock mark, no kill
+credit), so this was a rename for accuracy, not new code. A
+projectile-vs-asteroid hit is a genuinely different case (destroys the
+projectile, not the ship, no damage/kill at all) and got its own new
+`pendingAsteroidProjectileHits` pair instead of being forced into the
+ship-shaped path.
+
+**New:** `sim.AsteroidType` (8 values, `pixelsPerMeter` computed inline
+from each measured source-art pixel dimension — same "hardcode per-type,
+the headless server can't read a texture's real size" lesson already
+learned once for ships, 2026-09-06), `sim.AsteroidStats` (mirrors
+`ShipStats` but much smaller — no `.stats.json`, a **required**
+`ShipSpriteMetadata` since every type was authored with a real hitbox
+from day one), `sim.AsteroidFactory`, `sim.AsteroidSpawner` (pure/tested
+texture-distinctness + velocity/angular-velocity picking),
+`sim.components.AsteroidComponent`, `net.messages.AsteroidState`
+(new 3rd array on `WorldSnapshotMessage`, broadcast unfiltered to
+everyone — not radar-gated, same scope boundary 2.14 already drew around
+projectiles). `CollisionCategories.ASTEROID` masked into ship/projectile
+fixtures only (not the boundary, not other asteroids) — purely additive
+categoryBits/maskBits, no `ContactFilter` changes needed, same pattern
+the arena boundary itself established. New `textures/asteroids.atlas`
+(`AtlasPacker.pack("asteroids", "asteroids")` — a flat source folder, so
+region names are exactly the bare filenames, no bank-frame index suffix
+needed). The 8 `.meta.json` files were copied from `assets-raw/asteroids/`
+into `assets/asteroids/` (the classpath root the server actually loads
+from) — the client never needs them (only `AsteroidType.
+getPixelsPerMeter()` + the atlas region), only the server does, to build
+each asteroid's hitbox polygon.
+
+**A second `advisor` review, after the implementation looked complete,
+caught two more real gaps before either became the user's problem to
+debug:**
+1. **The client's own local-prediction world had no asteroids in it at
+   all.** `Client`'s predicted ship body would have flown straight
+   through an asteroid the server was actually bouncing it off, since
+   only the arena boundary was ever mirrored into `localWorld`, not
+   asteroids — manufacturing a large reconciliation error on every such
+   contact, the same failure shape this project has already independently
+   root-caused twice (terminal-velocity jitter, projectile spawn lag).
+   Fixed with a new `AsteroidFactory.createLocalMirrorBody` — a
+   client-only `KinematicBody` (not a full dynamic mirror; the client
+   always knows an asteroid's true state from the next snapshot, it
+   never needs to simulate it) hard-synced to the server's reported
+   transform/velocity on every `AsteroidState`, same "predicted and
+   authoritative physics must not diverge for reasons other than input"
+   rule the arena boundary mirror already exists to satisfy.
+2. **`AsteroidStats.forType()` was completely unexercised** — nothing
+   called it except the (never-run-this-session) server. A missing/
+   malformed `.meta.json` would only have surfaced as a startup crash on
+   the user's own server. Fixed two ways: a new `AsteroidStatsTest`
+   loads all 8 types and asserts a real hitbox; and
+   `mvn -pl server process-resources` was actually run (not assumed from
+   the `shipdata/` precedent) to confirm `assets/asteroids/*.meta.json`
+   really lands on the server's classpath.
+
+**Verification: build/tests only, deliberately not live — the user's own
+dedicated server was running throughout this session** (found via its
+packaged jar holding a lock during `mvn clean`, same "check full command
+lines before concluding nothing's running" rule this file has flagged
+before — correctly left alone, not restarted). Connecting a freshly-
+built client against that older, still-running server would have broken
+immediately at the Kryo wire boundary (`WorldSnapshotMessage`'s shape
+changed, new types appended to `MessageRegistry`) — same "client and
+server must share the exact same message shape" rule this project has
+hit before. Full `mvn clean test` green (176 tests: 142 core [+5
+`AsteroidSpawnerTest`, +1 `AsteroidStatsTest`, +2 `SpawnPointFinderTest`,
++1 extended `MessageRegistryTest` round trip] + 30 server + 4
+dev-tools), `mvn install -pl core,lwjgl3` green (server module's own jar
+left alone/still locked, its source already confirmed compiling and its
+30 tests already passing from the earlier plain `mvn test` run), atlas
+regenerated with all 8 new regions confirmed present by name (the
+incidental repack of `ships.atlas`/`ships.png` this also triggered —
+picking up the user's separate 128px particle-editor reference textures,
+CLAUDE.md's own earlier entry on those — was reverted via `git checkout`,
+not committed), and a real packaged client jar booted standalone (no
+server connection attempted, twice — once before and once after the two
+fixes above) confirming zero exceptions both times. **Needs the user to
+rebuild and restart their own server** before this is actually flyable,
+then feel-test the three explicitly untuned ranges (density/restitution
+"reacts but isn't easily bounced," 3-8 m/s + ±0.3 rad/s "slow and
+hulking," 20m target size).
+
+**Real bug found via the user's own play-testing, fixed 2026-09-09, same
+day: asteroids bouncing off the arena boundary instead of despawning —
+turned out to be a much bigger, months-old, previously-invisible bug.**
+See design.md 2.17's newest addendum for the full writeup. User: "the
+asteroids are currently bouncing off the arena boundary, so they will
+never leave the arena... they will probably naturally accumulate in the
+corners." Root cause, confirmed by reading the real `gdx-box2d` sources
+jar (`World.java`'s JNI binding), not guessed: **installing any custom
+`ContactFilter` on a Box2D `World` completely replaces its native default
+category/mask/group filtering, not layers on top of it.**
+`GameNetworkServer.world.setContactFilter(...)` was first added back at
+the very first weapons milestone (2026-09-05) for one narrow purpose —
+stop a freshly-fired projectile colliding with its own shooter — and its
+lambda only ever implemented that one exclusion, unconditionally
+returning `true` for every other pair. Since a custom filter is the
+*only* filter Box2D ever consults once installed, **every
+`CollisionCategories` bit on every fixture in the entire game —
+ship/projectile/boundary/asteroid — had done nothing at the actual
+collision-detection level for the whole life of this project.** Went
+unnoticed because every other exclusion this silently broke (projectile-
+vs-boundary, projectile-vs-projectile) involved interactions too brief to
+register as visibly wrong — asteroids were simply the first body large,
+slow, and long-lived enough to make it undeniable.
+
+**Fix:** new `CollisionCategories.shouldCollide(Filter, Filter)` — a
+pure, Box2D-native-free replication of Box2D's real default filtering
+algorithm, directly unit-tested (`CollisionCategoriesTest`, 10 cases
+covering every real fixture pairing this project's factories build).
+`GameNetworkServer`'s `ContactFilter` lambda now consults it first,
+before the existing same-owner-projectile exclusion — one fix restores
+every category/mask exclusion this project has ever documented as
+intentional but never actually enforced. `Client`'s own local-prediction
+`localWorld` was confirmed unaffected — it never installs a custom
+filter, so it was already using Box2D's real defaults correctly the
+entire time; this was a server-only bug. Full `mvn clean test` green
+(186 tests, +10 `CollisionCategoriesTest`), server jar rebuilt clean.
+**Not yet live-verified** — needs the user to fly with the rebuilt server
+and confirm asteroids actually leave the arena and respawn now.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

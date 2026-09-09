@@ -74,7 +74,7 @@ public final class MissileFactory {
         fixtureDef.friction = 0f;
         fixtureDef.restitution = 0f;
         fixtureDef.filter.categoryBits = CollisionCategories.PROJECTILE;
-        fixtureDef.filter.maskBits = CollisionCategories.SHIP;
+        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID);
         body.createFixture(fixtureDef);
         shape.dispose();
 

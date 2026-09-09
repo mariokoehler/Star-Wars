@@ -1,0 +1,62 @@
+
+asteroids.png
+size: 2048, 512
+format: RGBA8888
+filter: Linear, Linear
+repeat: none
+asteroid
+  rotate: false
+  xy: 2, 2
+  size: 500, 500
+  orig: 500, 500
+  offset: 0, 0
+  index: -1
+asteroid2
+  rotate: false
+  xy: 672, 19
+  size: 63, 184
+  orig: 63, 184
+  offset: 0, 0
+  index: -1
+asteroid3
+  rotate: false
+  xy: 504, 18
+  size: 166, 185
+  orig: 166, 185
+  offset: 0, 0
+  index: -1
+asteroid4
+  rotate: false
+  xy: 902, 297
+  size: 210, 205
+  orig: 210, 205
+  offset: 0, 0
+  index: -1
+asteroid5
+  rotate: false
+  xy: 504, 205
+  size: 263, 297
+  orig: 263, 297
+  offset: 0, 0
+  index: -1
+asteroid6
+  rotate: false
+  xy: 769, 216
+  size: 131, 286
+  orig: 131, 286
+  offset: 0, 0
+  index: -1
+asteroid7
+  rotate: false
+  xy: 1243, 324
+  size: 146, 178
+  orig: 146, 178
+  offset: 0, 0
+  index: -1
+asteroid8
+  rotate: false
+  xy: 1114, 235
+  size: 127, 267
+  orig: 127, 267
+  offset: 0, 0
+  index: -1

@@ -148,7 +148,7 @@ public final class ShipFactory {
         fixtureDef.restitution = 0.2f;
         fixtureDef.filter.categoryBits = CollisionCategories.SHIP;
         fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
-            | CollisionCategories.ARENA_BOUNDARY);
+            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID);
         body.createFixture(fixtureDef);
 
         shape.dispose();
