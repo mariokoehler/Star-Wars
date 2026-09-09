@@ -13,6 +13,7 @@ import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.utils.ScreenUtils;
 import de.mkoehler.starwars.input.GameAction;
 import de.mkoehler.starwars.input.KeyBindings;
+import de.mkoehler.starwars.input.KeyLabels;
 import de.mkoehler.starwars.render.DialogLayout;
 import de.mkoehler.starwars.render.FlatButton;
 import de.mkoehler.starwars.render.GameAssets;
@@ -301,7 +302,7 @@ public class KeybindScreen implements Screen {
         boolean hovering = listeningFor == null
             && FlatButton.contains(keyX, keyY, KEY_BUTTON_WIDTH, KEY_BUTTON_HEIGHT, mouseX, mouseY);
 
-        String keyLabel = isListeningRow ? "PRESS A KEY..." : Input.Keys.toString(keyBindings.get(action));
+        String keyLabel = isListeningRow ? "PRESS A KEY..." : KeyLabels.getLabel(keyBindings.get(action));
         Color background = isListeningRow ? KEY_LISTENING_BG : (hovering ? KEY_HOVER_BG : KEY_IDLE_BG);
         Color textColor = isListeningRow ? KEY_LISTENING_TEXT : KEY_IDLE_TEXT;
         flatButton.draw(batch, keyLabel, keyX, keyY, KEY_BUTTON_WIDTH, KEY_BUTTON_HEIGHT, background, textColor);

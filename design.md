@@ -3101,6 +3101,43 @@ actual produced character (see the implementation note above) if a
 player on a non-US layout finds the mislabeling actually confusing in
 practice, not just theoretically imprecise.
 
+**Localized label display — implemented same day, right after the user
+actually noticed the "Z"/"Y" mismatch and asked whether it could be
+fixed.** New `core.input.KeyLabelResolver` (a one-method seam) +
+`KeyLabels` (a static holder, defaulting to the same
+`Input.Keys.toString` behavior as before) — `core` itself still knows
+nothing about GLFW, keeping the headless `server` module clean of a
+dependency it'd never use. `KeybindScreen` now asks `KeyLabels.getLabel(...)`
+instead of calling `Input.Keys.toString` directly.
+
+The real resolution happens in a new `lwjgl3.LocalizedKeyLabelResolver`,
+registered once by `Lwjgl3Launcher` at startup
+(`KeyLabels.setResolver(...)`), using GLFW's `glfwGetKeyName(int, int)` —
+the actual OS-layout-aware API this project's own implementation note
+above had been anticipating since 3.8 was first written. The one
+non-obvious piece: `glfwGetKeyName` needs a *GLFW* keycode, but libGDX's
+`DefaultLwjgl3Input` only exposes the GLFW→GDX direction publicly
+(`getGdxKeyCode(int)`), not the reverse — rather than hand-duplicate that
+~100-case mapping (and risk it silently drifting out of sync on a future
+libGDX upgrade), `LocalizedKeyLabelResolver` builds the reverse map once,
+lazily, by calling `getGdxKeyCode` for every GLFW keycode in range and
+recording where each GDX keycode came from. `glfwGetKeyName` itself
+returns `null` for any key with no printable representation (function
+keys, arrows, modifiers, TAB, SPACE, etc.) — those fall back to
+`Input.Keys.toString`'s hardcoded name exactly as before, which is
+already the right label for a key that has no "localized character" to
+begin with.
+
+**What's persisted is completely unchanged — this only ever affects the
+label drawn on screen.** `keybindings.json` still stores the physical/
+US-layout keycode (confirmed live: rebinding "Turn Left" on the German
+keyboard above still wrote the same keycode `53` to disk as before this
+fix), so cross-layout capture safety is untouched; only the *displayed*
+character changed. Verified live, same German QWERTZ machine, same
+"Turn Left" row: pressing the key physically labeled "Z" now both binds
+*and displays* as "Z" — the exact confusion the user flagged is gone.
+Full `mvn clean test`/`mvn clean install` green throughout.
+
 ### 3.9 JSON serialization
 
 **Decision: [Jackson](https://github.com/FasterXML/jackson) (latest
@@ -5259,10 +5296,10 @@ once a component is actually being worked on.
       ENTER). First real use of VisUI (4.4).
 - [x] **Keybind Setup screen (2026-09-09)** — see 3.8/5.2's addenda:
       press-to-bind capture for every gameplay action, persists
-      immediately to `keybindings.json`. Key labels show the raw
-      `Input.Keys` (US-layout) name, not a localized one — see 3.8's
-      addendum for why that's an accepted v1 limitation, not an
-      oversight.
+      immediately to `keybindings.json`. Key labels are localized to the
+      player's real OS keyboard layout via GLFW (3.8's second addendum,
+      same day) — what's captured/persisted stays the physical/US-layout
+      keycode, only the displayed label changed.
 - [x] **jgitver wired in (2026-09-07)** — `.mvn/extensions.xml` +
       placeholder `<version>0</version>` in every pom.xml; `v0.0.1` tagged
       to see it compute a real version end to end. See 3.10 for the full

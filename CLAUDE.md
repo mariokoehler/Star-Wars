@@ -3148,6 +3148,29 @@ reproduce with real (non-scripted) keyboard input first to rule out
 anything SendKeys-specific before trusting this session's scripted-input
 repro to generalize.
 
+**Keybind label localization — implemented 2026-09-09, same day, right
+after the user actually played with the Keybind Settings screen and
+asked about the "Z"/"Y" mismatch.** See design.md 3.8's second addendum
+for the full writeup. Short version: new `core.input.KeyLabelResolver`/
+`KeyLabels` seam (defaults to the old `Input.Keys.toString` behavior, so
+`core` stays free of any GLFW dependency — it's shared with the headless
+`server`, which never touches a keyboard); the real fix is a new
+`lwjgl3.LocalizedKeyLabelResolver`, registered by `Lwjgl3Launcher` at
+startup, using GLFW's `glfwGetKeyName` to ask the OS what character the
+player's *actual* layout produces for a given key. Needed a
+GDX-keycode→GLFW-keycode reverse lookup that libGDX doesn't expose
+publicly (`DefaultLwjgl3Input.getGdxKeyCode` only goes GLFW→GDX) — built
+by calling that same public method for every GLFW keycode once, lazily,
+and inverting the result, rather than hand-copying libGDX's own ~100-case
+internal table (which could silently drift out of sync on a future
+libGDX version bump). **What's captured/persisted in `keybindings.json`
+is completely unchanged by this** — still the physical/US-layout keycode,
+confirmed live (same keycode `53` on disk before and after) — only the
+on-screen label changed. Verified live on the same German QWERTZ dev
+machine that first surfaced the mismatch: "Turn Left" now both binds
+*and displays* as "Z" when that physical key is pressed, not "Y". Full
+`mvn clean test`/`mvn clean install` green throughout.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

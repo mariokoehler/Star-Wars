@@ -3,6 +3,7 @@ package de.mkoehler.starwars.lwjgl3;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3Application;
 import com.badlogic.gdx.backends.lwjgl3.Lwjgl3ApplicationConfiguration;
 import de.mkoehler.starwars.StarWarsGame;
+import de.mkoehler.starwars.input.KeyLabels;
 import de.mkoehler.starwars.lwjgl3.mcp.McpBridge;
 
 import java.util.Arrays;
@@ -19,6 +20,11 @@ public class Lwjgl3Launcher {
         if (mcpMode) {
             McpBridge.start();
         }
+        // design.md 3.8's addendum: swaps KeyBindScreen's key labels from Input.Keys.toString's
+        // hardcoded US-layout name to whatever the player's actual OS keyboard layout produces.
+        // Safe to register this early - LocalizedKeyLabelResolver only touches Gdx.input lazily,
+        // on its first real getLabel() call, well after the window/backend exist.
+        KeyLabels.setResolver(new LocalizedKeyLabelResolver());
         createApplication();
     }
 
