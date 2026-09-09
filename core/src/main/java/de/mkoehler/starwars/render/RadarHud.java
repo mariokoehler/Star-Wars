@@ -2,6 +2,7 @@ package de.mkoehler.starwars.render;
 
 import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
@@ -9,9 +10,11 @@ import com.badlogic.gdx.graphics.g2d.TextureRegion;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.utils.Disposable;
+import de.mkoehler.starwars.sim.ArenaBounds;
 import de.mkoehler.starwars.sim.ShipStats;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Renders the radar/minimap HUD widget (design.md 2.14's rendering
@@ -45,6 +48,16 @@ import java.util.List;
  * geometry at all. This is the one thing about this widget that isn't just
  * pre-made art, so — same reasoning as {@link ScoreboardHud}/{@link Tooltip}
  * — it owns a live {@link BitmapFont} and needs {@link #dispose()} called.
+ * <p>
+ * Also draws the arena boundary itself (design.md — arena bounds' addendum)
+ * as up to 4 straight lines — one per edge that currently falls within the
+ * scope's displayed range, computed by {@link RadarScopeMath#computeBoundaryLine}
+ * and drawn the same "stretched tinted 1x1 pixel" way {@link Tooltip}/
+ * {@link FlatButton} draw a solid rectangle, since there's no pre-made art
+ * for a line whose length/position varies every frame. An edge more than
+ * the scope's current range away from the observer simply isn't drawn at
+ * all, same "not detected, not shown" treatment as an out-of-range contact
+ * — deep in the arena's interior, the scope shows no boundary lines.
  */
 public class RadarHud implements Disposable {
 
@@ -113,6 +126,19 @@ public class RadarHud implements Disposable {
     private static final float COORDS_X_FRACTION = 0.06f;
     private static final float COORDS_Y_FRACTION = 0.045f;
 
+    /**
+     * Arena-boundary line color (design.md — arena bounds' addendum) — a
+     * caution amber/yellow, echoing the in-world hazard-tape boundary wall
+     * texture (`ArenaBoundaryRenderer`) rather than reusing any color
+     * already meaningful elsewhere on this widget (the ring/cone's
+     * blue-green, the pulse indicator's green/red) — an intentional
+     * thematic tie-in, not just an arbitrary pick, though the exact shade
+     * is still untuned.
+     */
+    private static final Color BOUNDARY_LINE_COLOR = new Color(1f, 0.78f, 0.1f, 0.9f);
+    /** On-screen boundary line thickness, as a fraction of the widget's drawn size — untuned placeholder. */
+    private static final float BOUNDARY_LINE_THICKNESS_FRACTION = 3f / 512f;
+
     private final TextureRegion background;
     private final TextureRegion ring;
     private final TextureRegion cone;
@@ -121,6 +147,12 @@ public class RadarHud implements Disposable {
     private final TextureRegion indicatorGreen;
     private final TextureRegion indicatorRed;
     private final BitmapFont coordsFont = GameFonts.generateSfDistantGalaxy(COORDS_FONT_SIZE_PX);
+    /**
+     * A 1x1 white pixel, stretched and tinted to draw the boundary lines —
+     * same "no pre-made art since content/length is dynamic" technique as
+     * {@link Tooltip}/{@link FlatButton}'s own background box.
+     */
+    private final Texture boundaryLinePixel = createWhitePixel();
 
     /**
      * Creates the widget, reading its seven source textures from
@@ -195,6 +227,9 @@ public class RadarHud implements Disposable {
                 scopeCenterX, scopeCenterY, scopeRadius, observerAngleRadians);
         }
 
+        drawBoundaryLines(batch, observerXMeters, observerYMeters, maxRangeMeters,
+            scopeCenterX, scopeCenterY, scopeRadius, size);
+
         for (Vector2 contact : contactPositionsMeters) {
             drawContact(batch, observerXMeters, observerYMeters, contact.x, contact.y, maxRangeMeters,
                 scopeCenterX, scopeCenterY, scopeRadius, size);
@@ -235,6 +270,86 @@ public class RadarHud implements Disposable {
         String text = Math.round(observerXMeters) + ", " + Math.round(observerYMeters);
         coordsFont.setColor(COORDS_TEXT_COLOR);
         coordsFont.draw(batch, text, x + size * COORDS_X_FRACTION, y + size * COORDS_Y_FRACTION);
+    }
+
+    /**
+     * Draws up to 4 straight lines marking the arena boundary (design.md —
+     * arena bounds' addendum) — one per edge currently within
+     * {@code maxRangeMeters} of the observer, via
+     * {@link RadarScopeMath#computeBoundaryLine}. Top/bottom are horizontal
+     * (the edge's own axis is world X, perpendicular is world Y);
+     * left/right are vertical (axes swapped) — see that method's Javadoc
+     * for why this needs no rotation despite covering all 4 edges with one
+     * formula.
+     */
+    private void drawBoundaryLines(SpriteBatch batch, float observerXMeters, float observerYMeters,
+                                    float maxRangeMeters, float scopeCenterX, float scopeCenterY,
+                                    float scopeRadius, float widgetSize) {
+        float half = ArenaBounds.HALF_SIZE_METERS;
+        float thickness = widgetSize * BOUNDARY_LINE_THICKNESS_FRACTION;
+
+        // Top/bottom edges: horizontal lines, "along" = world X, "perpendicular" = world Y.
+        drawHorizontalBoundaryEdge(batch, observerXMeters, observerYMeters, half, -half, half,
+            maxRangeMeters, scopeCenterX, scopeCenterY, scopeRadius, thickness);
+        drawHorizontalBoundaryEdge(batch, observerXMeters, observerYMeters, -half, -half, half,
+            maxRangeMeters, scopeCenterX, scopeCenterY, scopeRadius, thickness);
+
+        // Left/right edges: vertical lines, "along" = world Y, "perpendicular" = world X.
+        drawVerticalBoundaryEdge(batch, observerYMeters, observerXMeters, half, -half, half,
+            maxRangeMeters, scopeCenterX, scopeCenterY, scopeRadius, thickness);
+        drawVerticalBoundaryEdge(batch, observerYMeters, observerXMeters, -half, -half, half,
+            maxRangeMeters, scopeCenterX, scopeCenterY, scopeRadius, thickness);
+    }
+
+    private void drawHorizontalBoundaryEdge(SpriteBatch batch, float observerAlong, float observerPerp,
+                                             float edgePerp, float edgeAlongMin, float edgeAlongMax,
+                                             float maxRangeMeters, float scopeCenterX, float scopeCenterY,
+                                             float scopeRadius, float thickness) {
+        Optional<RadarScopeMath.BoundaryLinePlacement> placement = RadarScopeMath.computeBoundaryLine(
+            observerAlong, observerPerp, edgePerp, edgeAlongMin, edgeAlongMax, scopeRadius, maxRangeMeters);
+        if (placement.isEmpty()) {
+            return;
+        }
+        RadarScopeMath.BoundaryLinePlacement line = placement.get();
+        float lineY = scopeCenterY + line.perpOffset() - thickness / 2f;
+        float startX = scopeCenterX + line.alongStart();
+        float endX = scopeCenterX + line.alongEnd();
+        drawTintedLine(batch, startX, lineY, endX - startX, thickness);
+    }
+
+    private void drawVerticalBoundaryEdge(SpriteBatch batch, float observerAlong, float observerPerp,
+                                           float edgePerp, float edgeAlongMin, float edgeAlongMax,
+                                           float maxRangeMeters, float scopeCenterX, float scopeCenterY,
+                                           float scopeRadius, float thickness) {
+        Optional<RadarScopeMath.BoundaryLinePlacement> placement = RadarScopeMath.computeBoundaryLine(
+            observerAlong, observerPerp, edgePerp, edgeAlongMin, edgeAlongMax, scopeRadius, maxRangeMeters);
+        if (placement.isEmpty()) {
+            return;
+        }
+        RadarScopeMath.BoundaryLinePlacement line = placement.get();
+        float lineX = scopeCenterX + line.perpOffset() - thickness / 2f;
+        float startY = scopeCenterY + line.alongStart();
+        float endY = scopeCenterY + line.alongEnd();
+        drawTintedLine(batch, lineX, startY, thickness, endY - startY);
+    }
+
+    private void drawTintedLine(SpriteBatch batch, float x, float y, float width, float height) {
+        // batch.getColor() returns its own live, mutable Color field, not a snapshot - copy it
+        // (cpy()) before setColor() below mutates that very object out from under us (same
+        // gotcha Tooltip/FlatButton's own render() already documents).
+        Color previousColor = batch.getColor().cpy();
+        batch.setColor(BOUNDARY_LINE_COLOR);
+        batch.draw(boundaryLinePixel, x, y, width, height);
+        batch.setColor(previousColor);
+    }
+
+    private static Texture createWhitePixel() {
+        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
+        pixmap.setColor(Color.WHITE);
+        pixmap.fill();
+        Texture texture = new Texture(pixmap);
+        pixmap.dispose();
+        return texture;
     }
 
     private void drawRing(SpriteBatch batch, boolean enabled, float rangeMeters, float maxRangeMeters,
@@ -307,5 +422,6 @@ public class RadarHud implements Disposable {
     @Override
     public void dispose() {
         coordsFont.dispose();
+        boundaryLinePixel.dispose();
     }
 }

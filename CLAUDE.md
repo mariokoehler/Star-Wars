@@ -3275,6 +3275,64 @@ numbers a real play-test already validated. **The radar coordinate
 readout is still unconfirmed** — the user's feedback covered the wall
 damage specifically, not the "x, y" text; revisit if they mention it.
 
+**Boundary wall art replaced with the user's own, same day.** User
+dropped a hand-made 1024×50px yellow/black hazard-tape texture at
+`assets-raw/backgrounds/Boundary.png` ("STAR WARS - DEATHMATCH /
+ATTENTION / DO NOT LEAVE !!!"), asked for it to replace the generated
+placeholder. Moved into the established `assets-raw/backgrounds/
+arena-boundary/arena_boundary.png` location (same convention as every
+other multi-file raw asset folder here) and copied to the runtime
+`assets/textures/backgrounds/arena_boundary.png` path, both overwriting
+the placeholder in place — no path/`GameAssets` constant changes needed.
+
+**Real bug avoided, not just a copy-paste swap:** the new art's aspect
+ratio (~20:1) is wildly different from the placeholder's (1.25:1), and
+`ArenaBoundaryRenderer`'s original `THICKNESS_METERS`/`TILE_LENGTH_METERS`
+were two independently-hardcoded constants that implicitly assumed the
+texture's own proportions matched their ratio — swapping the texture
+without also fixing this would have silently stretched the new art
+across the whole boundary. Fixed by deriving the band's thickness from
+the actual loaded texture's real pixel aspect ratio at construction time
+instead of a second hardcoded constant, so this can't recur on some
+future third texture either. `TILE_LENGTH_METERS` bumped 10m→50m so the
+new art's baked-in text has room to be legible per repeat (10 tiles
+across the 500m edge instead of 50). Verified the new texture still
+tiles seamlessly (composited 3 copies side by side, same rule used for
+the original placeholder) before wiring it in. Full `mvn clean install`
+green, boot-verified (real client, zero exceptions). **Not yet
+live-verified in flight** — the user is doing that pass themselves this
+time, per their own request.
+
+**Arena boundary lines on the radar scope — implemented same day.** User
+follow-up: "do you see any chance to render the boundaries on the radar
+as well? just as simple lines?" See design.md 2.16's newest addendum for
+the full writeup. Turned out simpler than expected: because the scope is
+north-up/fixed, the existing bearing-based contact-placement math
+(`RadarScopeMath.computeBlipPlacement`) reduces algebraically to a plain
+scaled identity once the trig cancels out, so an axis-aligned world line
+(every arena edge is one) needs no rotation on the scope either — just
+circle/segment intersection. New `RadarScopeMath.computeBoundaryLine(...)`
+(generic over which axis is "along"/"perpendicular" so one method covers
+all 4 edges), called from a new `RadarHud.drawBoundaryLines`, drawn as a
+stretched tinted 1×1 pixel (same technique as `Tooltip`/`FlatButton`) in
+a caution-amber color echoing the new hazard-tape wall texture's own
+palette. An edge beyond the ship's current radar range simply isn't
+drawn — deep in the arena interior, the scope shows no lines at all,
+same "not detected, not shown" rule as an out-of-range contact.
+6 new `RadarScopeMathTest` cases cover the chord geometry, including the
+near-a-corner case where the edge's own finite extent clips the line
+tighter than the circle alone would. Full `mvn clean test`/`mvn clean
+install` green. **Not live-verified this time** — the user was already
+mid-session live-testing the wall-damage/art-swap work on the same
+server while this was being built; rather than risk interfering with
+that (my own test client's handshakes were showing up in the same
+server log), this was left for their own next pass instead of chased
+further with automation. Also noticed, unprompted, while checking git
+status: a new untracked `assets-raw/asteroids/` folder — clearly the
+user's own concurrent work (maybe toward the still-open "obstacles"
+half of the arena-bounds question, design.md §7) — left completely
+alone, not investigated or touched.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

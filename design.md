@@ -2423,21 +2423,88 @@ expires on its own lifetime timer, rather than needing new hit-detection/
 despawn logic for a case that essentially never matters (nobody's out
 there to hit).
 
-**Visual — a glowing "energy containment field" band around the
-perimeter**, not an attempt to texture the (much larger, effectively
-unbounded) space beyond the wall — nothing ever gets out there to look
-at it, so the existing starfield/nebula parallax already covers it for
-free; only the wall itself needed art. New `render.ArenaBoundaryRenderer`
-tiles a single seamlessly-horizontally-tileable source texture
-(`assets/textures/backgrounds/arena_boundary.png`, one tile = 10m×8m of
-world space) around all 4 edges — the two vertical edges reuse the exact
-same tiled quad, rotated 90° around its own center, rather than a second
-authored orientation. Source art is a Python/Pillow placeholder (see
-CLAUDE.md for the generation technique) — glowing cyan vertical energy
-bars plus a bright horizontal "core" line, alpha-enveloped to fade
-top/bottom so it reads as a field cross-section rather than a hard-edged
-box; explicitly a placeholder the user may want to replace later, but
-confirmed live as looking good enough to plausibly keep.
+**Visual — a marker band around the perimeter**, not an attempt to
+texture the (much larger, effectively unbounded) space beyond the wall —
+nothing ever gets out there to look at it, so the existing starfield/
+nebula parallax already covers it for free; only the wall itself needed
+art. New `render.ArenaBoundaryRenderer` tiles a single seamlessly-
+horizontally-tileable source texture (`assets/textures/backgrounds/arena_boundary.png`)
+around all 4 edges — the two vertical edges reuse the exact same tiled
+quad, rotated 90° around its own center, rather than a second authored
+orientation. First version was a Python/Pillow placeholder (glowing cyan
+energy bars + a bright horizontal core line, alpha-enveloped to fade
+top/bottom) — confirmed live as looking good enough to plausibly keep,
+but replaced the same day anyway once the user hand-authored their own
+art (`assets-raw/backgrounds/arena-boundary/arena_boundary.png`): a
+1024×50px yellow/black hazard-tape strip reading "STAR WARS - DEATHMATCH
+/ ATTENTION / DO NOT LEAVE !!!" — opaque (no alpha channel at all, unlike
+the translucent placeholder it replaced), and a much thinner, more
+elongated strip (~20:1 aspect vs. the placeholder's 1.25:1).
+
+**The renderer needed a real fix, not just a texture swap, to avoid
+stretching the new art** — the original version hardcoded both
+`TILE_LENGTH_METERS` and `THICKNESS_METERS` as independent constants,
+implicitly assuming the source texture's aspect ratio matched their
+ratio (a fragile coupling the class's own Javadoc had flagged as a
+"must" the art keep up with). Fixed properly this time: `THICKNESS_METERS`
+is gone, replaced by an instance field `thicknessMeters` computed at
+construction time from the actual loaded texture's real pixel aspect
+ratio (`TILE_LENGTH_METERS * texture.getHeight() / texture.getWidth()`)
+— so a future re-authored texture, whatever its proportions, can never
+silently stretch/squash again, without this class needing a matching
+manual update. `TILE_LENGTH_METERS` itself moved to `50f` (10 tiles per
+500m edge, giving the new art's baked-in text room to actually be
+legible per repeat) — derived thickness at that tile length comes out to
+≈2.44m, a plausible "wide tape" width relative to a ~4m ship. Tiling
+seam-checked by compositing 3 copies side by side (same "always verify
+before trusting it in-game" rule as the placeholder's own creation) —
+clean, no visible seam. Build/tests green, boot-verified (real client,
+zero exceptions) — **not yet live-verified in actual flight**; the user
+is doing that pass themselves this time.
+
+**Addendum, same day — the arena boundary itself, drawn on the radar
+scope.** User's own follow-up: "do you see any chance to render the
+boundaries on the radar as well? just as simple lines?" Turned out
+simpler than a first glance suggests, precisely *because* the scope is
+north-up and fixed (2.14) — a contact's existing bearing-based placement
+(`RadarScopeMath.computeBlipPlacement`) reduces algebraically to a plain
+scaled identity (`offset = worldDelta * scopeRadius / maxRangeMeters`)
+once the sin/cos terms cancel out, so an axis-aligned world line (every
+arena edge is one) stays axis-aligned on the scope too — no rotation
+needed anywhere, just circle/line-segment intersection followed by that
+same scaling.
+
+New `RadarScopeMath.computeBoundaryLine(...)` — generic over which world
+axis is "along" an edge and which is "perpendicular" to it, so one method
+covers all 4 edges (top/bottom vs. left/right just swap which is which).
+Given the observer's position, the edge's fixed perpendicular coordinate,
+and the edge's own finite extent, it returns the visible chord — clipped
+to *both* the scope's circular range (an edge further than
+`maxRangeMeters` away isn't drawn at all, same "not detected, not shown"
+treatment as an out-of-range contact — deep in the arena's interior, the
+scope shows no boundary lines) *and* the edge's own finite length (so
+near a corner, the line correctly stops there rather than overshooting
+past where two edges actually meet). `RadarHud.drawBoundaryLines` calls
+it 4 times and draws each result as a stretched, tinted 1×1 pixel — same
+"no pre-made art since the content is dynamic" technique `Tooltip`/
+`FlatButton` already use for their own backgrounds, since a line's
+length and position change every frame. Color is a caution amber,
+deliberately echoing the in-world hazard-tape wall texture's own
+palette rather than reusing any of the scope's existing meaningful
+colors (ring/cone blue-green, indicator green/red) — a small intentional
+thematic tie-in.
+
+New `RadarScopeMathTest` cases cover: far beyond range (empty), directly
+on an edge (full chord, `perpOffset = 0`), a known 3-4-5-triangle
+distance (exact chord-length check), a near-corner case (clipped by the
+edge's own extent, not just the circle — confirmed by asserting the
+*shorter* of the two possible bounds wins), an edge whose visible range
+falls entirely past its own extent (empty), and the zero-max-range
+guard. Full `mvn clean test`/`mvn clean install` green. **Not
+live-verified this time** — the user was already mid-session testing
+the wall-damage/art-swap work live on the same server while this was
+being built, so rather than risk interfering with that, this was left
+for their own next pass instead of chasing it with automation.
 
 **Spawn/respawn points — resolving the other standing "always spawns at
 the same (0,0) point" limitation** (flagged repeatedly since the first
