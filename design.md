@@ -4191,6 +4191,70 @@ damage past each threshold, on both their own ship and (ideally) a
 second client's ship, and confirm the right plume(s) appear from the
 right attachment point(s) and trail behind correctly as the ship moves.
 
+**Smoke intensified, same day, once the user first saw it.** User
+edited `Smoke.p`'s emission rate 5→30 particles/sec in the particle
+editor ("a bit more intense") and asked for the runtime copy to be
+updated - a pure re-copy, `assets/textures/particles/smoke.p` overwritten
+from the corrected `assets-raw` source, no code change (same shape as
+the earlier light-effect `attached: true` fix - `DamageSmokeEffect`
+just plays back whatever `.p` file it's handed).
+
+**Radar pulse visual — "energy wave" — implemented 2026-09-09, same
+session.** New `render.RadarPulseEffect` wires the user's
+`Radar_Pulse.p`/`particle-wave.png` (copied to
+`assets/textures/particles/radar_pulse.p`/`particle-wave.png`, same
+"image alongside the `.p` file" convention as every particle effect
+here) to play once, centered on a ship, exactly when that ship's active
+radar pulse (2.14, the "R" keybind) actually fires. Unlike every earlier
+particle effect here, this one is authored **non-looping**
+(`continuous: false`, one particle, a 1-second life) — a single
+expanding, fading ring rather than a persistent emitter, so it needs no
+on/off *gating* logic at all, just a one-shot (re)start
+(`RadarPulseEffect.trigger()`) plus `ParticleEffect.isComplete()` to
+know when to stop drawing.
+
+**Trigger detection needed no new wire message or field at all** —
+`ShipState.getRadarPulseCooldownRemaining()` (design.md 2.14, already
+broadcast for every ship) only ever ticks *down* on its own; the only
+way it can go *up* frame-to-frame is the pulse actually firing again
+server-side. `Client` compares each ship's newly-received cooldown
+against its own last-held value and triggers the wave on any rising
+edge — for the local player (against `myRadarPulseCooldownRemaining`)
+and, since the exact same comparison works for any ship whose
+`ShipState` this client receives, **for every other visible ship too**,
+satisfying the "if trivial, also show it to other players" ask for
+free. A freshly-created `RemoteShip` seeds its own cooldown tracking
+from that first sighting's actual value (not `0`) so first-detecting an
+already-mid-cooldown (or exactly-pulsing) enemy can't spuriously fire a
+phantom wave.
+
+One shared `radar_pulse.p` template for every ship type
+(`GameAssets.RADAR_PULSE_PARTICLE`, queued unconditionally), same
+convention as the positioning lights/damage smoke. The authored effect
+is `attached: true`, so `RadarPulseEffect.update` re-centers it on the
+ship's current position every frame the wave is still playing, not just
+at the moment it was triggered — correct if the ship keeps moving while
+the ring expands.
+
+**Flagged, not fixed: a theoretical false-trigger risk from UDP
+reordering.** `WorldSnapshotMessage` travels over the unreliable/
+unordered UDP channel with no sequence numbers; if a newer (higher-
+remaining) snapshot were somehow processed before an older (lower-
+remaining) one from the same brief window, the cooldown could appear to
+tick "up" for a reason other than a real pulse. Not fixed — this class
+of looseness is already accepted elsewhere in this project's netcode
+(e.g. dead-reckoning tolerates ordinary jitter rather than sequencing
+every packet), and a real repeat false-positive has never been observed
+here. Worth revisiting only if it's ever actually seen live.
+
+**Verified:** full `mvn clean test` (153 tests, unaffected) and
+`mvn clean install` green; booted a real packaged client with zero
+exceptions (same splash-screen asset-load check as every other particle
+effect this session). **Not yet live-verified** — needs the user to
+actually trigger a real pulse and confirm the wave expands centered on
+their own ship, and (time permitting) that another player's pulse shows
+the same wave on their ship too.
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain

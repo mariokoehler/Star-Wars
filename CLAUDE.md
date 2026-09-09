@@ -2843,6 +2843,45 @@ yet live-verified** — needs the user to actually take damage past each
 threshold and confirm the right plume(s) show up and trail correctly,
 on both their own ship and someone else's.
 
+**Smoke intensified + radar pulse "energy wave" implemented, same
+day.** See design.md 4.3's newest addendum for the full writeup. User
+bumped `Smoke.p`'s emission rate 5→30/sec ("a bit more intense") — pure
+re-copy into `assets/textures/particles/smoke.p`, no code change, same
+shape as the earlier light-effect fix.
+
+New `render.RadarPulseEffect` plays the user's `Radar_Pulse.p`/
+`particle-wave.png` (a **non-looping** one-shot effect, unlike every
+other particle effect built so far this session) once, centered on a
+ship, exactly when that ship's radar pulse actually fires. **Needed no
+new wire message or field at all** — `ShipState.getRadarPulseCooldownRemaining()`
+only ever ticks down on its own, so a frame-to-frame *increase* is
+unambiguous proof the pulse just fired server-side; `Client` compares
+each ship's newly-received value against its last-held one and triggers
+the wave on that rising edge. Works identically for the local player
+and every other visible ship (a `RemoteShip` seeds its own tracked
+cooldown from its first-sighting value, not `0`, so first-detecting an
+already-pulsing enemy can't spuriously fire a phantom wave) —
+satisfying the user's "if trivial, also show it to other players" ask
+for free, since no new infrastructure was needed at all. One shared
+template for every ship type, same convention as lights/damage smoke.
+Flagged (not fixed): a theoretical false-trigger risk if two
+`WorldSnapshotMessage`s ever arrive out of order over UDP — accepted,
+same class of looseness this project's netcode already tolerates
+elsewhere, never actually observed.
+
+**Verified:** full `mvn clean test` (153 tests, unaffected) and `mvn
+clean install` green; booted a real packaged client with zero
+exceptions. **Gotcha hit during this session's own smoke-testing, not a
+code bug:** tried to boot a second test server for verification and hit
+`BindException: Address already in use` — turned out the user already
+had their own dedicated server running via `mvn -pl server compile
+exec:java` in a separate terminal. Correctly left that process (and
+their open particle editor) alone and only killed this session's own
+test instances, per the standing "investigate before touching/killing
+unfamiliar processes" rule — a real example of exactly the scenario that
+rule exists for. **Not yet live-verified** — needs the user to actually
+trigger a pulse and confirm the wave expands centered on their ship.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

@@ -43,6 +43,7 @@ import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.RadarHud;
+import de.mkoehler.starwars.render.RadarPulseEffect;
 import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipLightEffect;
 import de.mkoehler.starwars.render.ShipStatusHud;
@@ -335,6 +336,18 @@ public class Client implements Screen {
      * client can compute the same threshold crossing for anyone's ship.
      */
     private final List<DamageSmokePoint> myDamageSmoke = new ArrayList<>();
+    /**
+     * The local player's own radar pulse "energy wave" (design.md 2.14's
+     * rendering addendum) - one shared instance, built once in {@link #show()}
+     * (not per-spawn, unlike {@link #myThrusters}/{@link #myLights}/
+     * {@link #myDamageSmoke} - this effect doesn't depend on ship-type
+     * attachment metadata at all, just the ship's own center). Triggered by
+     * {@link #onWorldSnapshot} detecting a rising edge in
+     * {@link #myRadarPulseCooldownRemaining} (the only way this value can
+     * increase frame-to-frame is the pulse actually just firing server-side
+     * - it otherwise only ever ticks down).
+     */
+    private RadarPulseEffect myRadarPulseEffect;
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -471,6 +484,10 @@ public class Client implements Screen {
         missileLockReticleOuterRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Outer");
         missileLockReticleInnerRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Inner");
         missileLockReticleCenterRegion = projectilesAtlas.findRegion("Missile_Lock_Reticle_Center");
+        // One shared effect regardless of ship type, unlike myThrusters/myLights/myDamageSmoke -
+        // built once here rather than rebuilt per-spawn, since it depends on no ship-type-specific
+        // attachment metadata.
+        myRadarPulseEffect = createRadarPulseEffect();
 
         background = new ParallaxBackground(
             // false: this texture is owned by StarWarsGame#getAssets() (design.md - asset
@@ -719,7 +736,15 @@ public class Client implements Screen {
                 myShieldCurrent = state.getShieldCurrent();
                 myShieldMax = state.getShieldMax();
                 myTurretAimAngles = state.getTurretAimAngles();
-                myRadarPulseCooldownRemaining = state.getRadarPulseCooldownRemaining();
+                // A cooldown can only ever tick down on its own - the only way it goes UP
+                // frame-to-frame is the pulse actually firing again server-side just now, so this
+                // rising edge is the trigger for the one-shot wave effect (design.md 2.14's
+                // rendering addendum) - no separate "pulse fired" message needed.
+                float newRadarPulseCooldown = state.getRadarPulseCooldownRemaining();
+                if (newRadarPulseCooldown > myRadarPulseCooldownRemaining) {
+                    myRadarPulseEffect.trigger();
+                }
+                myRadarPulseCooldownRemaining = newRadarPulseCooldown;
                 myMissileLockTargetPlayerId = state.getMissileLockTargetPlayerId();
                 myMissileLockAcquired = state.isMissileLockAcquired();
                 myTargetedByMissileLock = state.isTargetedByMissileLock();
@@ -731,8 +756,13 @@ public class Client implements Screen {
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
             RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id -> {
                 ShipStats remoteStats = ShipStats.forType(state.getShipType());
+                // Seeded with this ship's current cooldown (not 0) so a ship first seen mid-cooldown,
+                // or the instant it pulses, doesn't spuriously fire the wave effect the moment it's
+                // first detected - see the edge-detection comment below for why that would otherwise
+                // look identical to a real trigger.
                 return new RemoteShip(x, y, state.getAngle(), state.getShipType(),
-                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats));
+                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats),
+                    createRadarPulseEffect(), state.getRadarPulseCooldownRemaining());
             });
             ship.updateFromSnapshot(x, y, state.getAngle(),
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
@@ -742,6 +772,12 @@ public class Client implements Screen {
             ship.thrusting = state.isThrusting();
             ship.hullCurrent = state.getHullCurrent();
             ship.hullMax = state.getHullMax();
+            // Same rising-edge trigger as the local player's own pulse effect above.
+            float newShipRadarPulseCooldown = state.getRadarPulseCooldownRemaining();
+            if (newShipRadarPulseCooldown > ship.radarPulseCooldownRemaining) {
+                ship.radarPulseEffect.trigger();
+            }
+            ship.radarPulseCooldownRemaining = newShipRadarPulseCooldown;
         }
         ships.keySet().removeIf(id -> !presentShipIds.contains(id));
 
@@ -1298,6 +1334,8 @@ public class Client implements Screen {
             float shipDamageFraction = ship.hullMax > 0f ? 1f - (ship.hullCurrent / ship.hullMax) : 0f;
             updateAndDrawDamageSmoke(ship.damageSmoke, stats.getPixelsPerMeter(),
                 ship.renderX, ship.renderY, ship.renderAngle, shipDamageFraction, deltaTime);
+            ship.radarPulseEffect.update(ship.renderX, ship.renderY, deltaTime);
+            ship.radarPulseEffect.draw(batch);
         }
         batch.setColor(Color.WHITE);
     }
@@ -1388,6 +1426,8 @@ public class Client implements Screen {
         updateAndDrawLights(myLights, myStats.getPixelsPerMeter(), x, y, angle, deltaTime);
         float myDamageFraction = myHullMax > 0f ? 1f - (myHullCurrent / myHullMax) : 0f;
         updateAndDrawDamageSmoke(myDamageSmoke, myStats.getPixelsPerMeter(), x, y, angle, myDamageFraction, deltaTime);
+        myRadarPulseEffect.update(x, y, deltaTime);
+        myRadarPulseEffect.draw(batch);
     }
 
     /**
@@ -1583,6 +1623,19 @@ public class Client implements Screen {
             }
         });
         return points;
+    }
+
+    /**
+     * Creates one radar pulse "energy wave" instance (design.md 2.14's
+     * rendering addendum) from the shared template - one call for the local
+     * player's own ({@link #myRadarPulseEffect}, from {@link #show()}), and
+     * one more per {@link RemoteShip} the first time it's seen.
+     *
+     * @return a fresh, not-yet-triggered radar pulse effect
+     */
+    private RadarPulseEffect createRadarPulseEffect() {
+        ParticleEffect template = game.getAssets().get(GameAssets.RADAR_PULSE_PARTICLE, ParticleEffect.class);
+        return new RadarPulseEffect(template);
     }
 
     private void drawProjectiles() {
@@ -1838,19 +1891,26 @@ public class Client implements Screen {
         final List<ShipLight> lights;
         /** This ship's own damage smoke points (design.md — damage smoke), built once at creation - empty for a ship type with none configured. */
         final List<DamageSmokePoint> damageSmoke;
+        /** This ship's own radar pulse "energy wave" (design.md 2.14's rendering addendum), built once at creation - every ship type gets one, unlike thrusters/lights/damage smoke. */
+        final RadarPulseEffect radarPulseEffect;
         /** Whether this ship is currently holding its forward-thrust input, straight from the latest {@code ShipState} - not extrapolated, just held. */
         boolean thrusting;
         // Hull current/max, straight from the latest ShipState - not extrapolated, just held,
         // same as turretAimAngles/thrusting above - drives damageSmoke's threshold checks.
         float hullCurrent;
         float hullMax;
+        /** The last-known radar pulse cooldown, seeded at creation (see the call site) so the very first sighting of this ship can't spuriously trigger {@link #radarPulseEffect}. */
+        float radarPulseCooldownRemaining;
 
         RemoteShip(float x, float y, float angle, ShipType shipType, List<EngineThruster> thrusters,
-                   List<ShipLight> lights, List<DamageSmokePoint> damageSmoke) {
+                   List<ShipLight> lights, List<DamageSmokePoint> damageSmoke,
+                   RadarPulseEffect radarPulseEffect, float radarPulseCooldownRemaining) {
             this.shipType = shipType;
             this.thrusters = thrusters;
             this.lights = lights;
             this.damageSmoke = damageSmoke;
+            this.radarPulseEffect = radarPulseEffect;
+            this.radarPulseCooldownRemaining = radarPulseCooldownRemaining;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;

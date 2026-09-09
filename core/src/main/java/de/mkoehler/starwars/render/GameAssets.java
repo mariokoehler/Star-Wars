@@ -75,6 +75,15 @@ public final class GameAssets {
      */
     public static final String DAMAGE_SMOKE_PARTICLE = particleEffectPath("smoke");
 
+    /**
+     * The radar pulse "energy wave" particle effect (design.md 2.14's
+     * rendering addendum) — a one-shot (non-looping) effect played once
+     * each time a ship's active radar pulse actually fires, same
+     * one-shared-template-for-every-ship-type reasoning as the positioning
+     * lights/damage smoke above.
+     */
+    public static final String RADAR_PULSE_PARTICLE = particleEffectPath("radar_pulse");
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -157,6 +166,7 @@ public final class GameAssets {
         manager.load(LIGHT_RED_PARTICLE, ParticleEffect.class);
         manager.load(LIGHT_GREEN_PARTICLE, ParticleEffect.class);
         manager.load(DAMAGE_SMOKE_PARTICLE, ParticleEffect.class);
+        manager.load(RADAR_PULSE_PARTICLE, ParticleEffect.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);
