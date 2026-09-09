@@ -3029,6 +3029,29 @@ log showed it resolving and connecting successfully to the real host
 (`46.128.37.154:45625/45626`), confirming both the new default and that
 the NAS is reachable there.
 
+**Engine trail now draws under the hull — 2026-09-09, same session.**
+See design.md — engine particle effects' addendum. User asked whether
+particles/sprites have a draw order and whether the thruster could look
+like it originates underneath the ship. Answer: `SpriteBatch` is pure
+painter's algorithm (no depth buffer), so this was just reordering two
+existing calls - `updateAndDrawThrusters` now runs *before* the hull
+draw in both `drawLocalShip`/`drawRemoteShips`, so the opaque hull
+occludes whatever part of the flame overlaps it. Every other effect
+keeps its existing order; only the thruster was asked about. Verified:
+full `mvn clean test` (154 tests) and `mvn clean install` green.
+**Deliberately not live-verified this time** — skipped the usual
+SendKeys-driven check since the user had just reported their own
+keyboard input accidentally landing in a game window this session
+opened; didn't want to risk the same interference again right away.
+Needs the user to confirm live.
+
+**Falcon thruster re-tuned + its ENGINE attachment point moved, same
+day.** User updated `Thruster_Falcon.p` (particle editor) and separately
+moved the Falcon's `ENGINE` point aft in `falcon.meta.json` via
+dev-tools (y −121→−111) - pure asset re-copy into `assets/textures/
+particles/thruster_falcon.p`, no code change. Verified: `mvn clean
+install` green, real client boot, zero exceptions.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

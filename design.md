@@ -4489,6 +4489,44 @@ this project's other source art, per the standing convention, but never
 copied into `assets/textures/` or referenced by any game code, exactly
 as requested.
 
+**Engine trail now draws underneath the hull, not on top — 2026-09-09,
+same session.** User asked whether particle effects and sprites have a
+draw order at all, and whether the thruster could be made to look like
+it originates from underneath the ship, only becoming visible once it
+extends past the tail. Answered directly: `SpriteBatch` has no depth
+buffer for 2D — it's pure painter's algorithm, whatever's issued first
+ends up underneath whatever's issued after — so this only needed
+reordering two existing calls, not new capability. `drawLocalShip`/
+`drawRemoteShips` now call `updateAndDrawThrusters` *before* drawing the
+hull sprite, not after; the hull's own opaque pixels then paint over
+whatever part of the flame overlaps the ship's silhouette, leaving only
+the portion actually extending past the tail visible - reading as the
+engine sitting behind/underneath the hull rather than floating on top
+of it. Every other effect (lights, damage smoke, radar pulse, muzzle
+flash, turrets) keeps its existing after-the-hull order; only the
+thruster was asked about.
+
+Verified: full `mvn clean test` (154 tests, unaffected - a pure
+draw-order change, no logic touched) and `mvn clean install` green.
+**Not live-verified this time** — deliberately skipped the usual
+SendKeys-driven live check, since the user had just reported their own
+concurrent keyboard input accidentally landing in a game window this
+session opened; re-running that same kind of automation immediately
+afterward risked the same interference. Needs the user to fly a ship
+with an engine effect and confirm the flame now reads as emerging from
+underneath the hull.
+
+**Falcon thruster re-tuned, same day.** User updated `Thruster_Falcon.p`
+in the particle editor (emission/velocity/spawn-shape/scale changes) and
+separately moved the Falcon's own `ENGINE` attachment point further aft
+(`falcon.meta.json`, y −121→−111, via the `dev-tools` sprite editor) —
+pure re-copy of the `.p` file into `assets/textures/particles/
+thruster_falcon.p`, no code change, same shape as every other particle
+asset update this session (`Smoke.p`, `Muzzle_Flash.p`). Verified: full
+`mvn clean install` green, a real client boot with zero exceptions
+(confirms both the updated effect and the moved attachment point parse
+correctly).
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain

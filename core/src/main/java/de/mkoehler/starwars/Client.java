@@ -1422,6 +1422,14 @@ public class Client implements Screen {
             float widthPixels = region.getRegionWidth() * screenScale;
             float heightPixels = region.getRegionHeight() * screenScale;
 
+            // Drawn before the hull (design.md — engine particle effects' addendum), same
+            // "opaque hull occludes the overlapping part of the flame" reasoning as
+            // drawLocalShip - not affected by the OTHER_SHIP_TINT color above either way, since
+            // ParticleEmitter draws each Particle (a Sprite) with its own already-baked vertex
+            // color, unlike the TextureRegion-based hull/turret draw calls below, which do read
+            // the batch's current default color.
+            updateAndDrawThrusters(ship.thrusters, stats.getPixelsPerMeter(),
+                ship.renderX, ship.renderY, ship.renderAngle, ship.thrusting, deltaTime);
             // The source art faces up/north when unrotated (design.md 4.3), and the server's
             // ShipControlSystem treats angle 0 as "facing north" too - so the ship's angle
             // maps directly onto the region's rotation with no offset needed.
@@ -1432,12 +1440,6 @@ public class Client implements Screen {
                 1f, 1f,
                 ship.renderAngle * MathUtils.radiansToDegrees);
             drawTurrets(ship.shipType, stats, ship.renderX, ship.renderY, ship.renderAngle, ship.turretAimAngles);
-            // Not affected by the OTHER_SHIP_TINT color above - ParticleEmitter draws each
-            // Particle (a Sprite) with its own already-baked vertex color, unlike the
-            // TextureRegion-based hull/turret draw calls above, which do read the batch's
-            // current default color.
-            updateAndDrawThrusters(ship.thrusters, stats.getPixelsPerMeter(),
-                ship.renderX, ship.renderY, ship.renderAngle, ship.thrusting, deltaTime);
             updateAndDrawLights(ship.lights, stats.getPixelsPerMeter(),
                 ship.renderX, ship.renderY, ship.renderAngle, deltaTime);
             float shipDamageFraction = ship.hullMax > 0f ? 1f - (ship.hullCurrent / ship.hullMax) : 0f;
@@ -1523,6 +1525,12 @@ public class Client implements Screen {
         float widthPixels = region.getRegionWidth() * screenScale;
         float heightPixels = region.getRegionHeight() * screenScale;
 
+        // Drawn before the hull (design.md — engine particle effects' addendum), not after: the
+        // opaque hull sprite then paints over whatever part of the flame overlaps it, so only the
+        // portion actually extending past the tail is visible - reads as the engine sitting
+        // underneath/behind the hull instead of floating on top of it.
+        updateAndDrawThrusters(myThrusters, myStats.getPixelsPerMeter(), x, y, angle,
+            Gdx.input.isKeyPressed(Input.Keys.W), deltaTime);
         batch.draw(region,
             x - widthPixels / 2f, y - heightPixels / 2f,
             widthPixels / 2f, heightPixels / 2f,
@@ -1530,8 +1538,6 @@ public class Client implements Screen {
             1f, 1f,
             angle * MathUtils.radiansToDegrees);
         drawTurrets(myShipType, myStats, x, y, angle, myTurretAimAngles);
-        updateAndDrawThrusters(myThrusters, myStats.getPixelsPerMeter(), x, y, angle,
-            Gdx.input.isKeyPressed(Input.Keys.W), deltaTime);
         updateAndDrawLights(myLights, myStats.getPixelsPerMeter(), x, y, angle, deltaTime);
         float myDamageFraction = myHullMax > 0f ? 1f - (myHullCurrent / myHullMax) : 0f;
         updateAndDrawDamageSmoke(myDamageSmoke, myStats.getPixelsPerMeter(), x, y, angle, myDamageFraction, deltaTime);

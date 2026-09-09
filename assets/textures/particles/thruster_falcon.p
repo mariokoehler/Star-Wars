@@ -8,20 +8,20 @@ lowMax: 200.0
 min: 0
 max: 2000
 - Emission - 
-lowMin: 400.0
-lowMax: 400.0
-highMin: 500.0
-highMax: 500.0
+lowMin: 100.0
+lowMax: 100.0
+highMin: 300.0
+highMax: 300.0
 relative: false
 scalingCount: 1
 scaling0: 1.0
 timelineCount: 1
 timeline0: 0.0
 - Life - 
-lowMin: 100.0
-lowMax: 100.0
-highMin: 300.0
-highMax: 300.0
+lowMin: 70.0
+lowMax: 70.0
+highMin: 100.0
+highMax: 120.0
 relative: false
 scalingCount: 1
 scaling0: 1.0
@@ -36,7 +36,7 @@ active: false
 - Y Offset - 
 active: false
 - Spawn Shape - 
-shape: line
+shape: point
 - Spawn Width - 
 lowMin: 0.0
 lowMax: 0.0
@@ -60,12 +60,12 @@ timeline0: 0.0
 - X Scale - 
 lowMin: 0.0
 lowMax: 0.0
-highMin: 17.0
-highMax: 20.0
+highMin: 70.0
+highMax: 90.0
 relative: false
 scalingCount: 2
 scaling0: 1.0
-scaling1: 0.3559322
+scaling1: 0.45762506
 timelineCount: 2
 timeline0: 0.0
 timeline1: 1.0
@@ -73,10 +73,10 @@ timeline1: 1.0
 active: false
 - Velocity - 
 active: true
-lowMin: 100.0
-lowMax: 100.0
-highMin: 100.0
-highMax: 100.0
+lowMin: 10.0
+lowMax: 10.0
+highMin: 200.0
+highMax: 200.0
 relative: false
 scalingCount: 1
 scaling0: 1.0
@@ -121,7 +121,7 @@ colors7: 1.0
 colors8: 1.0
 timelineCount: 3
 timeline0: 0.0
-timeline1: 0.7122806
+timeline1: 0.68421066
 timeline2: 1.0
 - Transparency - 
 lowMin: 0.0
@@ -131,13 +131,13 @@ highMax: 1.0
 relative: false
 scalingCount: 4
 scaling0: 0.0
-scaling1: 0.40677863
-scaling2: 0.42372778
+scaling1: 0.66101485
+scaling2: 0.16948946
 scaling3: 0.0
 timelineCount: 4
 timeline0: 0.0
-timeline1: 0.4166671
-timeline2: 0.7291671
+timeline1: 0.31944403
+timeline2: 0.6319449
 timeline3: 1.0
 - Options - 
 attached: true
@@ -146,7 +146,8 @@ aligned: false
 additive: true
 behind: false
 premultipliedAlpha: false
-spriteMode: single
+spriteMode: random
 - Image Paths -
 pre_particle.png
+particle-fire.png
 
