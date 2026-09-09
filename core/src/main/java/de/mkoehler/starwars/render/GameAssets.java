@@ -48,6 +48,7 @@ public final class GameAssets {
     public static final String HUD_DISTRIBUTION_ENGINE = "textures/hud/hud_distribution_engine.png";
     public static final String SCOREBOARD_PANEL = "textures/hud/scoreboard.png";
     public static final String AFTER_DEATH_DIALOG_BACKGROUND = "textures/after_death/Dialog_Background.png";
+    public static final String KEYBINDS_BACKGROUND = "textures/hud/hud_keybinds_background.png";
 
     public static final String RADAR_BACKGROUND = "textures/hud/hud_radar_background.png";
     public static final String RADAR_RING = "textures/hud/hud_radar_ring.png";
@@ -181,6 +182,7 @@ public final class GameAssets {
         manager.load(HUD_DISTRIBUTION_ENGINE, Texture.class);
         manager.load(SCOREBOARD_PANEL, Texture.class);
         manager.load(AFTER_DEATH_DIALOG_BACKGROUND, Texture.class);
+        manager.load(KEYBINDS_BACKGROUND, Texture.class);
         manager.load(RADAR_BACKGROUND, Texture.class);
         manager.load(RADAR_RING, Texture.class);
         manager.load(RADAR_CONE, Texture.class);

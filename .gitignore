@@ -56,6 +56,7 @@ Thumbs.db
 ## server/client happens to be launched from, not just server/target or lwjgl3/target:
 data/accounts.json
 connection-config.json
+keybindings.json
 
 ## Old Gradle setup, kept around only until the Maven migration is confirmed working:
 /_gradle-legacy-backup/

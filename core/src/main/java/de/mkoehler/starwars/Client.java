@@ -18,6 +18,8 @@ import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.utils.ScreenUtils;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import com.badlogic.gdx.utils.viewport.Viewport;
+import de.mkoehler.starwars.input.GameAction;
+import de.mkoehler.starwars.input.KeyBindings;
 import de.mkoehler.starwars.net.NetworkClient;
 import de.mkoehler.starwars.net.NetworkConstants;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
@@ -263,6 +265,16 @@ public class Client implements Screen {
     private final StarWarsGame game;
     private final ShipType selectedShipType;
     private final ConnectionInfo connectionInfo;
+
+    /**
+     * The player's shared, remappable keybinds (design.md 3.8) — read via
+     * {@link KeyBindings#isPressed}/{@link KeyBindings#isJustPressed} for
+     * every gameplay action below, in place of a hardcoded
+     * {@code Gdx.input.isKeyPressed(Input.Keys.*)}. <b>ESC (leave match)
+     * stays hardcoded</b>, deliberately never routed through here — see
+     * {@link GameAction}'s Javadoc for why.
+     */
+    private KeyBindings keyBindings;
 
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
@@ -515,6 +527,8 @@ public class Client implements Screen {
 
         Box2D.init();
         long box2dInitMillis = System.currentTimeMillis();
+
+        keyBindings = game.getKeyBindings();
 
         batch = new SpriteBatch();
         shipsAtlas = game.getAssets().get(GameAssets.SHIPS_ATLAS, TextureAtlas.class);
@@ -1062,10 +1076,10 @@ public class Client implements Screen {
         }
 
         if (myBody != null) {
-            boolean thrustForward = Gdx.input.isKeyPressed(Input.Keys.W);
-            boolean turnLeft = Gdx.input.isKeyPressed(Input.Keys.A);
-            boolean turnRight = Gdx.input.isKeyPressed(Input.Keys.D);
-            boolean firing = Gdx.input.isKeyPressed(Input.Keys.SPACE);
+            boolean thrustForward = keyBindings.isPressed(GameAction.THRUST_FORWARD);
+            boolean turnLeft = keyBindings.isPressed(GameAction.TURN_LEFT);
+            boolean turnRight = keyBindings.isPressed(GameAction.TURN_RIGHT);
+            boolean firing = keyBindings.isPressed(GameAction.FIRE_WEAPON);
 
             networkClient.sendUDP(new PlayerInputMessage(thrustForward, turnLeft, turnRight, firing));
             predictLocalShip(thrustForward, turnLeft, turnRight, deltaTime);
@@ -1077,22 +1091,22 @@ public class Client implements Screen {
                 networkClient.sendTCP(new LeaveMatchRequest());
             }
 
-            if (Gdx.input.isKeyJustPressed(Input.Keys.T)) {
+            if (keyBindings.isJustPressed(GameAction.TOGGLE_TURRET)) {
                 networkClient.sendTCP(new TurretToggleMessage());
             }
 
-            // Radar pulse (design.md 2.14, "R") - no local cooldown gating needed, same as every
+            // Radar pulse (design.md 2.14) - no local cooldown gating needed, same as every
             // other server-validated action here: the server just drops it harmlessly if the
             // pulse is disabled for this ship type or still on cooldown.
-            if (Gdx.input.isKeyJustPressed(Input.Keys.R)) {
+            if (keyBindings.isJustPressed(GameAction.RADAR_PULSE)) {
                 networkClient.sendTCP(new RadarPulseRequest());
             }
 
-            // Missile fire (design.md — missiles, "M") - same "no local gating, let the server
+            // Missile fire (design.md — missiles) - same "no local gating, let the server
             // just drop an invalid request harmlessly" treatment as the radar pulse above: the
             // client never predicts a lock or a missile shot, only sends the request and waits for
             // confirmation via the next ShipState/ProjectileState (same as a turret).
-            if (Gdx.input.isKeyJustPressed(Input.Keys.M)) {
+            if (keyBindings.isJustPressed(GameAction.FIRE_MISSILE)) {
                 networkClient.sendTCP(new MissileFireRequest());
             }
         }
@@ -1121,7 +1135,7 @@ public class Client implements Screen {
         batch.begin();
         drawHud();
         drawWarningMessage();
-        if (Gdx.input.isKeyPressed(Input.Keys.TAB)) {
+        if (keyBindings.isPressed(GameAction.SHOW_SCOREBOARD)) {
             drawScoreboard();
         }
         batch.end();
@@ -1185,9 +1199,10 @@ public class Client implements Screen {
     }
 
     /**
-     * Reads the power-distribution keybinds (design.md 5.3: J/I/L to shift
-     * toward Shields/Weapons/Engines — matching the HUD's left-to-right
-     * Shields/Weapons/Engines bar order, K to reset). A tap shifts the
+     * Reads the power-distribution keybinds (design.md 5.3: J/I/L by
+     * default, remappable via {@link KeybindScreen} — design.md 3.8 — to
+     * shift toward Shields/Weapons/Engines, matching the HUD's left-to-right
+     * Shields/Weapons/Engines bar order; K by default to reset). A tap shifts the
      * split by exactly one increment ({@link #adjustPower}); holding a key
      * for {@link #HOLD_TO_MAXIMIZE_SECONDS} instead jumps that system
      * straight to its maximum ({@link #maximizePower}) — tracked per key via
@@ -1203,22 +1218,22 @@ public class Client implements Screen {
      *                  accumulate how long a key has been held
      */
     private void handlePowerDistributionInput(float deltaTime) {
-        handlePowerKey(Input.Keys.J, PowerSystem.SHIELDS, shieldsHold, deltaTime);
-        handlePowerKey(Input.Keys.I, PowerSystem.WEAPONS, weaponsHold, deltaTime);
-        handlePowerKey(Input.Keys.L, PowerSystem.ENGINES, enginesHold, deltaTime);
+        handlePowerKey(GameAction.POWER_SHIELDS, PowerSystem.SHIELDS, shieldsHold, deltaTime);
+        handlePowerKey(GameAction.POWER_WEAPONS, PowerSystem.WEAPONS, weaponsHold, deltaTime);
+        handlePowerKey(GameAction.POWER_ENGINES, PowerSystem.ENGINES, enginesHold, deltaTime);
 
-        if (Gdx.input.isKeyJustPressed(Input.Keys.K)) {
+        if (keyBindings.isJustPressed(GameAction.POWER_RESET)) {
             myPowerDistribution = myPowerDistribution.reset();
             networkClient.sendTCP(new PowerAdjustMessage(PowerAdjustMessage.Kind.RESET, null));
         }
     }
 
-    private void handlePowerKey(int keycode, PowerSystem target, PowerKeyHold hold, float deltaTime) {
-        if (Gdx.input.isKeyJustPressed(keycode)) {
+    private void handlePowerKey(GameAction action, PowerSystem target, PowerKeyHold hold, float deltaTime) {
+        if (keyBindings.isJustPressed(action)) {
             adjustPower(target);
         }
 
-        if (Gdx.input.isKeyPressed(keycode)) {
+        if (keyBindings.isPressed(action)) {
             hold.heldSeconds += deltaTime;
             if (!hold.maximized && hold.heldSeconds >= HOLD_TO_MAXIMIZE_SECONDS) {
                 hold.maximized = true;
@@ -1530,7 +1545,7 @@ public class Client implements Screen {
         // portion actually extending past the tail is visible - reads as the engine sitting
         // underneath/behind the hull instead of floating on top of it.
         updateAndDrawThrusters(myThrusters, myStats.getPixelsPerMeter(), x, y, angle,
-            Gdx.input.isKeyPressed(Input.Keys.W), deltaTime);
+            keyBindings.isPressed(GameAction.THRUST_FORWARD), deltaTime);
         batch.draw(region,
             x - widthPixels / 2f, y - heightPixels / 2f,
             widthPixels / 2f, heightPixels / 2f,

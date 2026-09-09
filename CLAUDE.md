@@ -3052,6 +3052,102 @@ dev-tools (y −121→−111) - pure asset re-copy into `assets/textures/
 particles/thruster_falcon.p`, no code change. Verified: `mvn clean
 install` green, real client boot, zero exceptions.
 
+**Keybind Settings screen — implemented 2026-09-09.** See design.md
+3.8/5.2 for the full writeup. Long-standing open TODO, finally built:
+every gameplay action is now remappable, persisted to a new local
+`keybindings.json` (gitignored, same treatment as `connection-config.json`).
+New `core.input` package: `GameAction` (12 remappable actions — every
+gameplay key this project has ever added, W/A/D/SPACE/T/M/R/J/I/L/K/TAB
+— deliberately excluding ESC/cursor keys/ENTER per the user's own
+instruction), `KeyBindings` (get/rebind-with-conflict-swap/resetToDefaults/
+isPressed/isJustPressed), `KeyBindingsConfig`/`KeyBindingsStore` (Jackson
+bean + load/save, same shape as `net.ConnectionConfigStore`). Owned for
+the app's whole run by `StarWarsGame.getKeyBindings()` — **loaded in
+`create()`, not as a field initializer**, since `KeyBindings.load()`
+touches `Gdx.files`, not yet set up when `StarWarsGame`'s constructor
+itself runs (it's built as a constructor argument to `Lwjgl3Application`,
+before that backend initializes any `Gdx.*` statics) — caught by
+reasoning through the actual construction order before ever running the
+app, not by hitting the resulting NPE live. `Client` now reads every one
+of its former hardcoded `Gdx.input.isKeyPressed(Input.Keys.*)` calls via
+`keyBindings.isPressed`/`isJustPressed` instead — ESC (leave match) stays
+hardcoded, per spec.
+
+New `KeybindScreen`, reachable only from `ShipSelectionScreen` (a new
+"KEYBINDS" button, bottom-left mirroring Start's bottom-right placement,
+or **F12**) — exactly the two entry points asked for. Click a row's key
+button to enter "listening" mode; the next keypress rebinds it (ESC
+cancels instead); every change saves immediately, no separate Save
+button. **Deviates from design.md 4.4's old assumption that this screen
+would need VisUI like the Connect Dialog** — it needs neither text entry
+nor any other widget VisUI adds value for, just clickable rows and a
+one-key capture, so it follows `ShipSelectionScreen`'s existing raw-
+`SpriteBatch` + `Gdx.input`-polling style instead (design.md corrected to
+match, not just described after the fact). New generated background art
+(`assets/textures/hud/hud_keybinds_background.png`, Python/Pillow + "SF
+Distant Galaxy", matching `ConnectScreen`'s navy/gold palette sampled
+directly from `Connect_Dialog.png`) plus a new reusable `render.FlatButton`
+(a live-drawn, tintable rectangle button with centered text — generalizes
+`Tooltip`'s "no pre-made art, content is dynamic" technique from a
+floating tooltip to a persistent button), reused by `ShipSelectionScreen`'s
+own new "KEYBINDS" button too.
+
+**Real, live confirmation of a design.md 3.8 caveat that had only ever
+been theoretical until now:** libGDX/GLFW reports keycodes by physical
+key position on a US reference layout, not the character the OS layout
+actually produces. This dev machine runs a German QWERTZ layout —
+pressing the physical key labeled "Z" (swapped with "Y" relative to a US
+layout) correctly captured and bound as, and displayed as, "Y". Capture
+itself is layout-correct by construction (exactly the point of relying
+on physical keycodes); only the *label* can be locale-misleading — an
+accepted, flagged v1 limitation (design.md 3.8's addendum), not fixed
+this session.
+
+**Verified live, end-to-end, via the usual PowerShell `SendKeys`/
+`SetForegroundWindow`/`PrintWindow` technique, including a real client
+restart:** F12 from Ship Selection opened the screen; clicking a row
+entered listening mode; pressing a key rebound it and
+`keybindings.json` updated immediately; **fully closing and relaunching
+the client, then reopening the screen, showed the same rebound key** —
+real persistence confirmed across a restart, not just in-session. Full
+`mvn clean test` and a full `mvn clean install`/package (all 4 modules)
+green throughout. **Not independently click-verified live:** "RESET TO
+DEFAULTS" and "BACK" specifically — repeated screen-coordinate mouse
+clicks kept missing, traced to this environment's 125% Windows display
+scaling interacting with `SetCursorPos`/`ClientToScreen` (the same class
+of DPI gotcha already documented above for `GetWindowRect`/`CopyFromScreen`
+screenshot capture, apparently also affecting synthetic click injection,
+not just capture). "BACK"'s equivalent ESC path *was* verified live
+(correctly returned to Ship Selection); both buttons share the identical,
+already-proven `FlatButton.contains`/`Gdx.input.isButtonJustPressed`
+click pattern the row buttons used successfully, so this is a narrow
+mouse-precision verification gap in this environment, not an unverified
+code path. **General rule worth remembering: `SetProcessDPIAware()` (or
+its absence) must match between the call that computes a click's target
+coordinate and whatever else reads window geometry in that same
+sequence — mixing a DPI-aware `GetClientRect`/`PrintWindow` capture with
+a non-DPI-aware `SetCursorPos`/`ClientToScreen` call (or vice versa)
+silently aims at the wrong physical pixel** on a scaled display; call it
+consistently within one atomic script, and verify with `GetCursorPos`
+before clicking rather than trusting the target coordinate blindly.
+
+**Real, unrelated, pre-existing bug rediscovered while testing this —
+flagged for later, per the user's own explicit request, not investigated
+or fixed this session:** `ConnectScreen`'s login submission intermittently
+shows "All fields are required." even with every field visibly, correctly
+filled. The user had already hit this "a couple of times" in real play,
+independent of any automation this session; reproduced live here too,
+consistently, on the very first submit attempt after typing/tabbing
+through the fields (not a repeated-attempt-only issue). A submission with
+fields pre-filled from a saved `connection-config.json` and **zero
+typing/tabbing** succeeded immediately — suggesting the trigger is tied
+to the act of editing the fields before submitting, not to
+`attemptConnect()`'s validation misreading otherwise-correct field state
+at rest. User's own known workaround: restart the client. Next session,
+reproduce with real (non-scripted) keyboard input first to rule out
+anything SendKeys-specific before trusting this session's scripted-input
+repro to generalize.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

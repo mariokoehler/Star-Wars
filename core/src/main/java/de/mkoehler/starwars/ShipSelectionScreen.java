@@ -3,6 +3,7 @@ package de.mkoehler.starwars;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Input;
 import com.badlogic.gdx.Screen;
+import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
@@ -15,6 +16,7 @@ import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.render.DialogLayout;
+import de.mkoehler.starwars.render.FlatButton;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ScrollingBackground;
 import de.mkoehler.starwars.render.Tooltip;
@@ -76,6 +78,16 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * {@link Tooltip} explaining exactly why — missing XP amount, or which
  * ship to unlock first — since neither padlock's baked-in text alone says
  * either of those specifics.
+ * <p>
+ * <b>Keybind Settings (design.md 3.8/5.2):</b> a "KEYBINDS" button (bottom
+ * left, mirroring the Start button's own bottom-right placement) or the
+ * <b>F12</b> key opens {@link KeybindScreen} — the only entry point to it
+ * in this project, exactly as asked for. Uses the new {@link FlatButton}
+ * helper (a live-drawn, tintable rectangle button) rather than pre-made
+ * art with hover states like the arrows/Start button, since a fourth art
+ * asset just for this one button wasn't worth it — {@link KeybindScreen}
+ * needs the same kind of button many times over anyway (its own class
+ * Javadoc explains why it's built that way).
  */
 public class ShipSelectionScreen implements Screen {
 
@@ -107,6 +119,13 @@ public class ShipSelectionScreen implements Screen {
     /** Gap below the dialog's bottom edge for the start button - untuned placeholder, not pixel-specified. */
     private static final float START_BUTTON_GAP = 40f;
 
+    private static final float KEYBINDS_BUTTON_WIDTH = 200f;
+    private static final float KEYBINDS_BUTTON_HEIGHT = 44f;
+    private static final int KEYBINDS_BUTTON_FONT_SIZE_PX = 18;
+    private static final Color KEYBINDS_BUTTON_IDLE_COLOR = new Color(10 / 255f, 26 / 255f, 55 / 255f, 0.85f);
+    private static final Color KEYBINDS_BUTTON_HOVER_COLOR = new Color(25 / 255f, 60 / 255f, 110 / 255f, 0.9f);
+    private static final Color KEYBINDS_BUTTON_TEXT_COLOR = new Color(0.94f, 0.87f, 0.66f, 1f);
+
     /** Fraction of the screen-top-to-dialog-top gap the logo's height fills - untuned placeholder. */
     private static final float LOGO_HEIGHT_FRACTION_OF_GAP = 0.7f;
 
@@ -135,6 +154,7 @@ public class ShipSelectionScreen implements Screen {
     private TextureRegion padlockWhiteRegion;
     private TextureRegion padlockTierTooHighRegion;
     private Tooltip tooltip;
+    private FlatButton keybindsButton;
 
     private static final int TOOLTIP_FONT_SIZE_PX = 16;
     /** Offset from the mouse cursor so the tooltip doesn't sit directly under it. */
@@ -201,6 +221,7 @@ public class ShipSelectionScreen implements Screen {
         padlockWhiteRegion = menuAtlas.findRegion("Padlock_White");
         padlockTierTooHighRegion = menuAtlas.findRegion("Padlock_White_TierTooHigh");
         tooltip = new Tooltip(TOOLTIP_FONT_SIZE_PX);
+        keybindsButton = new FlatButton(KEYBINDS_BUTTON_FONT_SIZE_PX);
 
         // Ship hull sprites are also in this atlas, but only the portrait regions are used here.
         shipsAtlas = game.getAssets().get(GameAssets.SHIPS_ATLAS, TextureAtlas.class);
@@ -293,12 +314,19 @@ public class ShipSelectionScreen implements Screen {
         float startButtonY = dialogScreenY - START_BUTTON_GAP - START_BUTTON_HEIGHT;
         boolean hoveringStartButton = contains(startButtonX, startButtonY, START_BUTTON_WIDTH, START_BUTTON_HEIGHT, mouseX, mouseY);
 
+        // Vertically centered within the same band as the Start button, mirrored to the dialog's
+        // left edge (design.md 3.8/5.2's Keybind Settings entry point).
+        float keybindsButtonX = dialogScreenX;
+        float keybindsButtonY = startButtonY + (START_BUTTON_HEIGHT - KEYBINDS_BUTTON_HEIGHT) / 2f;
+        boolean hoveringKeybindsButton = FlatButton.contains(keybindsButtonX, keybindsButtonY,
+            KEYBINDS_BUTTON_WIDTH, KEYBINDS_BUTTON_HEIGHT, mouseX, mouseY);
+
         float portraitBoxScreenX = DialogLayout.toScreenX(dialogScreenX, PORTRAIT_AREA_TOP_DOWN_X);
         float portraitBoxScreenY = DialogLayout.toScreenY(dialogScreenY, DIALOG_HEIGHT, PORTRAIT_AREA_TOP_DOWN_Y, PORTRAIT_AREA_SIZE);
         boolean hoveringPortrait = contains(portraitBoxScreenX, portraitBoxScreenY, PORTRAIT_AREA_SIZE, PORTRAIT_AREA_SIZE, mouseX, mouseY);
         String tooltipText = hoveringPortrait ? tooltipTextFor(SHIP_TYPES[selectedIndex]) : null;
 
-        if (handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton)) {
+        if (handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton, hoveringKeybindsButton)) {
             // startMatch() just disposed this screen's own textures/batch (switching to Client) -
             // drawing anything else this frame would use them after disposal and crash (a GL
             // "No buffer allocated!" error, found exactly this way): stop immediately instead of
@@ -319,6 +347,9 @@ public class ShipSelectionScreen implements Screen {
         drawDescription(dialogScreenX, dialogScreenY);
         batch.draw(hoveringStartButton ? startButtonHoverRegion : startButtonRegion,
             startButtonX, startButtonY, START_BUTTON_WIDTH, START_BUTTON_HEIGHT);
+        keybindsButton.draw(batch, "KEYBINDS (F12)", keybindsButtonX, keybindsButtonY,
+            KEYBINDS_BUTTON_WIDTH, KEYBINDS_BUTTON_HEIGHT,
+            hoveringKeybindsButton ? KEYBINDS_BUTTON_HOVER_COLOR : KEYBINDS_BUTTON_IDLE_COLOR, KEYBINDS_BUTTON_TEXT_COLOR);
 
         if (tooltipText != null) {
             tooltip.render(batch, tooltipText, mouseX + TOOLTIP_OFFSET_X, mouseY + TOOLTIP_OFFSET_Y, screenWidth, screenHeight);
@@ -331,10 +362,17 @@ public class ShipSelectionScreen implements Screen {
      * @return {@code true} if a match was just started — the caller must not
      * touch this screen's (now-disposed) batch/textures again this frame
      */
-    private boolean handleInput(boolean hoveringLeftArrow, boolean hoveringRightArrow, boolean hoveringStartButton) {
+    private boolean handleInput(boolean hoveringLeftArrow, boolean hoveringRightArrow, boolean hoveringStartButton,
+                                 boolean hoveringKeybindsButton) {
         if (firstFrame) {
             firstFrame = false;
             return false;
+        }
+
+        boolean keybindsClicked = hoveringKeybindsButton && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
+        if (keybindsClicked || Gdx.input.isKeyJustPressed(Input.Keys.F12)) {
+            openKeybindScreen();
+            return true;
         }
 
         boolean leftClicked = hoveringLeftArrow && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
@@ -368,6 +406,20 @@ public class ShipSelectionScreen implements Screen {
     private void startMatch() {
         Client next = new Client(game, SHIP_TYPES[selectedIndex], connectionInfo);
         game.setScreen(next);
+        dispose();
+    }
+
+    /**
+     * Opens {@link KeybindScreen} (design.md 3.8/5.2) — the only entry point
+     * to it in this project, via the "KEYBINDS" button or F12 (see the class
+     * Javadoc). Returning here re-does this screen's own fresh handshake
+     * (same "reconnecting is harmless" precedent as every other screen
+     * transition here, design.md 3.6), so nothing about the account/unlock
+     * state needs to be threaded through {@link KeybindScreen} itself —
+     * it's a purely local, offline settings screen.
+     */
+    private void openKeybindScreen() {
+        game.setScreen(new KeybindScreen(game, connectionInfo));
         dispose();
     }
 
@@ -523,6 +575,7 @@ public class ShipSelectionScreen implements Screen {
         // background/logoTexture/menuAtlas/shipsAtlas are owned by StarWarsGame#getAssets()
         // (design.md - asset loading), not this screen - disposed once, at app shutdown, not here.
         tooltip.dispose();
+        keybindsButton.dispose();
 
         Gdx.app.log(TAG, "dispose() took " + (System.currentTimeMillis() - disposeStartMillis) + "ms total");
     }

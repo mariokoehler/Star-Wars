@@ -4,6 +4,7 @@ import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.audio.Music;
+import de.mkoehler.starwars.input.KeyBindings;
 import de.mkoehler.starwars.remote.RemoteControlQueue;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.QuoteDeck;
@@ -41,7 +42,11 @@ import java.util.Random;
  * and {@link #fadingMusic} (see {@link #fadeOutAndDisposeMusic}), since
  * fading a track out takes real time that outlives whichever screen started
  * the fade — by the time it's fully faded, that screen has usually already
- * been disposed and replaced. Every other screen only ever needs a
+ * been disposed and replaced. {@link #keyBindings} (design.md 3.8) is the
+ * same story again: loaded once here from the local keybinds file, then
+ * shared by every screen that reads or edits a binding — {@link Client}
+ * reads it every frame for gameplay input, {@link KeybindScreen} mutates it
+ * (and re-saves immediately) when the player rebinds an action. Every other screen only ever needs a
  * {@link Game} reference to switch away from itself, but constructors are
  * typed to this concrete class instead so they can reach
  * {@link #getQuoteDeck()}/{@link #getAssets()}/{@link #fadeOutAndDisposeMusic}
@@ -55,12 +60,22 @@ public class StarWarsGame extends Game {
 
     private final QuoteDeck quoteDeck = new QuoteDeck(GameAssets.AFTER_DEATH_QUOTE_COUNT, new Random());
     private final AssetManager assetManager = new AssetManager();
+    /**
+     * Not loaded as a field initializer like {@link #assetManager}/{@link #quoteDeck} above -
+     * {@link KeyBindings#load()} touches {@code Gdx.files}, which isn't set up yet at the point
+     * this object is constructed (it's built as a constructor argument to
+     * {@code Lwjgl3Application}, i.e. before that application backend has initialized any
+     * {@code Gdx.*} statics) - loaded instead in {@link #create()}, the same lifecycle point
+     * every other {@code Gdx.files}-touching code in this project already waits for.
+     */
+    private KeyBindings keyBindings;
 
     private Music fadingMusic;
     private float fadingMusicElapsedSeconds;
 
     @Override
     public void create() {
+        keyBindings = KeyBindings.load();
         setScreen(new SplashScreen(this));
     }
 
@@ -114,6 +129,18 @@ public class StarWarsGame extends Game {
      */
     public AssetManager getAssets() {
         return assetManager;
+    }
+
+    /**
+     * Returns the player's live, shared keybinds (design.md 3.8) — loaded
+     * once from the local keybinds file in {@link #create()}; every screen
+     * that reads or edits a binding shares this exact instance rather than
+     * loading/saving its own copy.
+     *
+     * @return the shared keybinds
+     */
+    public KeyBindings getKeyBindings() {
+        return keyBindings;
     }
 
     /**

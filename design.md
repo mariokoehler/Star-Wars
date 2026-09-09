@@ -3050,6 +3050,57 @@ a misleading "W"), we need to resolve the physical key to the localized
 character the OS would actually produce, rather than hardcoding the
 US-layout glyph as the label.
 
+**Implemented 2026-09-09.** See 5.2's own addendum for the screen itself;
+this entry covers the data model. New `core.input` package: `GameAction`
+(one enum value per remappable action, each carrying a display name and a
+default keycode — deliberately excludes ESC/cursor keys/ENTER, see that
+enum's own Javadoc for why), `KeyBindings` (an `EnumMap<GameAction,
+Integer>`, `get`/`rebind`/`resetToDefaults`/`isPressed`/`isJustPressed`),
+`KeyBindingsConfig`/`KeyBindingsStore` (a Jackson bean + load/save,
+`keybindings.json`, same shape as `net.ConnectionConfigStore` — the file
+is keyed by `GameAction.name()`, not a raw enum map, so an action added or
+removed in a later version doesn't break loading an older file). Owned
+for the app's whole run by `StarWarsGame` (`getKeyBindings()`), same
+"outlives any one screen" pattern as its `AssetManager`/`QuoteDeck` —
+**loaded in `create()`, not as a field initializer**, since
+`KeyBindingsConfig`/`KeyBindingsStore.load()` touches `Gdx.files`, which
+isn't set up yet at the point `StarWarsGame` itself is constructed (it's
+built as a constructor argument to `Lwjgl3Application`, before that
+backend has initialized any `Gdx.*` statics) — caught before ever running
+the app, by reasoning through the actual object-construction order rather
+than by hitting the resulting NPE live.
+
+**The 12 remappable actions** (Client's own former hardcoded keys, now
+read via `keyBindings.isPressed`/`isJustPressed`): Thrust Forward (W),
+Turn Left (A), Turn Right (D), Fire Weapon (SPACE), Toggle Turret (T),
+Fire Missile (M), Radar Pulse (R), Power: Shields/Weapons/Engines/Reset
+(J/I/L/K), Show Scoreboard (TAB) — every gameplay key this project has
+ever added, not just the five 5.2 originally sketched before Toggle
+Turret/Fire Missile/Radar Pulse/Show Scoreboard existed. **ESC (leave
+match) is the one deliberate exception, hardcoded in `Client` exactly as
+5.2 always said it would be.**
+
+**Rebinding a key already bound to a different action swaps the two**
+(`KeyBindings.rebind`) rather than leaving one key silently bound to both
+actions — not explicitly speced, a default proposed and applied directly
+(matching this project's own "propose a concrete default rather than
+stall" convention), since the alternative (two actions firing off one
+keypress) would be a confusing, silent foot-gun with no error to
+explain it.
+
+**The physical-vs-localized-label caveat above is now empirically
+confirmed, not just theoretical** — live-tested on this dev machine's own
+German QWERTZ keyboard (see 5.2's addendum): pressing the key labeled "Z"
+(which QWERTZ swaps with "Y" relative to a US layout) correctly bound and
+displayed as "Y", exactly as the physical-position theory predicted.
+Capture still works correctly regardless of layout (a German player's "Z"
+key is still usably bindable, it just shows as "Y" until label
+localization is built) — accepted as a v1 limitation, not fixed this
+session; revisit by resolving the physical keycode to the OS layout's
+actual produced character (see the implementation note above) if a
+player on a non-US layout finds the mislabeling actually confusing in
+practice, not just theoretically imprecise.
+
 ### 3.9 JSON serialization
 
 **Decision: [Jackson](https://github.com/FasterXML/jackson) (latest
@@ -5057,6 +5108,85 @@ decided: every keyboard/layout has an ESC key, so there's no
 internationalization reason to expose it here, and it's simpler to keep it
 hardcoded. Changes save immediately to the local keybinds file.
 
+**Implemented 2026-09-09.** New `KeybindScreen`, reachable **only** from
+`ShipSelectionScreen`, via a new "KEYBINDS" button (bottom-left, mirroring
+the Start button's own bottom-right placement) or the **F12** key —
+exactly the two entry points asked for, nothing else wired to it. Lists
+all 12 actions (3.8's addendum has the full list); clicking a row's key
+button enters a "listening" state (highlighted, reads "PRESS A KEY...")
+until the next keypress rebinds it — ESC cancels instead of binding
+(consistent with ESC being reserved/non-remappable everywhere else in
+this project), any other key rebinds and saves immediately, matching
+"changes save immediately" above with no separate Save button. A
+"RESET TO DEFAULTS" button resets and saves all 12 at once; "BACK" (or
+ESC, when not mid-capture) returns to Ship Selection.
+
+**Deviates from 4.4's original assumption that this screen would need
+VisUI, like the Connect Dialog.** It turns out to need neither text entry
+nor any other widget VisUI adds real value for — just clickable rows and
+a one-key capture, exactly what `ShipSelectionScreen`'s existing raw-
+`SpriteBatch` + `Gdx.input` polling style already handles well (4.4
+itself already flags this as the right tool once no form widgets are
+actually needed). Built that way instead; 4.4/this section corrected to
+match, rather than reaching for VisUI just because it was originally
+guessed at during design, before the actual interaction shape was known.
+
+**Art:** one generated background panel
+(`assets/textures/hud/hud_keybinds_background.png` — Python/Pillow + the
+game's own "SF Distant Galaxy" font, same technique as the combat-lock
+warning banner/radar HUD art, see CLAUDE.md), matching
+`ConnectScreen`/`ShipSelectionScreen`'s navy/gold palette (sampled
+directly from `Connect_Dialog.png`) — title, subtitle, column headers,
+and row dividers baked in; every row/button on top is live-drawn via a
+new, reusable `render.FlatButton` (a live-drawn, tintable rectangle with
+centered text — same "no pre-made art since the content/highlight-state
+is dynamic" reasoning as `Tooltip`, generalized into a persistent, not
+just floating, button) since a key label and its hover/listening
+highlight both change at runtime. `ShipSelectionScreen`'s own new
+"KEYBINDS" button reuses the same `FlatButton`, so the two screens'
+buttons look identical without a second art asset.
+
+**Verified live, end-to-end, including a real client restart:** via the
+project's usual PowerShell `SendKeys`/`SetForegroundWindow`/`PrintWindow`
+technique — F12 from Ship Selection opened the screen; clicking a row's
+key button entered listening mode (screenshotted); pressing a key
+rebound it, and `keybindings.json` showed the new keycode immediately;
+**fully closing and relaunching the client, then reopening this screen,
+showed the same rebound key** — real persistence across a restart, not
+just within one running instance. Not independently re-clicked live this
+session: "RESET TO DEFAULTS" and "BACK" specifically (repeated
+screen-coordinate mouse-click attempts kept missing due to this
+environment's own 125% Windows display scaling interacting badly with
+`SetCursorPos`/`ClientToScreen` — same class of DPI gotcha CLAUDE.md
+already documents for screenshot capture, apparently also affecting
+synthetic click coordinates, not just `GetWindowRect`/`CopyFromScreen`) —
+"BACK"'s equivalent ESC-driven path *was* verified live instead (correctly
+returned to Ship Selection), and both buttons share the exact
+`FlatButton.contains` + `Gdx.input.isButtonJustPressed` hit-test/click
+pattern already proven live by the row buttons, so this is a real but
+narrow verification gap (mouse-precision on these two specific buttons),
+not an unverified code path.
+
+**Real, unrelated, pre-existing bug rediscovered while testing this,
+flagged for later per the user's own request, not fixed this session:**
+`ConnectScreen`'s login submission intermittently shows "All fields are
+required." even when every field is visibly, correctly filled — the user
+had already hit this "a couple of times" in real play before this
+session, independent of any automation; reproduced live here too on a
+freshly-launched client after typing/tabbing through the four fields,
+consistently, on the very first submit attempt (not a repeated-attempt
+issue). A submission with **pre-filled fields and zero typing/tabbing**
+(loaded straight from a saved `connection-config.json`) succeeded
+immediately, suggesting the trigger is specifically tied to the act of
+editing the fields (typing and/or Tab/Shift+Tab focus-cycling) before
+submitting, not `attemptConnect()`'s validation logic itself misreading
+otherwise-correct field state at rest. The user's own workaround:
+restarting the client. **Not investigated further this session** — out
+of scope for the keybind remap work that was actually asked for; pick
+this up specifically by reproducing with real (non-scripted) keyboard
+input first, to rule out anything SendKeys-specific before assuming the
+scripted-input reproduction here generalizes.
+
 ### 5.3 Controls (v1, defaults)
 
 Keyboard only for now; more keybinds will follow as further features are
@@ -5122,14 +5252,17 @@ once a component is actually being worked on.
       2.10 — though there's still no UI surfacing it to the player.
 - [x] **Client local config, connection half (2026-09-06)** — see 3.7:
       load/save the four connect fields to a local JSON file. Keybinds
-      (3.8) remain unbuilt - no Keybind Setup screen yet, so there's
-      nothing to persist there yet.
+      (3.8) half now built too, see below.
 - [x] **Connect Dialog screen (2026-09-06)** — see 5.1: host/display
       name/login/password fields, prefilled from local config, error
       display on failed auth, full keyboard navigation (TAB/Shift+TAB/
       ENTER). First real use of VisUI (4.4).
-- [ ] **Keybind Setup screen** — press-to-bind capture, localized key-label
-      display (see 3.8 implementation note), persists to local config.
+- [x] **Keybind Setup screen (2026-09-09)** — see 3.8/5.2's addenda:
+      press-to-bind capture for every gameplay action, persists
+      immediately to `keybindings.json`. Key labels show the raw
+      `Input.Keys` (US-layout) name, not a localized one — see 3.8's
+      addendum for why that's an accepted v1 limitation, not an
+      oversight.
 - [x] **jgitver wired in (2026-09-07)** — `.mvn/extensions.xml` +
       placeholder `<version>0</version>` in every pom.xml; `v0.0.1` tagged
       to see it compute a real version end to end. See 3.10 for the full
