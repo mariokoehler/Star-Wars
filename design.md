@@ -3994,6 +3994,72 @@ other pickup ideas, e.g. the capacitor pickup mentioned in 2.2).
 element is a sprite (ships, projectiles, pickups) or a particle effect
 (engine glow, explosions, muzzle flashes). No 3D models anywhere.
 
+**Engine particle effects — first one implemented 2026-09-09.** The
+user authored the first particle system in libGDX's classic 2D particle
+editor format (a `.p` file + one shared source image,
+`assets-raw/particles/Thruster_Blue.p`/`particle-fire.png`), copied
+as-is (content unchanged, `.p` file just renamed to this project's
+lowercase-with-underscores convention) to
+`assets/textures/particles/thruster_blue.p`/`particle-fire.png` — kept
+in the same directory since libGDX's default `ParticleEffect` loading
+looks for an effect's referenced images alongside the `.p` file itself
+when no atlas/images-directory is given, and the image's exact filename
+is baked into the `.p` file's own "Image Paths" section, so it can't be
+renamed independently without also editing that file.
+
+Each ship type can now name one engine particle effect (a new
+`ShipTypeConfig.engineParticleEffect` string field, e.g.
+`"thruster_blue"` → `textures/particles/thruster_blue.p`) — `null`/blank
+for "no effect configured," which is every ship except the Snowspeeder
+(the one this was built and tested against) for now. `GameAssets` queues
+every ship type's configured effect (if the file exists) into the shared
+`AssetManager` alongside everything else, keyed by the same path
+convention. New `render.ThrusterEffect` wraps one private `ParticleEffect`
+copy of that shared template per ship (copying is free/safe — a copy's
+own `dispose()` is a no-op unless it loaded its own images directly, only
+the `AssetManager`-owned original does that, so copies just share the
+same underlying `Sprite`/`Texture`), attached to one of the ship's
+`"ENGINE"` attachment points (`ShipSpriteMetadata`, already authored for
+years for future use exactly like this).
+
+**A rotation problem with no built-in library answer:** the classic 2D
+`ParticleEffect` has no "rotate the whole effect to match my current
+facing" method — only `setPosition(x, y)`. Solved by directly rewriting
+the emitter's `"Angle"` value range every frame:
+`ParticleEmitter.getAngle()` returns the live, mutable `ScaledNumericValue`
+the .p file's authored 265°–275° came from, and re-adding the ship's
+current rotation (in degrees, same sign convention as `Vector2.rotateRad`)
+onto that authored base every frame keeps the exhaust cone pointed out
+the ship's tail regardless of which way it's facing — confirmed by first
+reading the emission-direction math directly (`cosDeg`/`sinDeg` of the
+angle value, standard 0°=east/90°=north convention, exactly matching
+this project's own body-angle convention) rather than guessing at the
+sign.
+
+**Deliberately a hard on/off switch, not a fade:** the effect only
+updates/draws while the local player's own forward-thrust key (W) is
+held — on release, particles simply stop being drawn (frozen mid-life,
+invisible); on the next press, `ParticleEffect.reset()` discards them
+before restarting, rather than risk a stale, frozen particle visibly
+teleporting once its position later jumps to wherever the ship has since
+moved. Untested against a real fade-out; revisit if the hard cutoff reads
+as too abrupt once seen live.
+
+**Deliberately local-player-only for now, not every ship:** `ShipState`
+doesn't currently broadcast whether a remote ship is holding its
+thrust key, so there's nothing to drive the same effect for anyone
+else's ship with — extending this to other players would need a new
+wire field (cheap, same "broadcast for everyone even though only one
+consumer needs it yet" pattern already used for hull/shield/turret aim/
+radar-pulse-cooldown in `ShipState`), not attempted this session since
+it wasn't asked for. Revisit once more than one ship type has an engine
+effect worth seeing on other players' ships too.
+
+**Not yet live-verified** — build/tests only this session; needs the
+user to actually fly the Snowspeeder and confirm the flame renders at
+the tail, points the right way through a turn, and only shows while W is
+held.
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain
@@ -4518,8 +4584,8 @@ its own to ask about anyone else's.
 
 Lists every remappable action with a "press a key to bind" capture field
 (see 3.8 for why this approach is layout-safe). Actions to cover: thrust
-forward/reverse, rotate left/right, fire, the three power-distribution
-keys, and power reset. **ESC (leave match) is fixed, not remappable** —
+forward, rotate left/right, fire, the three power-distribution keys, and
+power reset. **ESC (leave match) is fixed, not remappable** —
 decided: every keyboard/layout has an ESC key, so there's no
 internationalization reason to expose it here, and it's simpler to keep it
 hardcoded. Changes save immediately to the local keybinds file.
@@ -4531,9 +4597,18 @@ added. All of the below are just the **defaults** — every action is
 remappable via the Keybind Setup screen (5.2).
 
 - **W** — thrust forward
-- **S** — thrust reverse / brake
 - **A / D** — rotate ship (turning is rotational thrust, consistent with
   the Newtonian model — no instant-snap turning)
+
+**No reverse thrust (removed 2026-09-09):** every ship only ever has
+forward thrust plus turning — reaching a target behind you means turning
+180° and thrusting, not reversing. **S** previously did reverse
+thrust/braking; dropped outright (not reassigned) at the user's request,
+along with the wire field/component/method parameter that carried it
+(`PlayerInputMessage`/`NetworkInputComponent`/`ShipControlSystem.applyInput`
+all dropped their `thrustReverse` parameter entirely, not just stopped
+reading it — a real, if small, wire-shape change, so rebuild and restart
+both ends together per the usual rule).
 - **SPACE** — fire primary weapon
 - **ESC** — leave match, back to Ship Selection (blocked while in combat,
   see §2.3)

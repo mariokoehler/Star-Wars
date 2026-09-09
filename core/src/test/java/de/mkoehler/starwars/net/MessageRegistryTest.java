@@ -144,10 +144,9 @@ class MessageRegistryTest {
 
     @Test
     void playerInputMessageSurvivesRoundTrip() {
-        PlayerInputMessage original = new PlayerInputMessage(true, false, true, false, true);
+        PlayerInputMessage original = new PlayerInputMessage(true, true, false, true);
         PlayerInputMessage copy = roundTrip(original, PlayerInputMessage.class);
         assertTrue(copy.isThrustForward());
-        assertEquals(false, copy.isThrustReverse());
         assertTrue(copy.isTurnLeft());
         assertEquals(false, copy.isTurnRight());
         assertTrue(copy.isFiring());

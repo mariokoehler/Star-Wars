@@ -723,7 +723,7 @@ public class GameNetworkServer extends NetworkServer {
             return;
         }
         ship.getComponent(NetworkInputComponent.class).set(
-            input.isThrustForward(), input.isThrustReverse(), input.isTurnLeft(), input.isTurnRight(), input.isFiring());
+            input.isThrustForward(), input.isTurnLeft(), input.isTurnRight(), input.isFiring());
     }
 
     /**

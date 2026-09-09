@@ -340,4 +340,16 @@ public final class ShipStats {
     public float getMissileLockDurationSeconds() {
         return config.getMissileLockDurationSeconds();
     }
+
+    /**
+     * Returns this ship type's engine particle effect resource name, if one
+     * is configured (design.md — engine particle effects).
+     *
+     * @return the effect's resource name, or empty if this ship type has none
+     * configured yet, see {@link ShipTypeConfig#getEngineParticleEffect()}
+     */
+    public Optional<String> getEngineParticleEffect() {
+        String name = config.getEngineParticleEffect();
+        return (name == null || name.isBlank()) ? Optional.empty() : Optional.of(name);
+    }
 }

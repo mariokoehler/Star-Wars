@@ -6,6 +6,7 @@ import com.badlogic.gdx.Input;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.ParticleEffect;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
@@ -43,6 +44,7 @@ import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.RadarHud;
 import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipStatusHud;
+import de.mkoehler.starwars.render.ThrusterEffect;
 import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
@@ -169,6 +171,8 @@ public class Client implements Screen {
 
     /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
     private static final Vector2 TURRET_OFFSET = new Vector2();
+    /** Scratch vector for {@link #drawLocalShip}'s engine-thruster-position math - avoids an allocation per thruster per frame. */
+    private static final Vector2 ENGINE_OFFSET = new Vector2();
     /** Scratch vector for {@link #predictLocalWeapon}'s spawn-offset math - avoids an allocation per shot. */
     private static final Vector2 PREDICTED_SPAWN_OFFSET = new Vector2();
     /** Scratch vector for {@link #spawnPredictedProjectile}'s velocity math - avoids an allocation per shot. */
@@ -293,6 +297,19 @@ public class Client implements Screen {
      */
     private final List<RemoteProjectile> predictedProjectiles = new ArrayList<>();
     private int myPlayerId = -1;
+    /**
+     * The local player's own engine thruster glow(s) (design.md — engine
+     * particle effects), one per {@code "ENGINE"} attachment point on the
+     * current {@link #myShipType}, paired with that point's local-frame
+     * pixel offset - rebuilt from scratch on every {@link #onShipSpawned}
+     * (spawn or respawn) since a different ship type may have a different
+     * engine effect/attachment layout, or none at all. Empty (not null) for
+     * a ship type with no engine effect configured yet. Only the local
+     * player's own ship gets this - {@code ShipState} doesn't (yet) broadcast
+     * whether a remote ship is currently thrusting, so there's nothing to
+     * drive the same effect for anyone else's ship with.
+     */
+    private final List<EngineThruster> myThrusters = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -574,6 +591,19 @@ public class Client implements Screen {
         // position with no server projectile left to ever confirm them.
         myWeapon = new WeaponComponent(WeaponStats.BLASTER);
         predictedProjectiles.clear();
+
+        myThrusters.clear();
+        List<PixelPoint> enginePoints = myStats.getSpriteMetadata()
+            .map(metadata -> metadata.getAttachmentPoints().get(ThrusterEffect.ENGINE_ATTACHMENT_NAME))
+            .orElse(null);
+        if (enginePoints != null && !enginePoints.isEmpty()) {
+            myStats.getEngineParticleEffect().ifPresent(effectName -> {
+                ParticleEffect template = game.getAssets().get(GameAssets.particleEffectPath(effectName), ParticleEffect.class);
+                for (PixelPoint point : enginePoints) {
+                    myThrusters.add(new EngineThruster(point, new ThrusterEffect(template)));
+                }
+            });
+        }
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -878,13 +908,12 @@ public class Client implements Screen {
 
         if (myBody != null) {
             boolean thrustForward = Gdx.input.isKeyPressed(Input.Keys.W);
-            boolean thrustReverse = Gdx.input.isKeyPressed(Input.Keys.S);
             boolean turnLeft = Gdx.input.isKeyPressed(Input.Keys.A);
             boolean turnRight = Gdx.input.isKeyPressed(Input.Keys.D);
             boolean firing = Gdx.input.isKeyPressed(Input.Keys.SPACE);
 
-            networkClient.sendUDP(new PlayerInputMessage(thrustForward, thrustReverse, turnLeft, turnRight, firing));
-            predictLocalShip(thrustForward, thrustReverse, turnLeft, turnRight, deltaTime);
+            networkClient.sendUDP(new PlayerInputMessage(thrustForward, turnLeft, turnRight, firing));
+            predictLocalShip(thrustForward, turnLeft, turnRight, deltaTime);
             predictLocalWeapon(firing, deltaTime);
             handlePowerDistributionInput(deltaTime);
 
@@ -922,7 +951,7 @@ public class Client implements Screen {
         batch.begin();
         background.render(batch, camera);
         drawRemoteShips();
-        drawLocalShip();
+        drawLocalShip(deltaTime);
         drawProjectiles();
         drawMissileLockReticle();
         batch.end();
@@ -1053,7 +1082,7 @@ public class Client implements Screen {
         networkClient.sendTCP(new PowerAdjustMessage(PowerAdjustMessage.Kind.MAXIMIZE, target));
     }
 
-    private void predictLocalShip(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, float deltaTime) {
+    private void predictLocalShip(boolean thrustForward, boolean turnLeft, boolean turnRight, float deltaTime) {
         ShipStats myStats = ShipStats.forType(myShipType);
         float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES);
         // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
@@ -1078,7 +1107,7 @@ public class Client implements Screen {
             myPreviousAngle = myBody.getAngle();
             ShipControlSystem.applyInput(myBody, myStats.getThrustForce() * enginesMultiplier,
                 myStats.getTurnTorque() * turnMultiplier,
-                thrustForward, thrustReverse, turnLeft, turnRight);
+                thrustForward, turnLeft, turnRight);
         });
     }
 
@@ -1291,7 +1320,7 @@ public class Client implements Screen {
         }
     }
 
-    private void drawLocalShip() {
+    private void drawLocalShip(float deltaTime) {
         if (myBody == null) {
             return;
         }
@@ -1318,6 +1347,33 @@ public class Client implements Screen {
             1f, 1f,
             angle * MathUtils.radiansToDegrees);
         drawTurrets(myShipType, myStats, x, y, angle, myTurretAimAngles);
+        drawThrusters(myStats, x, y, angle, deltaTime);
+    }
+
+    /**
+     * Updates and draws the local player's own engine thruster glow(s), if
+     * any (design.md — engine particle effects; {@link #myThrusters} is
+     * empty for a ship type with none configured) — only actually visible
+     * while the forward-thrust key is held, see {@link ThrusterEffect#update}.
+     * Only the local player's own ship gets this (see {@link #myThrusters}'s
+     * Javadoc for why).
+     */
+    private void drawThrusters(ShipStats myStats, float shipScreenX, float shipScreenY,
+                                float shipAngleRadians, float deltaTime) {
+        if (myThrusters.isEmpty()) {
+            return;
+        }
+        boolean thrusting = Gdx.input.isKeyPressed(Input.Keys.W);
+        float pixelsPerMeter = myStats.getPixelsPerMeter();
+        float shipAngleDegrees = shipAngleRadians * MathUtils.radiansToDegrees;
+        for (EngineThruster thruster : myThrusters) {
+            PixelPoint point = thruster.attachmentPoint;
+            ENGINE_OFFSET.set(point.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
+                point.getY() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER).rotateRad(shipAngleRadians);
+            thruster.effect.update(shipScreenX + ENGINE_OFFSET.x, shipScreenY + ENGINE_OFFSET.y,
+                shipAngleDegrees, thrusting, deltaTime);
+            thruster.effect.draw(batch);
+        }
     }
 
     private void drawProjectiles() {
@@ -1590,6 +1646,21 @@ public class Client implements Screen {
             renderX = baseX + velocityX * elapsedSinceUpdate;
             renderY = baseY + velocityY * elapsedSinceUpdate;
             renderAngle = baseAngle + angularVelocity * elapsedSinceUpdate;
+        }
+    }
+
+    /**
+     * Pairs one {@link ThrusterEffect} with the local-frame pixel offset
+     * (from the ship's own {@code "ENGINE"} attachment point metadata) it
+     * should be positioned at each frame — see {@link #myThrusters}.
+     */
+    private static final class EngineThruster {
+        final PixelPoint attachmentPoint;
+        final ThrusterEffect effect;
+
+        EngineThruster(PixelPoint attachmentPoint, ThrusterEffect effect) {
+            this.attachmentPoint = attachmentPoint;
+            this.effect = effect;
         }
     }
 

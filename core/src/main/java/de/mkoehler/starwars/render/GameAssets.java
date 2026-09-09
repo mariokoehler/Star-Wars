@@ -4,7 +4,9 @@ import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.ParticleEffect;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
+import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
 
 /**
@@ -87,6 +89,22 @@ public final class GameAssets {
     }
 
     /**
+     * Returns the classpath path of a particle effect resource (design.md —
+     * engine particle effects), e.g. {@code "thruster_blue"} →
+     * {@code "textures/particles/thruster_blue.p"}. The effect's own image
+     * (referenced by filename inside the {@code .p} file itself, e.g.
+     * {@code particle-fire.png}) is expected to live alongside it in the
+     * same directory — {@link ParticleEffect}'s default loading behavior
+     * when no atlas/images-directory is explicitly given.
+     *
+     * @param name the effect's resource name, see {@link de.mkoehler.starwars.sim.ShipTypeConfig#getEngineParticleEffect()}
+     * @return the effect's classpath path
+     */
+    public static String particleEffectPath(String name) {
+        return "textures/particles/" + name + ".p";
+    }
+
+    /**
      * Queues every asset above into {@code manager} for asynchronous
      * loading — called exactly once, by
      * {@link de.mkoehler.starwars.SplashScreen#show()}, before any other
@@ -124,6 +142,12 @@ public final class GameAssets {
             if (Gdx.files.internal(path).exists()) {
                 manager.load(path, Texture.class);
             }
+            ShipStats.forType(type).getEngineParticleEffect().ifPresent(name -> {
+                String effectPath = particleEffectPath(name);
+                if (Gdx.files.internal(effectPath).exists()) {
+                    manager.load(effectPath, ParticleEffect.class);
+                }
+            });
         }
         for (int i = 1; i <= AFTER_DEATH_QUOTE_COUNT; i++) {
             manager.load(afterDeathQuotePath(i), Texture.class);

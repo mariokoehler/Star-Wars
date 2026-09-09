@@ -60,7 +60,7 @@ public class ShipControlSystem extends IteratingSystem {
         float turnMultiplier = TurnResponseCurve.apply(enginesMultiplier, control.getEngineTurnResponseExponent());
 
         applyInput(body, control.getThrustForce() * enginesMultiplier, control.getTurnTorque() * turnMultiplier,
-            input.isThrustForward(), input.isThrustReverse(), input.isTurnLeft(), input.isTurnRight());
+            input.isThrustForward(), input.isTurnLeft(), input.isTurnRight());
     }
 
     /**
@@ -68,19 +68,20 @@ public class ShipControlSystem extends IteratingSystem {
      * held input state. The single place this project's ship control math
      * lives, called both from {@link #processEntity} (server, via
      * {@link NetworkInputComponent}) and directly by the client (its own
-     * locally-held {@code Gdx.input} state, for prediction).
+     * locally-held {@code Gdx.input} state, for prediction). There is no
+     * reverse thrust — every ship only ever has forward thrust plus turning
+     * (design.md — control scheme); reaching a target behind you means
+     * turning 180° and thrusting, not reversing.
      *
      * @param body          the body to apply forces to
      * @param thrustForce   force, in newtons, applied while thrusting
      * @param turnTorque    torque, in newton-meters, applied while turning
      * @param thrustForward whether the forward-thrust input is held
-     * @param thrustReverse whether the reverse-thrust input is held
      * @param turnLeft      whether the turn-left input is held
      * @param turnRight     whether the turn-right input is held
      */
     public static void applyInput(Body body, float thrustForce, float turnTorque,
-                                   boolean thrustForward, boolean thrustReverse,
-                                   boolean turnLeft, boolean turnRight) {
+                                   boolean thrustForward, boolean turnLeft, boolean turnRight) {
         if (turnLeft) {
             body.applyTorque(turnTorque, true);
         }
@@ -90,9 +91,6 @@ public class ShipControlSystem extends IteratingSystem {
 
         if (thrustForward) {
             applyThrust(body, thrustForce);
-        }
-        if (thrustReverse) {
-            applyThrust(body, -thrustForce);
         }
     }
 

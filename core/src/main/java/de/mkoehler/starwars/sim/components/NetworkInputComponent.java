@@ -13,7 +13,6 @@ import com.badlogic.ashley.core.Component;
 public class NetworkInputComponent implements Component {
 
     private boolean thrustForward;
-    private boolean thrustReverse;
     private boolean turnLeft;
     private boolean turnRight;
     private boolean firing;
@@ -22,14 +21,12 @@ public class NetworkInputComponent implements Component {
      * Replaces the currently held input state.
      *
      * @param thrustForward whether the forward-thrust input is held
-     * @param thrustReverse whether the reverse-thrust input is held
      * @param turnLeft      whether the turn-left input is held
      * @param turnRight     whether the turn-right input is held
      * @param firing        whether the fire-weapon input is held
      */
-    public void set(boolean thrustForward, boolean thrustReverse, boolean turnLeft, boolean turnRight, boolean firing) {
+    public void set(boolean thrustForward, boolean turnLeft, boolean turnRight, boolean firing) {
         this.thrustForward = thrustForward;
-        this.thrustReverse = thrustReverse;
         this.turnLeft = turnLeft;
         this.turnRight = turnRight;
         this.firing = firing;
@@ -42,15 +39,6 @@ public class NetworkInputComponent implements Component {
      */
     public boolean isThrustForward() {
         return thrustForward;
-    }
-
-    /**
-     * Returns whether the reverse-thrust input is currently held.
-     *
-     * @return {@code true} if reverse thrust is held
-     */
-    public boolean isThrustReverse() {
-        return thrustReverse;
     }
 
     /**

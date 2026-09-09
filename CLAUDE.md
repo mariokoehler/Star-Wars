@@ -2670,6 +2670,59 @@ reticle simply stops appearing once out. Verified: `mvn clean test` (153
 tests) and `mvn clean install` green; build/tests only, per this
 feature's standing "leave the play testing to me" instruction.
 
+**Engine particle effects (first one) + reverse thrust removed —
+implemented 2026-09-09.** See design.md 4.3's addendum (particles) and
+5.3's addendum (control scheme) for the full writeups. User authored the
+project's first particle system in libGDX's classic 2D particle editor
+(`assets-raw/particles/Thruster_Blue.p` + `particle-fire.png`), copied
+to `assets/textures/particles/thruster_blue.p`/`particle-fire.png` (same
+directory, since the image filename is baked into the `.p` file's own
+"Image Paths" section and libGDX's default `ParticleEffect` loading
+looks for it alongside the `.p` file). New `ShipTypeConfig
+.engineParticleEffect` (nullable resource-name string) lets each ship
+type name its own engine effect; only `snowspeeder.stats.json` has one
+so far (`"thruster_blue"`). `GameAssets` queues every configured,
+existing effect into the shared `AssetManager` the same way it already
+does per-ship-type HUD hull art. New `render.ThrusterEffect` wraps one
+private per-ship `ParticleEffect` copy (cheap/safe — a copy's own
+`dispose()` is a no-op, only the `AssetManager`-owned original actually
+owns the texture), attached to the ship's own `"ENGINE"` attachment
+point(s) (`ShipSpriteMetadata`, authored long ago for exactly this).
+
+**Rotation gotcha, no library method for it:** the classic 2D
+`ParticleEffect` has no "rotate the whole effect" call, only
+`setPosition`. Solved by rewriting the emitter's `"Angle"`
+`ScaledNumericValue` range every frame — re-adding the ship's current
+rotation (degrees, same sign convention as `Vector2.rotateRad`) onto the
+authored base angle, confirmed correct by actually reading
+`ParticleEmitter`'s `cosDeg`/`sinDeg` emission math (standard
+0°=east/90°=north convention, matching this project's own body-angle
+convention) rather than guessing the sign. Deliberately a hard on/off
+switch (not a fade): only updates/draws while local W is held; a
+same-frame `reset()` on re-press discards any stale frozen particles
+rather than risk one visibly teleporting. **Deliberately local-player-
+only** — `ShipState` doesn't broadcast a remote ship's held-thrust state
+(yet), so there's nothing to drive the same effect for anyone else's
+ship; flagged as a small future wire addition, not attempted this
+session.
+
+**Reverse thrust removed outright, same session, user request.** No
+ship has reverse thrust anymore — turn 180° and thrust forward instead.
+Not just stopped-reading-it: the `thrustReverse` parameter/field was
+deleted entirely from `PlayerInputMessage`, `NetworkInputComponent`, and
+`ShipControlSystem.applyInput`'s signature (a real wire-shape change —
+rebuild and restart both ends together). `Client` no longer reads
+`Input.Keys.S` at all.
+
+**Verification:** full `mvn clean test` (153 tests) and `mvn clean
+install` (all 4 modules) green. Booted a real packaged server + client
+jar pair and confirmed both start with zero exceptions (the real risk
+this session — a malformed `.p`/missing image throwing during
+`SplashScreen`'s `AssetManager` load) — **not yet live-verified beyond
+that boot check**: needs the user to actually fly the Snowspeeder and
+confirm the flame renders at the tail, tracks rotation through a turn,
+and only shows while W is held.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

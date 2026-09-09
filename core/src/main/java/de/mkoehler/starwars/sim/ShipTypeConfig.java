@@ -46,6 +46,7 @@ public class ShipTypeConfig {
     private boolean missileEnabled;
     private int missileStartingCount;
     private float missileLockDurationSeconds;
+    private String engineParticleEffect;
 
     /**
      * Returns the ship's collision/draw radius, used only for the fallback
@@ -394,5 +395,26 @@ public class ShipTypeConfig {
 
     public void setMissileLockDurationSeconds(float missileLockDurationSeconds) {
         this.missileLockDurationSeconds = missileLockDurationSeconds;
+    }
+
+    /**
+     * Returns the resource name (no path/extension, e.g. {@code "thruster_blue"}
+     * for {@code textures/particles/thruster_blue.p}) of the particle effect
+     * to attach to this ship type's {@code "ENGINE"} attachment point(s)
+     * while its forward-thrust input is held (design.md — engine particle
+     * effects), or {@code null}/blank if this ship type has no engine effect
+     * configured yet. See {@link de.mkoehler.starwars.render.GameAssets#particleEffectPath}
+     * for how this is turned into a loadable path, and
+     * {@link de.mkoehler.starwars.render.ThrusterEffect} for how it's
+     * rendered.
+     *
+     * @return the engine particle effect's resource name, or {@code null}/blank for none
+     */
+    public String getEngineParticleEffect() {
+        return engineParticleEffect;
+    }
+
+    public void setEngineParticleEffect(String engineParticleEffect) {
+        this.engineParticleEffect = engineParticleEffect;
     }
 }
