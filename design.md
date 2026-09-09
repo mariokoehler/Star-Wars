@@ -3017,6 +3017,18 @@ saved login). `ConnectScreen` loads it in `show()` to pre-fill the four
 fields, falling back to just `serverHost = "localhost"` on a first
 launch (no saved file yet).
 
+**Default host changed 2026-09-09:** the no-saved-config fallback is now
+the user's own dedicated server's public hostname,
+`NAS5714.myqnapcloud.com` (`ConnectScreen.DEFAULT_HOST`), not
+`"localhost"` — so a first-time player (or a fresh install with no
+local config yet) doesn't need to already know the real address.
+Live-verified by launching a real client from a scratch working
+directory (no `connection-config.json` present, so the fallback path
+was actually exercised, not just the saved-config one) — the log showed
+it resolving and connecting successfully to the real host
+(`46.128.37.154:45625/45626`), confirming both the default value itself
+and that the NAS is reachable there.
+
 ### 3.8 Client local config (keybinds)
 
 **Decision:** keybinds are fully player-configurable via a Keybind Setup

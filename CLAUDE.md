@@ -3014,6 +3014,21 @@ file parses correctly). **Not yet live-verified** — needs the user to
 fly each of the 6 newly-covered ships and confirm its own thruster
 looks right.
 
+**Connect screen default host changed — 2026-09-09.** See design.md
+3.7's addendum. The no-saved-config fallback (`ConnectScreen
+.DEFAULT_HOST`) is now the user's own dedicated server's public
+hostname, `NAS5714.myqnapcloud.com`, instead of `"localhost"` — a
+first-time player no longer needs to already know the real address.
+**Verification gotcha worth remembering:** this dev machine already has
+a real `connection-config.json` (a previously-saved login) at the repo
+root, so a normal launch from here never exercises the no-saved-config
+fallback path at all — had to launch the packaged jar from a separate
+scratch working directory (`Gdx.files.local` resolves relative to CWD)
+to actually hit it, without touching the real saved file. The resulting
+log showed it resolving and connecting successfully to the real host
+(`46.128.37.154:45625/45626`), confirming both the new default and that
+the NAS is reachable there.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

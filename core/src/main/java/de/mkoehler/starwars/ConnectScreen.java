@@ -116,6 +116,16 @@ public class ConnectScreen implements Screen, RemoteControllable {
     /** Pixel size for the live-rendered {@link GameFonts#generateSfDistantGalaxy} UI font. */
     private static final int UI_FONT_SIZE_PX = 24;
 
+    /**
+     * The server host to pre-fill when no {@link ConnectionConfig} has ever
+     * been saved locally yet (a brand-new install, or one that's cleared its
+     * local config) — the user's own dedicated server's public hostname, so
+     * a first-time player doesn't need to already know it. Once a
+     * connection actually succeeds, {@link #attemptConnect} persists the
+     * real host used, which takes over as the pre-filled value from then on.
+     */
+    private static final String DEFAULT_HOST = "NAS5714.myqnapcloud.com";
+
     private static final Color ERROR_COLOR = new Color(1f, 0.45f, 0.35f, 1f);
     private static final Color FIELD_FONT_COLOR = new Color(0.92f, 0.95f, 1f, 1f);
     private static final Color BUTTON_FONT_COLOR = new Color(0.94f, 0.87f, 0.66f, 1f);
@@ -233,7 +243,7 @@ public class ConnectScreen implements Screen, RemoteControllable {
             displayNameField.setText(saved.getDisplayName());
             loginField.setText(saved.getLogin());
             passwordField.setText(saved.getPassword());
-        }, () -> hostField.setText("localhost"));
+        }, () -> hostField.setText(DEFAULT_HOST));
 
         Label.LabelStyle errorStyle = new Label.LabelStyle(VisUI.getSkin().get(Label.LabelStyle.class));
         errorStyle.fontColor = ERROR_COLOR;
