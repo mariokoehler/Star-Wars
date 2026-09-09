@@ -2989,6 +2989,31 @@ test` (154 tests) and `mvn clean install` green, real client boot, zero
 exceptions. **Not yet live-verified** — needs the user to confirm the
 flash now keeps up with a fast-moving ship.
 
+**All 7 ship types now have their own engine particle effect —
+2026-09-09, same session.** User authored 4 more thruster particle
+systems (`Thruster_XWing`/`Thruster_AWing`/`Thruster_Falcon`/
+`Thruster_Tie`), with `thruster_falcon` explicitly shared for the Star
+Destroyer too and `thruster_tie` shared for both TIE variants, per the
+user's own instruction. Copied to `assets/textures/particles/
+thruster_<name>.p` (no new images needed - both reference already-
+present shared images). **Zero code changes required** - every ship's
+`engineParticleEffect` field already existed and is read generically;
+this was purely setting that one JSON field on the 6 ship types that
+didn't have one yet (only the Snowspeeder did, from when this feature
+was first built). Also committed, per the user's explicit "can commit,
+doesn't need to be used in game" instruction: 128px reference-only ship
+textures (A-Wing/Falcon/Star Destroyer/TIE Fighter/TIE Interceptor) the
+user made purely as background art inside the particle editor, to judge
+new thruster effects against a size-normalized ship - `assets-raw/`
+only, never copied to `assets/textures/` or referenced by any code.
+
+**Verified:** full `mvn clean test` (154 tests, unaffected) and `mvn
+clean install` green; booted a real server + client pair with zero
+exceptions (confirms every new `.stats.json` field and every new `.p`
+file parses correctly). **Not yet live-verified** — needs the user to
+fly each of the 6 newly-covered ships and confirm its own thruster
+looks right.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

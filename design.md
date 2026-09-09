@@ -4440,6 +4440,43 @@ client with zero exceptions. **Not yet live-verified** — needs the user
 to confirm the flash now stays with a fast-moving ship instead of
 trailing behind it.
 
+**Every ship type now has its own engine particle effect — 2026-09-09,
+same session.** User authored four more thruster particle systems
+(`Thruster_XWing.p`, `Thruster_AWing.p`, `Thruster_Falcon.p`,
+`Thruster_Tie.p`, all referencing already-present shared images —
+`pre_particle.png`, plus `particle-cloud.png` for the TIE variant's
+`spriteMode: random` — so no new image assets were needed), copied to
+`assets/textures/particles/thruster_<name>.p`. Two are explicitly
+shared across ship types per the user's own instruction: `thruster_falcon`
+also serves the Star Destroyer, `thruster_tie` also serves both the TIE
+Fighter and TIE Interceptor. Wiring this up needed **no code changes at
+all** — every ship type's `engineParticleEffect` field
+(`ShipTypeConfig`, design.md's earlier engine-particle-effects entry)
+already existed and is read generically by `GameAssets`/
+`Client.buildEngineThrusters`; this was purely a matter of setting that
+one field in the 6 ship types that didn't have one yet (only the
+Snowspeeder, the ship this feature was originally built and tested
+against, had one). All 7 ship types now have a configured, working
+engine glow.
+
+Verified: full `mvn clean test` (154 tests, unaffected) and `mvn clean
+install` green; booted a real server + client pair with zero exceptions
+(confirms every new `.stats.json` entry and every new `.p` file parses
+correctly — the same splash-screen eager-load check this project has
+relied on for every particle-effect addition this session). **Not yet
+live-verified** — needs the user to fly each of the 6 newly-covered
+ship types and confirm its own thruster effect looks right.
+
+**Reference-only art committed, deliberately not wired to anything:**
+the user also created 128px versions of five ship textures (A-Wing,
+Falcon, Star Destroyer, TIE Fighter, TIE Interceptor) purely as
+background images inside the particle editor, to judge each new
+thruster effect's scale against a size-normalized ship silhouette —
+committed to `assets-raw/ships/<name>/` as backup/reference alongside
+this project's other source art, per the standing convention, but never
+copied into `assets/textures/` or referenced by any game code, exactly
+as requested.
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain
