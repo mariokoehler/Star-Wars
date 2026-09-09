@@ -84,6 +84,15 @@ public final class GameAssets {
      */
     public static final String RADAR_PULSE_PARTICLE = particleEffectPath("radar_pulse");
 
+    /**
+     * The muzzle flash particle effect (design.md — muzzle flash) — a
+     * one-shot (non-looping) effect played once each time a shot is fired
+     * from a ship's own {@code "PROJECTILE"} attachment point(s), same
+     * one-shared-template-for-every-ship-type reasoning as the radar pulse
+     * wave/positioning lights/damage smoke above.
+     */
+    public static final String MUZZLE_FLASH_PARTICLE = particleEffectPath("muzzle_flash");
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -167,6 +176,7 @@ public final class GameAssets {
         manager.load(LIGHT_GREEN_PARTICLE, ParticleEffect.class);
         manager.load(DAMAGE_SMOKE_PARTICLE, ParticleEffect.class);
         manager.load(RADAR_PULSE_PARTICLE, ParticleEffect.class);
+        manager.load(MUZZLE_FLASH_PARTICLE, ParticleEffect.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);

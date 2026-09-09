@@ -41,6 +41,7 @@ import de.mkoehler.starwars.render.DamageSmokeEffect;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
+import de.mkoehler.starwars.render.MuzzleFlashEffect;
 import de.mkoehler.starwars.render.PowerDistributionHud;
 import de.mkoehler.starwars.render.RadarHud;
 import de.mkoehler.starwars.render.RadarPulseEffect;
@@ -348,6 +349,30 @@ public class Client implements Screen {
      * - it otherwise only ever ticks down).
      */
     private RadarPulseEffect myRadarPulseEffect;
+    /**
+     * The local player's own muzzle flash(es) (design.md — muzzle flash),
+     * one per {@code "PROJECTILE"} attachment point on the current
+     * {@link #myShipType} - rebuilt alongside {@link #myThrusters}/
+     * {@link #myLights}/{@link #myDamageSmoke} on every
+     * {@link #onShipSpawned}. Triggered directly from
+     * {@link #predictLocalWeapon} at the exact moment of firing - the same
+     * "predict locally, don't wait for server confirmation" reasoning
+     * already used for the shot itself (design.md 2.4's addendum), so the
+     * flash isn't visibly delayed by round-trip latency.
+     */
+    private final List<MuzzleFlashPoint> myMuzzleFlashes = new ArrayList<>();
+    /**
+     * A small, self-growing pool of muzzle flash instances for other
+     * players' shots (design.md — muzzle flash's addendum) - not attached
+     * to any particular {@link RemoteShip}, since a flash is triggered
+     * directly off a brand-new {@code ProjectileState} (already broadcast
+     * to everyone unfiltered, design.md 2.14) rather than needing to know
+     * which ship or attachment point fired it; a pool (rather than one
+     * instance per shot) is needed since more than one enemy shot can be
+     * mid-flash at once. Entries are reused once {@link MuzzleFlashEffect#isPlaying()}
+     * goes false rather than growing unboundedly.
+     */
+    private final List<MuzzleFlashEffect> remoteMuzzleFlashPool = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -640,6 +665,8 @@ public class Client implements Screen {
         myLights.addAll(buildShipLights(myStats));
         myDamageSmoke.clear();
         myDamageSmoke.addAll(buildDamageSmokePoints(myStats));
+        myMuzzleFlashes.clear();
+        myMuzzleFlashes.addAll(buildMuzzleFlashPoints(myStats));
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -816,6 +843,18 @@ public class Client implements Screen {
                 }
                 if (projectile == null) {
                     projectile = new RemoteProjectile(state.getOwnerPlayerId(), x, y, state.getTrackedTargetPlayerId());
+                    // Muzzle flash (design.md — muzzle flash's addendum): reaching here for an
+                    // ordinary (non-missile) bolt means it's genuinely new and unadopted - i.e. not
+                    // the local player's own shot (those are always matched/adopted above, already
+                    // flashed immediately when fired, see predictLocalWeapon) - so this is another
+                    // player's shot. Flashed directly at its own spawn position/travel direction,
+                    // no shooter-ship lookup needed at all, since every projectile is already
+                    // broadcast to everyone unfiltered (design.md 2.14).
+                    if (state.getTrackedTargetPlayerId() == ProjectileComponent.NO_TRACKED_TARGET) {
+                        float travelAngleDegrees = MathUtils.atan2(-state.getVelocityX(), state.getVelocityY())
+                            * MathUtils.radiansToDegrees;
+                        obtainPooledMuzzleFlash().trigger(x, y, travelAngleDegrees);
+                    }
                 }
                 projectiles.put(state.getProjectileId(), projectile);
                 projectile.updateFromSnapshot(x, y,
@@ -1014,6 +1053,7 @@ public class Client implements Screen {
         drawRemoteShips(deltaTime);
         drawLocalShip(deltaTime);
         drawProjectiles();
+        updateAndDrawRemoteMuzzleFlashes(deltaTime);
         drawMissileLockReticle();
         batch.end();
 
@@ -1215,10 +1255,20 @@ public class Client implements Screen {
             spawnPredictedProjectile(PREDICTED_SPAWN_OFFSET.x, PREDICTED_SPAWN_OFFSET.y);
         } else {
             float pixelsPerMeter = myStats.getPixelsPerMeter();
-            for (PixelPoint point : spawnPoints) {
+            // Same authored order as myMuzzleFlashes (both read straight from this ship type's
+            // one PROJECTILE attachment list), so index i here always lines up with that shot's
+            // own muzzle - see buildMuzzleFlashPoints.
+            float shipAngleDegrees = myBody.getAngle() * MathUtils.radiansToDegrees;
+            for (int i = 0; i < spawnPoints.size(); i++) {
+                PixelPoint point = spawnPoints.get(i);
                 PREDICTED_SPAWN_OFFSET.set(point.getX() / pixelsPerMeter, point.getY() / pixelsPerMeter)
                     .rotateRad(myBody.getAngle());
                 spawnPredictedProjectile(PREDICTED_SPAWN_OFFSET.x, PREDICTED_SPAWN_OFFSET.y);
+                if (i < myMuzzleFlashes.size()) {
+                    float flashXPixels = (myBody.getPosition().x + PREDICTED_SPAWN_OFFSET.x) * PhysicsConstants.PIXELS_PER_METER;
+                    float flashYPixels = (myBody.getPosition().y + PREDICTED_SPAWN_OFFSET.y) * PhysicsConstants.PIXELS_PER_METER;
+                    myMuzzleFlashes.get(i).effect.trigger(flashXPixels, flashYPixels, shipAngleDegrees);
+                }
             }
         }
 
@@ -1428,6 +1478,10 @@ public class Client implements Screen {
         updateAndDrawDamageSmoke(myDamageSmoke, myStats.getPixelsPerMeter(), x, y, angle, myDamageFraction, deltaTime);
         myRadarPulseEffect.update(x, y, deltaTime);
         myRadarPulseEffect.draw(batch);
+        for (MuzzleFlashPoint point : myMuzzleFlashes) {
+            point.effect.update(deltaTime);
+            point.effect.draw(batch);
+        }
     }
 
     /**
@@ -1636,6 +1690,67 @@ public class Client implements Screen {
     private RadarPulseEffect createRadarPulseEffect() {
         ParticleEffect template = game.getAssets().get(GameAssets.RADAR_PULSE_PARTICLE, ParticleEffect.class);
         return new RadarPulseEffect(template);
+    }
+
+    /**
+     * Builds one ship type's muzzle flash points (design.md — muzzle
+     * flash) — one {@link MuzzleFlashEffect} per {@code "PROJECTILE"}
+     * attachment point, in the same authored order
+     * {@link #predictLocalWeapon} already spawns predicted shots in, all
+     * sharing the same global template ({@link GameAssets#MUZZLE_FLASH_PARTICLE})
+     * regardless of ship type. Empty (never {@code null}) if the type has
+     * no such attachment points authored.
+     *
+     * @param stats the ship type's stats
+     * @return that type's muzzle flash points, or an empty list if it has none
+     */
+    private List<MuzzleFlashPoint> buildMuzzleFlashPoints(ShipStats stats) {
+        List<MuzzleFlashPoint> points = new ArrayList<>();
+        stats.getSpriteMetadata().ifPresent(metadata -> {
+            List<PixelPoint> projectilePoints = metadata.getAttachmentPoints().get(WeaponStats.PROJECTILE_ATTACHMENT_NAME);
+            if (projectilePoints == null || projectilePoints.isEmpty()) {
+                return;
+            }
+            ParticleEffect template = game.getAssets().get(GameAssets.MUZZLE_FLASH_PARTICLE, ParticleEffect.class);
+            for (PixelPoint point : projectilePoints) {
+                points.add(new MuzzleFlashPoint(point, new MuzzleFlashEffect(template)));
+            }
+        });
+        return points;
+    }
+
+    /**
+     * Finds a currently-idle instance in {@link #remoteMuzzleFlashPool} to
+     * reuse, or grows the pool by one if every existing instance is still
+     * mid-playback.
+     *
+     * @return a muzzle flash effect ready to {@link MuzzleFlashEffect#trigger}
+     */
+    private MuzzleFlashEffect obtainPooledMuzzleFlash() {
+        for (MuzzleFlashEffect flash : remoteMuzzleFlashPool) {
+            if (!flash.isPlaying()) {
+                return flash;
+            }
+        }
+        ParticleEffect template = game.getAssets().get(GameAssets.MUZZLE_FLASH_PARTICLE, ParticleEffect.class);
+        MuzzleFlashEffect flash = new MuzzleFlashEffect(template);
+        remoteMuzzleFlashPool.add(flash);
+        return flash;
+    }
+
+    /**
+     * Updates and draws every currently in-flight {@link #remoteMuzzleFlashPool}
+     * entry (design.md — muzzle flash's addendum) — unlike
+     * {@link #myMuzzleFlashes}, not tied to any particular ship, so this is
+     * called once per frame rather than once per ship.
+     *
+     * @param deltaTime time since the last frame, in seconds
+     */
+    private void updateAndDrawRemoteMuzzleFlashes(float deltaTime) {
+        for (MuzzleFlashEffect flash : remoteMuzzleFlashPool) {
+            flash.update(deltaTime);
+            flash.draw(batch);
+        }
     }
 
     private void drawProjectiles() {
@@ -1980,6 +2095,22 @@ public class Client implements Screen {
         DamageSmokePoint(PixelPoint attachmentPoint, float damageThresholdFraction, DamageSmokeEffect effect) {
             this.attachmentPoint = attachmentPoint;
             this.damageThresholdFraction = damageThresholdFraction;
+            this.effect = effect;
+        }
+    }
+
+    /**
+     * Pairs one {@link MuzzleFlashEffect} with the local-frame pixel offset
+     * (from the ship's own {@code "PROJECTILE"} attachment point metadata)
+     * it should fire from — see {@link #buildMuzzleFlashPoints}/
+     * {@link #myMuzzleFlashes}.
+     */
+    private static final class MuzzleFlashPoint {
+        final PixelPoint attachmentPoint;
+        final MuzzleFlashEffect effect;
+
+        MuzzleFlashPoint(PixelPoint attachmentPoint, MuzzleFlashEffect effect) {
+            this.attachmentPoint = attachmentPoint;
             this.effect = effect;
         }
     }

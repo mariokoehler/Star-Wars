@@ -4255,6 +4255,56 @@ actually trigger a real pulse and confirm the wave expands centered on
 their own ship, and (time permitting) that another player's pulse shows
 the same wave on their ship too.
 
+**Muzzle flash — implemented 2026-09-09, same session.** New
+`render.MuzzleFlashEffect` plays the user's `Muzzle_Flash.p`/
+`circle2.png`/`dash.png` (copied to `assets/textures/particles/
+muzzle_flash.p`/`circle2.png`/`dash.png`) once at each of a ship's own
+`"PROJECTILE"` attachment points every time a shot fires. Like the
+radar pulse wave, this effect is authored **non-looping**
+(`continuous: false`) — but unlike it, the authored burst also fires in
+a fixed direction (a tight forward spark, not omnidirectional), so it
+needs the same emitter-angle rewrite `ThrusterEffect` uses to match the
+shooter's current facing. Given its ~50ms life, `MuzzleFlashEffect.trigger`
+sets position once and for all rather than re-centering every frame the
+way the longer-lived thruster/radar-pulse effects do — any actual ship
+movement within 50ms is imperceptible.
+
+**Local player: triggered from client-side prediction, not server
+confirmation** — `predictLocalWeapon` fires the flash at the exact
+moment a shot is locally predicted (same call site as
+`spawnPredictedProjectile`, same index correspondence between
+`myMuzzleFlashes` and that ship type's `"PROJECTILE"` attachment list),
+matching this project's standing "predict locally, don't wait for
+round-trip latency" rule for anything shot-related (design.md 2.4's
+addendum).
+
+**Remote players: made trivial by an existing design choice, exactly as
+the user hoped for.** Projectiles are already broadcast to every client
+unfiltered (design.md 2.14's scope boundary), so detecting "another
+player just fired" needed no new wire data at all: `Client.onWorldSnapshot`
+already has a branch for "this `ProjectileState`'s id has never been
+seen before, and it wasn't adopted from a local prediction" — reaching
+that branch for an ordinary (non-missile) bolt can *only* mean it's
+someone else's shot (the local player's own always gets adopted there
+instead, having already been flashed above). The flash is triggered
+directly at that shot's own reported spawn position, oriented by its own
+travel-velocity angle (the same `atan2` formula `drawProjectile` already
+uses) as a stand-in for the shooter's exact facing — a minor
+approximation (a fast, off-axis-moving shooter's true muzzle direction
+and its shot's resultant travel direction can differ slightly, the same
+effect the 2026-09-06 projectile-velocity fix was about), invisible for
+a 50ms cosmetic burst. **No per-ship bookkeeping needed at all** — a
+small self-growing `remoteMuzzleFlashPool` of reusable
+`MuzzleFlashEffect` instances (recycled once `isPlaying()` goes false)
+handles however many simultaneous enemy shots need a flash, updated/
+drawn once per frame rather than per `RemoteShip`.
+
+**Verified:** full `mvn clean test` (153 tests, unaffected) and
+`mvn clean install` green; booted a real packaged client with zero
+exceptions. **Not yet live-verified** — needs the user to fire a real
+shot and confirm the flash appears at the right muzzle(s), oriented
+correctly, and (ideally) that another player's shot flashes too.
+
 **Texture atlas pipeline — decided (2026-09-05):** loose PNGs aren't used
 at runtime; sprites are packed into texture atlases with libGDX's
 `TexturePacker` (`com.badlogicgames.gdx:gdx-tools`), which has a plain

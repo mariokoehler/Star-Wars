@@ -2882,6 +2882,35 @@ unfamiliar processes" rule — a real example of exactly the scenario that
 rule exists for. **Not yet live-verified** — needs the user to actually
 trigger a pulse and confirm the wave expands centered on their ship.
 
+**Muzzle flash — implemented 2026-09-09, same session.** See design.md
+4.3's newest addendum for the full writeup. New `render.MuzzleFlashEffect`
+plays the user's `Muzzle_Flash.p`/`circle2.png`/`dash.png` once at each
+`"PROJECTILE"` attachment point every time a shot fires — a non-looping
+effect like the radar pulse wave, but also directional like the
+thruster, needing both a one-shot trigger *and* an emitter-angle
+rewrite to match the shooter's facing.
+
+**Local player:** triggered from `predictLocalWeapon` at the exact
+moment of firing (client-side prediction, same as the shot itself) -
+not delayed by round-trip latency. **Remote players:** made trivial by
+an already-existing design choice, exactly matching the user's "only if
+trivial" ask - every projectile is already broadcast to everyone
+unfiltered, so `onWorldSnapshot`'s existing "brand new, unadopted
+projectile" branch (previously only used to spawn a fresh
+`RemoteProjectile`) is *already* the exact signal that means "someone
+else just fired" - no new wire data needed at all. The flash renders
+directly at that shot's own spawn position/travel-velocity angle, no
+shooter-ship lookup required, via a small self-growing
+`remoteMuzzleFlashPool` of reusable instances (recycled once done
+playing) rather than per-`RemoteShip` state.
+
+**Verified:** full `mvn clean test` (153 tests, unaffected) and `mvn
+clean install` green; booted a real packaged client with zero
+exceptions (the user's own server was already running separately by
+this point, so only the client was smoke-tested this time). **Not yet
+live-verified** — needs the user to fire a real shot and confirm the
+flash appears correctly, ideally from another player's shot too.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
