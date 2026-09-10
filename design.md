@@ -5427,13 +5427,28 @@ Needs its own native library, same class of dependency as
 `natives-desktop` in `lwjgl3`'s POM (the actual FreeType native lib).
 Not added to `server` — the server never renders text.
 
-**Licensing note, not yet resolved:** "SF Distant Galaxy" was already
-being used to bake art (a use the font's original license may or may
-not actually cover), but bundling the raw `.ttf` file itself in the
-repo and redistributing it inside the game's assets is a further step
-— its exact license/redistribution terms haven't been checked. Revisit
-before this project is ever shared or distributed beyond the current
-players.
+**Licensing note — terms checked (2026-09-10), read as compliant.**
+"SF Distant Galaxy" is ShyFonts' freeware package (`ShyFonts Freeware
+Terms of Use`, ©1999 ShyFonts Type Foundry, readme copy checked at
+`C:\Users\MKOEHLER\Downloads\sf_distant_galaxy\Readme.txt`): free to
+install/use on unlimited machines, "may be distributed ONLY via the
+Internet for FREE," must **not** be sold for profit **nor be included
+as part of another product or CD-ROM compilation**, and must **not**
+be renamed/edited/altered. First pass read the "another product"
+clause in isolation as barring bundling the `.ttf` into any other
+software at all, free or not — the user re-read it in its actual
+context and reasonably disagreed: **"another product or CD-ROM
+compilation" reads as one category** (late-90s/early-2000s freeware
+licenses commonly used exactly this phrasing to bar commercial
+shareware-CD-ROM compilation bundling specifically, not free
+redistribution generally), consistent with the license's own explicit
+allowance for free internet distribution — this game *is* distributed
+free, over the internet (GitHub Releases), so bundling `assets/fonts/
+sf_distant_galaxy.ttf` inside `StarWars-Client.zip` fits the license's
+own stated permission rather than the prohibited case. **Not a
+certainty** (the clause is genuinely ambiguous, ShyFonts hasn't been
+asked directly) but a reasonable reading of the actual text, not a
+guess — no further action taken, no code/asset changes needed.
 
 **Known, deliberately accepted mismatch:** VisUI 1.5.9 (latest on Maven
 Central as of this writing) is itself pinned to gdx 1.14.1 in its own

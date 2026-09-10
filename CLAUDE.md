@@ -3590,7 +3590,62 @@ testing personally; the real test is firing a missile at a full-shield
 target and confirming the hull visibly takes real damage instead of the
 shield quietly absorbing the whole hit.
 
-## Build system
+**README.md rewritten from scratch — 2026-09-10.** User's ask: "if you
+would create a readme.md right now for the first time, what would it
+look like?" — not a patch of the old one. The old README dated straight
+back to the gdx-liftoff/Gradle-to-Maven migration (2026-09-04) and had
+accumulated exactly the kind of stale baggage that framing was meant to
+shed: a "native packaging wasn't ported, ask if you want it" note (jpackage
+packaging has existed and worked since 3.11), hardcoded `StarWars-1.0.0.jar`
+filenames (jgitver-versioned for a while now), no mention of `dev-tools`
+(a real 4th Maven module), no mention of `start_client.cmd`/`start_server.cmd`
+(the actual documented workflow since CLAUDE.md's own "Housekeeping" entry
+added them), and nothing at all about what the game actually *is* by
+now (seven ships, radar, missiles, asteroids, accounts — the old README
+said only "a libGDX project"). Rewritten around: a real features
+summary, "Playing" (grab the release zip) split from "Building from
+source" (the actual dev workflow), a project-layout table including
+`dev-tools`, a "Releasing" section (tag → GitHub Actions → client zip +
+server image, pointing at design.md 3.10–3.12 for the mechanism rather
+than duplicating it), and pointers to design.md/CLAUDE.md themselves.
+Verified every command/filename/module claim against the actual repo
+(pom.xml module list, `finalName` patterns, the real `.cmd` scripts'
+content, `.github/workflows/*.yml`, real git tags) rather than
+reasoning from memory of earlier sessions' work — this repo has grown
+substantially since this session's own context of it started, some of
+it from work done in other sessions this one hadn't seen.
+
+**Font licensing question raised and resolved while researching the
+README's third-party-assets section, same session.** Re-reading
+design.md's own existing "not yet resolved" placeholder note about
+`sf_distant_galaxy.ttf` prompted actually checking — the user pointed
+at the real font package's readme
+(`C:\Users\MKOEHLER\Downloads\sf_distant_galaxy\Readme.txt`). First
+pass read its "may NOT... be included as part of another product or
+CD-ROM compilation" clause in isolation as barring bundling the `.ttf`
+into any other software at all, and **presented it to the user as a
+real decision via `AskUserQuestion`** (accept the risk / stop bundling
+the font / ask ShyFonts for permission / replace the font) rather than
+picking unilaterally, since a third-party-IP compliance read isn't a
+purely technical call — the user initially chose to accept the risk
+under that reading. **The user then re-read the actual clause in
+context and corrected the interpretation**: "another product *or
+CD-ROM compilation*" reads as one category (period freeware licenses
+commonly used this exact phrasing for commercial shareware-CD-ROM
+bundling specifically, not free redistribution generally), consistent
+with the license's own explicit allowance for free internet
+distribution — which is exactly how this game is distributed
+(`StarWars-Client.zip` via GitHub Releases). **Corrected finding: this
+project's actual usage fits the license's own stated permission, not
+the prohibited case** — no code/asset changes needed after all,
+design.md/README updated to reflect the corrected reading rather than
+the overly conservative first pass. **General lesson worth keeping:**
+reading a restrictive-sounding clause in isolation, without weighing
+the surrounding context it was actually written in, can manufacture a
+compliance problem that closer reading resolves — worth a second,
+closer read of the *exact* wording before treating a first impression
+as settled, especially for older/informally-worded freeware licenses
+that weren't drafted with modern precision.
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
 2026-09-04). Modules: `core` (shared sim/net code), `lwjgl3` (desktop

@@ -1,57 +1,117 @@
-# StarWars
+# Star Wars
 
-A [libGDX](https://libgdx.com/) project, originally generated with [gdx-liftoff](https://github.com/libgdx/gdx-liftoff) and migrated from Gradle to Maven.
+An online multiplayer top-down space deathmatch shooter for up to 8
+players — Newtonian flight (thrust/rotate, no arcade auto-braking),
+a dedicated authoritative server, and player accounts that persist
+across sessions. Built on [libGDX](https://libgdx.com/).
 
-## How to run
+**Full game design and technical architecture live in [`design.md`](./design.md).**
+That document is the source of truth for how and why everything works;
+this README only covers building, running, and finding your way
+around the repo.
 
-\# One-time build (from the repo root)
+## What's in the game
 
+- **Flight & combat** — Newtonian movement, a three-way power
+  distribution system (Shields/Weapons/Engines) with diminishing
+  returns on turn rate for lighter ships, blasters, autonomous
+  turrets on capital ships, and lock-on homing missiles.
+- **Seven playable ships** across two factions (Rebel: A-Wing →
+  X-wing → Falcon; Imperial: TIE Fighter → TIE Interceptor → Star
+  Destroyer; Snowspeeder as the free, faction-neutral starter), unlocked
+  with XP earned from kills.
+- **Radar/minimap** — layered detection (omnidirectional, forward
+  cone, an active pulse), server-enforced so you only ever see what
+  you'd actually detect.
+- **A live arena** — hazard asteroids and hard boundary walls, not just
+  open space.
+- **Accounts, a scoreboard, and remappable keybinds.**
+
+## Playing
+
+If someone already has a server running, grab the latest client from
+[Releases](https://github.com/mariokoehler/Star-Wars/releases) —
+`StarWars-Client.zip` is self-contained (bundles its own Java runtime,
+nothing to install) — unzip it and run `StarWars.exe`.
+
+## Building from source
+
+**Requirements:** JDK 25, Maven.
+
+```
 mvn clean package
+```
 
-\# Terminal 1 — the dedicated server
+produces the runnable client and server jars. Then, easiest way to run
+either locally on Windows:
 
-java --enable-native-access=ALL-UNNAMED -jar server/target/StarWars-Server-1.0.0.jar
+```
+start_server.cmd    # one terminal
+start_client.cmd     # one per player, in separate terminals
+```
 
-Wait until it prints [GameServer] Listening on TCP 45625 / UDP 45626, then:
+Both scripts reinstall `core` before running — necessary because this
+project's version is computed from git tags (`jgitver`), so a stale
+local install of `core` can silently fall out of date the moment a new
+commit lands. Wait for the server to print
+`[GameServer] Listening on TCP 45625 / UDP 45626` before starting a
+client.
 
-\# Terminal 2 — client 1
+Not on Windows, or want the plain Maven commands:
 
-java --enable-native-access=ALL-UNNAMED -jar lwjgl3/target/StarWars-1.0.0.jar
+```
+mvn install -pl core -am -DskipTests
+mvn -pl server compile exec:java      # one terminal
+mvn -pl lwjgl3 compile exec:exec      # one per player
+```
 
-\# Terminal 3 — client 2
+To run a packaged jar directly instead:
 
-java --enable-native-access=ALL-UNNAMED -jar lwjgl3/target/StarWars-1.0.0.jar
+```
+java --enable-native-access=ALL-UNNAMED -jar server/target/StarWars-Server-<version>.jar
+java --enable-native-access=ALL-UNNAMED -jar lwjgl3/target/StarWars-<version>.jar
+```
 
-## Platforms
+## Project layout
 
-- `core`: Shared code — simulation (Ashley/Box2D), the network layer, and the application logic shared by all platforms.
-- `lwjgl3`: Primary desktop platform using LWJGL3; was called 'desktop' in older docs.
-- `server`: Dedicated server, built on `gdx-backend-headless`.
+Maven multi-module; `<version>` throughout is computed from git tags,
+never hand-edited (see design.md 3.10).
 
-## Maven
+| Module | What it is |
+|---|---|
+| `core` | Shared code: simulation (Ashley/Box2D), networking, accounts, everything both client and server need |
+| `lwjgl3` | The desktop client (LWJGL3) |
+| `server` | The dedicated, headless server — the sole simulation authority |
+| `dev-tools` | A small Swing app for authoring ship hitbox polygons/attachment points |
 
-This project uses [Maven](https://maven.apache.org/) to manage dependencies, with `core`, `lwjgl3` and `server` as modules of the root `pom.xml`. Useful commands, run from the repo root:
+## Releasing
 
-- `mvn clean package`: builds sources, runs tests, and packages every module. The runnable, shaded jars end up at `lwjgl3/target/StarWars-1.0.0.jar` (client) and `server/target/StarWars-Server-1.0.0.jar` (dedicated server).
-- To run the client or server directly with `exec:exec`/`exec:java` instead of the packaged jar, `core` must already be installed locally first (once, or whenever `core` changes) — a bare exec goal invoked with `-am` runs across the *entire* reactor, including the parent `pom`, which has no config for that plugin and fails immediately:
-  ```
-  mvn install -pl core -am -DskipTests
-  mvn -pl lwjgl3 compile exec:exec
-  mvn -pl server compile exec:java
-  ```
-- `mvn clean`: removes the `target` folders that store compiled classes and built archives.
+Pushing a `vX.Y.Z` tag triggers two independent GitHub Actions
+workflows: `release-client.yml` builds a self-contained Windows
+`StarWars-Client.zip` (via `jpackage`) and publishes it as a GitHub
+Release asset; `release-server.yml` builds and pushes a Docker image to
+`ghcr.io/mariokoehler/starwars-server`. Both embed the same
+tag-derived version, which the client/server handshake checks
+exactly — see design.md 3.10–3.12 for the full mechanism, and
+`deploy/docker-compose.yml` for how the server actually gets deployed.
 
-The `assets/` folder at the repo root is bundled onto the `lwjgl3` module's classpath at build time (see `lwjgl3/pom.xml`), matching how the previous Gradle setup merged it in.
+## Documentation
+
+- **[`design.md`](./design.md)** — game design and system architecture:
+  read this first for anything about how or why a feature works.
+- **[`CLAUDE.md`](./CLAUDE.md)** — process notes, build gotchas, and
+  session-by-session history for anyone (human or AI) picking up work
+  on this codebase.
 
 ## Third-party assets
 
-- **`assets/textures/backgrounds/blue_nebula.png`** (and its source copy at
+- **`assets/textures/backgrounds/blue_nebula.png`** (source copy at
   `assets-raw/backgrounds/blue-nebula/`) — "Blue_Nebula_08" from
-  Screaming Brain Studios' *Seamless Space Backgrounds* pack, released
-  under **CC0 1.0 Universal / Public Domain**. No attribution required;
-  full license text kept alongside it at
-  `assets-raw/backgrounds/blue-nebula/License.txt`.
-
-### Note on native packaging
-
-The original Gradle setup used the `construo` plugin (and, if enabled, GraalVM Native Image) to produce standalone native executables per OS. That tooling is Gradle-specific and wasn't ported — GraalVM native image support was also disabled by default (`enableGraalNative=false`) in the generated project. `mvn clean package` still produces a regular cross-platform runnable jar (`lwjgl3/target/StarWars-1.0.0.jar`), which needs a JVM to run. Ask if you'd like native-image/jpackage support added via Maven plugins.
+  Screaming Brain Studios' *Seamless Space Backgrounds* pack, **CC0 1.0
+  Universal / Public Domain**. No attribution required; full license
+  text kept alongside it at `assets-raw/backgrounds/blue-nebula/License.txt`.
+- **`assets/fonts/sf_distant_galaxy.ttf`** ("SF Distant Galaxy") —
+  ShyFonts freeware: free to use and to redistribute as long as
+  distribution stays free and over the internet (see design.md §3.9
+  for the full terms and reasoning), which this project's release
+  pipeline already satisfies.
