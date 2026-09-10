@@ -3647,6 +3647,44 @@ closer read of the *exact* wording before treating a first impression
 as settled, especially for older/informally-worded freeware licenses
 that weren't drafted with modern precision.
 
+**Missile spawn point + render order — implemented 2026-09-10.** See
+design.md 2.15's spawn-point/render-order addendum for the full
+writeup. User asked where missiles currently spawn from — answer led
+into a real "is this old reasoning still true" question: missiles spawn
+`radiusMeters + 1.5m` ahead of the ship, same "don't spawn exactly
+overlapping the shooter" logic as the blaster fallback offset. User
+correctly suspected this might be stale now that a `ContactFilter`
+exists, and asked directly rather than assuming. **Checked before
+changing anything, not assumed either way:** re-read
+`GameNetworkServer`'s actual `isOwnShip` contact filter — it keys
+purely off `ProjectileComponent` + a matching owner id, no per-entity-
+type knowledge, so it already covers missiles exactly as fully as
+blaster bolts and has since missiles gained a `ProjectileComponent`
+(2.15) — the offset was genuinely no longer load-bearing for the
+Box2D-overlap-bug reason it was originally added for.
+
+User's actual ask once that was confirmed: spawn a missile at the
+ship's *exact* center and instead render every ship on top of its own
+missiles, so a fired missile visually emerges from underneath the ship
+as it flies clear — `Client.render()` now draws `drawMissiles()`
+*before* `drawRemoteShips`/`drawLocalShip` (split out of the old single
+`drawProjectiles()`), with ordinary blaster shots
+(`drawBlasterProjectiles`) keeping their existing after-ships layering
+unchanged. Sidesteps 2.15's still-open "no authored MISSILE attachment
+point yet" note entirely, rather than resolving it — no attachment
+point needed when the ship's own sprite already hides the spawn point.
+
+**Verification status:** full `mvn clean install` (all 4 modules) and
+`mvn test` green, no test changes needed (both are pure spawn-position/
+render-order tweaks — `Client`'s draw methods are thin `SpriteBatch`
+wiring, not logic, this project's standing convention for not needing
+dedicated tests). **Not live-verified** — same standing pattern, user
+testing personally; the real test is firing a missile and watching it
+actually emerge from under the ship rather than pop into view already
+clear of it.
+
+## Build system
+
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
 2026-09-04). Modules: `core` (shared sim/net code), `lwjgl3` (desktop
 client), `server` (`gdx-backend-headless` dedicated server, added

@@ -2430,6 +2430,48 @@ user tests personally; the real test is firing a missile at a
 full-shield target and confirming the hull actually takes a real chunk
 of damage instead of the shield quietly absorbing the whole thing.
 
+**Spawn point + render order addendum, 2026-09-10.** A missile
+previously spawned `radiusMeters + 1.5m` ahead of the firing ship's
+hull, the same "don't spawn exactly overlapping the shooter" reasoning
+`WeaponSystem`'s blaster fallback offset uses — but for a missile
+specifically, that reasoning turned out to be stale: the actual fix
+for the historical Box2D overlap bug (2.4's own addendum — two
+exactly-coincident circles have an undefined separation direction,
+which Box2D resolved by shoving a freshly-spawned shot along some
+unrelated fixed axis) was never the spawn offset itself, it was
+`GameNetworkServer`'s own `ContactFilter` (`isOwnShip`), which stops a
+projectile from generating *any* physical collision against its own
+shooter regardless of where it spawns. That filter keys purely off
+`ProjectileComponent` + a matching owner id — no per-entity-type
+knowledge at all — so it already covered missiles exactly as
+thoroughly as blaster bolts from the moment missiles gained a
+`ProjectileComponent` (2.15), just never actually exercised at
+zero-offset for a missile until now. Confirmed via re-reading the
+filter's own code before changing anything, not assumed.
+
+**User's ask, once that was confirmed:** spawn a missile at the ship's
+*exact* center (no offset at all) and instead render every ship on top
+of its own (and everyone else's) missiles — client-side `Client.render()`
+now draws `drawMissiles()` *before* `drawRemoteShips`/`drawLocalShip`,
+and only ordinary blaster shots (`drawBlasterProjectiles`, split out of
+what used to be one `drawProjectiles()` method) keep their previous
+after-ships layering. The combined effect: a fired missile now visually
+emerges from underneath the launching ship as it flies clear, rather
+than popping into view already offset ahead of the hull — no authored
+"MISSILE" attachment point needed to achieve this, sidestepping 2.15's
+still-open "no authored launch point yet" note entirely rather than
+resolving it.
+
+Verified: `mvn clean install` (all 4 modules) and `mvn test` green,
+no test changes needed (both changes are pure spawn-position/render-
+order tweaks, no new branching logic to unit-test — `drawMissiles`/
+`drawBlasterProjectiles` are thin `SpriteBatch` wiring, same
+"rendering methods don't get dedicated tests" convention as every
+other `Client` draw method). Not live-verified — same standing
+pattern, the user tests personally; the real test is firing a missile
+and watching it actually emerge from under the ship rather than
+appear already clear of it.
+
 ### 2.16 Arena bounds (2026-09-09)
 
 **Decision, resolving §7's long-open "map/arena design" question:** a

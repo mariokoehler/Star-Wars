@@ -1130,16 +1130,16 @@ public class GameNetworkServer extends NetworkServer {
             }
 
             Body body = ship.getComponent(PhysicsBodyComponent.class).getBody();
-            ShipStats shipStats = ShipStats.forType(shipTypeByPlayerId.get(playerId));
-            // Spawn just ahead of the ship's own hull, same "don't spawn exactly overlapping the
-            // shooter" reasoning as WeaponSystem#fireFromDefaultOffset - no authored "MISSILE"
-            // attachment point convention exists yet (neither missile-capable ship has one), so
-            // this is the only spawn offset for now.
-            float spawnDistance = shipStats.getRadiusMeters() + 1.5f;
-            Vector2 spawnOffset = new Vector2(0, 1).rotateRad(body.getAngle()).scl(spawnDistance);
-
+            // Spawns at the ship's exact center, no offset - unlike WeaponSystem's blaster
+            // fallback offset, this isn't needed to avoid a Box2D overlap-resolution bug: the
+            // world's own ContactFilter (isOwnShip) already stops a projectile/its own shooter
+            // from ever generating a physical collision at all, regardless of spawn position, so
+            // spawning exactly inside the shooter's own hitbox is safe. Deliberate now (design.md
+            // - missiles' addendum): the client renders every ship on top of its projectiles, so a
+            // center-spawned missile reads as launched from underneath the ship and emerging as it
+            // flies clear, rather than needing its own authored launch point.
             MissileFactory.createMissile(engine, world, nextProjectileId.getAndIncrement(), playerId,
-                body.getPosition().x + spawnOffset.x, body.getPosition().y + spawnOffset.y, body.getAngle(),
+                body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y,
                 target, targetPlayerId.getPlayerId());
 

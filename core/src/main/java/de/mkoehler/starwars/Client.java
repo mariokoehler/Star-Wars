@@ -1215,9 +1215,15 @@ public class Client implements Screen {
         background.render(batch, camera);
         arenaBoundaryRenderer.render(batch);
         drawAsteroids();
+        // Missiles draw *before* ships, deliberately (design.md - missiles' addendum): they now
+        // spawn at the firing ship's exact center, so drawing every ship on top of them is what
+        // makes a fresh missile read as launched from underneath the ship and emerging as it
+        // flies clear, rather than popping into view already ahead of the hull. Ordinary blaster
+        // shots are unaffected - still drawn after ships, same as before.
+        drawMissiles();
         drawRemoteShips(deltaTime);
         drawLocalShip(deltaTime);
-        drawProjectiles();
+        drawBlasterProjectiles();
         updateAndDrawRemoteMuzzleFlashes(deltaTime);
         updateAndDrawExplosions(hitExplosionPool, deltaTime);
         updateAndDrawExplosions(shipExplosionPool, deltaTime);
@@ -1526,7 +1532,7 @@ public class Client implements Screen {
 
     /**
      * Draws every currently-active asteroid (design.md — asteroids) — dead
-     * reckoned the same way as {@link #drawRemoteShips}/{@link #drawProjectiles},
+     * reckoned the same way as {@link #drawRemoteShips}/{@link #drawBlasterProjectiles},
      * but with no tint, thrusters, lights, or turrets to consider (an
      * asteroid is a plain environmental obstacle, not a player-owned ship).
      */
@@ -2029,7 +2035,36 @@ public class Client implements Screen {
         }
     }
 
-    private void drawProjectiles() {
+    /**
+     * Draws every currently-known missile, filtered out of the general
+     * {@link #projectiles} map by {@link RemoteProjectile#trackedTargetPlayerId}
+     * — called *before* {@link #drawRemoteShips}/{@link #drawLocalShip}
+     * (design.md — missiles' addendum), not after like
+     * {@link #drawBlasterProjectiles}, so every ship renders on top of its
+     * own (and everyone else's) missiles. A missile now spawns at its
+     * firing ship's exact center with no launch offset (server-side), so
+     * this draw order is what actually sells "launched from underneath the
+     * ship" rather than the missile just popping into view already clear
+     * of the hull. Never sourced from {@link #predictedProjectiles} — that
+     * list is blaster-only local prediction (design.md 2.4's addendum), a
+     * missile is never speculatively drawn before the server confirms it.
+     */
+    private void drawMissiles() {
+        for (RemoteProjectile projectile : projectiles.values()) {
+            if (projectile.trackedTargetPlayerId != ProjectileComponent.NO_TRACKED_TARGET) {
+                drawProjectile(projectile, 0f); // widthPixels is unused/overwritten for a missile, see drawProjectile
+            }
+        }
+    }
+
+    /**
+     * Draws every currently-known ordinary blaster shot (including this
+     * player's own not-yet-server-confirmed {@link #predictedProjectiles})
+     * — called *after* {@link #drawRemoteShips}/{@link #drawLocalShip}, same
+     * top-most layering blaster shots have always had; only missiles moved
+     * underneath ships (see {@link #drawMissiles}).
+     */
+    private void drawBlasterProjectiles() {
         // The projectile art is an elongated oval (nose-up, same authoring convention as ship
         // sprites) rather than a circle, so it visually implies speed/direction - but the actual
         // Box2D hitbox stays a circle regardless (WeaponStats.BLASTER's radius), same as a ship's
@@ -2039,7 +2074,9 @@ public class Client implements Screen {
         float widthPixels = WeaponStats.BLASTER.getProjectileRadiusMeters() * 2f * PhysicsConstants.PIXELS_PER_METER;
 
         for (RemoteProjectile projectile : projectiles.values()) {
-            drawProjectile(projectile, widthPixels);
+            if (projectile.trackedTargetPlayerId == ProjectileComponent.NO_TRACKED_TARGET) {
+                drawProjectile(projectile, widthPixels);
+            }
         }
         // Locally-predicted shots (design.md 2.4's addendum) not yet confirmed by the server -
         // drawn exactly like any other of the local player's own shots (same red tint, same
