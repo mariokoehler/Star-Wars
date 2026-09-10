@@ -2386,6 +2386,50 @@ logic-heavy pure functions). Verified: `mvn clean test` (153 tests) and
 `mvn clean install` green; build/tests only, same "you can leave the
 play testing to me" standing instruction.
 
+**Damage-application addendum, 2026-09-10.** The user wanted missiles to
+hit noticeably harder against a shielded target, but specifically *not*
+by just raising the flat damage number — a single lump-sum hit already
+has an odd property `ShipDamage` (2.5) never really surfaces until you
+think about it: at 100% shield, the shield's fraction absorbs the
+*entire* hit in one step, so a full-shield ship takes zero hull damage
+at all from a single ≤100%-of-shield-capacity hit, however large.
+**Fix: split a missile's damage into several equal sub-hits, applied in
+immediate sequence within the same tick** (not spread across frames),
+via a new `ShipDamage.applyChunked(shield, hull, totalDamage, chunkCount)` —
+each sub-hit re-reads the shield's *current* fraction before splitting,
+so as the shield ticks down across sub-hits, progressively more of each
+following sub-hit bleeds through to the hull. Worked example (the
+missile's own actual numbers): a lump-sum 100-damage hit into a 100/100
+ship leaves it at 0 shield / **100 hull (untouched)**; the identical 100
+damage as ten 10-damage sub-hits leaves it at roughly 34.9 shield /
+**65.1 hull** — real hull damage the lump-sum version never dealt at
+all, without touching the missile's raw damage number.
+
+New `MissileConfig`/`MissileStats` field `damageChunkCount` (`10` in
+`missile.stats.json`) — kept tunable/data-driven like every other
+balance number in this project, rather than a hardcoded constant.
+`GameNetworkServer.resolvePendingHits()` branches on
+`ProjectileComponent.getTrackedTargetPlayerId() != NO_TRACKED_TARGET`
+(this codebase's existing, established way of telling a missile apart
+from an ordinary blaster bolt on the wire — see 2.15's `ProjectileComponent`
+Javadoc) to call `applyChunked` for a missile and the plain `apply` for
+everything else — ordinary projectile damage is completely untouched by
+this change. `applyChunked(..., chunkCount <= 1)` degrades to a single
+`apply` call (no pointless loop, no divide-by-zero for a misconfigured
+`0`), so the new method is a strict superset of the old behavior, not a
+parallel path to keep in sync.
+
+Verified: `mvn clean install` (all 4 modules) and `mvn test` green — new
+`ShipDamageTest` cases assert the exact 34.87/65.13 worked example
+above (computed independently in Python first, then matched against the
+Java output), damage conservation (shield-damage-dealt +
+hull-damage-dealt still sums to the total, not lost or duplicated by
+chunking), and that `chunkCount = 1` reproduces a plain `apply` call
+exactly. Not live-verified beyond that — same standing pattern, the
+user tests personally; the real test is firing a missile at a
+full-shield target and confirming the hull actually takes a real chunk
+of damage instead of the shield quietly absorbing the whole thing.
+
 ### 2.16 Arena bounds (2026-09-09)
 
 **Decision, resolving §7's long-open "map/arena design" question:** a

@@ -3549,6 +3549,47 @@ started (`Responding: True`, not actually frozen — "hung" here meant
 explicit request, then did a full `mvn clean install` now that nothing
 held either jar locked.
 
+**Chunked missile damage — implemented 2026-09-10.** See design.md
+2.15's damage-application addendum for the full writeup. The user
+wanted missiles to hit noticeably harder against a shielded target, but
+explicitly *not* by just raising the flat damage number — asked for a
+non-lump-sum application instead: split a missile's damage into 10
+smaller chunks, all applied within the same tick, so the shield/hull
+split (2.5) shifts progressively toward hull as the shield ticks down
+across chunks, instead of the existing single-hit split (computed once,
+at the shield's fraction *before* the hit) staying fixed for the whole
+amount. Worked out the actual numbers before writing any code — a lump
+100-damage hit into a full 100/100 ship leaves the hull **completely
+untouched** (0 shield / 100 hull); the same 100 damage as ten 10-damage
+sub-hits leaves it at **~34.9 shield / ~65.1 hull** — confirmed first
+independently in Python, then matched exactly by the real Java
+`ShipDamageTest` assertions once written.
+
+New `ShipDamage.applyChunked(shield, hull, totalDamage, chunkCount)` —
+loops the existing `apply` call `chunkCount` times at `totalDamage/
+chunkCount` each, no changes to `apply` itself needed (the "recompute
+the split from the shield's *current* fraction every time" behavior
+that makes chunking work at all was already exactly how `apply` behaved
+per-call, chunking is just calling it repeatedly). New tunable
+`MissileConfig`/`MissileStats` field `damageChunkCount` (`10` in
+`missile.stats.json`), not a hardcoded constant — same "every balance
+number is data-driven" convention this project applies everywhere else.
+`GameNetworkServer.resolvePendingHits()` branches on
+`ProjectileComponent.getTrackedTargetPlayerId() != NO_TRACKED_TARGET` —
+already this codebase's own established way of telling a missile apart
+from an ordinary blaster bolt (2.15) — to route only missile hits
+through `applyChunked`; ordinary projectile damage is completely
+untouched. `chunkCount <= 1` degrades `applyChunked` to a single `apply`
+call, so it's a strict superset of the old behavior rather than a
+parallel path that could drift out of sync with it.
+
+**Verification status:** full `mvn clean install` (all 4 modules) and
+`mvn test` green — 157 core tests (up from 152: +5 `ShipDamageTest`) +
+30 server tests. **Not live-verified** — same standing pattern, user
+testing personally; the real test is firing a missile at a full-shield
+target and confirming the hull visibly takes real damage instead of the
+shield quietly absorbing the whole hit.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

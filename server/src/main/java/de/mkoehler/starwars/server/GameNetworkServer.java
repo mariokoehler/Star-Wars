@@ -48,6 +48,7 @@ import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.CollisionCategories;
 import de.mkoehler.starwars.sim.KillXp;
 import de.mkoehler.starwars.sim.MissileFactory;
+import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
@@ -552,14 +553,23 @@ public class GameNetworkServer extends NetworkServer {
             if (!projectilesToRemove.add(hit.projectile)) {
                 continue; // already resolved this tick (e.g. two simultaneous contact events)
             }
-            float damage = hit.projectile.getComponent(ProjectileComponent.class).getDamage();
+            ProjectileComponent projectile = hit.projectile.getComponent(ProjectileComponent.class);
+            float damage = projectile.getDamage();
             HullComponent hull = hit.ship.getComponent(HullComponent.class);
+            ShieldComponent shield = hit.ship.getComponent(ShieldComponent.class);
             boolean wasAlreadyDestroyed = hull.isDestroyed();
-            ShipDamage.apply(hit.ship.getComponent(ShieldComponent.class), hull, damage);
+            if (projectile.getTrackedTargetPlayerId() != ProjectileComponent.NO_TRACKED_TARGET) {
+                // A missile (design.md - missiles' damage-application addendum): split into several
+                // sub-hits instead of one lump sum, so it lets real damage through to the hull far
+                // sooner against a shielded target than the same total damage would in one hit.
+                ShipDamage.applyChunked(shield, hull, damage, MissileStats.INSTANCE.getDamageChunkCount());
+            } else {
+                ShipDamage.apply(shield, hull, damage);
+            }
             hit.ship.getComponent(CombatTimerComponent.class).markHit();
             shipsToCheck.add(hit.ship);
             if (!wasAlreadyDestroyed && hull.isDestroyed()) {
-                int killerPlayerId = hit.projectile.getComponent(ProjectileComponent.class).getOwnerPlayerId();
+                int killerPlayerId = projectile.getOwnerPlayerId();
                 killerPlayerIdByShip.put(hit.ship, killerPlayerId);
             }
         }

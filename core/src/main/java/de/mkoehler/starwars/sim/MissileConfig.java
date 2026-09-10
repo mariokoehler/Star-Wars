@@ -12,6 +12,7 @@ public class MissileConfig {
     private float thrustForce;
     private float turnTorque;
     private float damage;
+    private int damageChunkCount;
     private float flightSeconds;
 
     /**
@@ -71,6 +72,24 @@ public class MissileConfig {
 
     public void setDamage(float damage) {
         this.damage = damage;
+    }
+
+    /**
+     * Returns how many equal sub-hits a missile's damage is split into on
+     * impact ({@link de.mkoehler.starwars.sim.ShipDamage#applyChunked}) —
+     * making a missile far more dangerous than a single lump-sum hit of the
+     * same total damage against a shielded target, since the shield/hull
+     * split is recomputed fresh before each sub-hit, letting real hull
+     * damage through sooner than one lump application ever would.
+     *
+     * @return the number of sub-hits to split {@link #getDamage()} into
+     */
+    public int getDamageChunkCount() {
+        return damageChunkCount;
+    }
+
+    public void setDamageChunkCount(int damageChunkCount) {
+        this.damageChunkCount = damageChunkCount;
     }
 
     /**

@@ -3,5 +3,6 @@
   "thrustForce" : 15.0,
   "turnTorque" : 1.0,
   "damage" : 100.0,
+  "damageChunkCount" : 10,
   "flightSeconds" : 5.0
 }

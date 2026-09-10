@@ -67,6 +67,15 @@ public final class MissileStats {
     }
 
     /**
+     * Returns how many equal sub-hits a missile's damage is split into on impact.
+     *
+     * @return the sub-hit count, see {@link MissileConfig#getDamageChunkCount()}
+     */
+    public int getDamageChunkCount() {
+        return config.getDamageChunkCount();
+    }
+
+    /**
      * Returns how long a fired missile's fuel lasts.
      *
      * @return the flight duration, in seconds, see {@link MissileConfig#getFlightSeconds()}
