@@ -94,6 +94,17 @@ public class ShipSelectionScreen implements Screen {
     private static final String TAG = "ShipSelectionScreen";
 
     private static final ShipType[] SHIP_TYPES = ShipType.values();
+    /**
+     * {@link #selectedIndex}'s starting value — the Snowspeeder, since it's
+     * the only ship every player can actually fly on first joining a server
+     * (design.md — ship unlocks), so it's the one this screen should "land
+     * on" rather than whichever ship type happens to sort first in
+     * {@link ShipType}'s own declaration order. Computed from
+     * {@link ShipType#SNOWSPEEDER} itself rather than a hardcoded array
+     * index, so this stays correct even if that enum's declaration order
+     * ever changes.
+     */
+    private static final int DEFAULT_SELECTED_INDEX = indexOf(ShipType.SNOWSPEEDER);
 
     private static final float DIALOG_WIDTH = 818f;
     private static final float DIALOG_HEIGHT = 618f;
@@ -168,7 +179,7 @@ public class ShipSelectionScreen implements Screen {
     /** Set once an {@link UnlockShipRequest} has been sent, until the server's {@link UnlockShipResponse} arrives - guards against spamming a request every frame SPACE is held. */
     private boolean unlockRequestInFlight;
 
-    private int selectedIndex;
+    private int selectedIndex = DEFAULT_SELECTED_INDEX;
     /**
      * Ignores keyboard input for exactly this screen's first {@link #render}
      * call - found via live testing: pressing ENTER on {@link ConnectScreen}
@@ -541,6 +552,15 @@ public class ShipSelectionScreen implements Screen {
 
     private static boolean contains(float x, float y, float width, float height, float pointX, float pointY) {
         return pointX >= x && pointX <= x + width && pointY >= y && pointY <= y + height;
+    }
+
+    private static int indexOf(ShipType type) {
+        for (int i = 0; i < SHIP_TYPES.length; i++) {
+            if (SHIP_TYPES[i] == type) {
+                return i;
+            }
+        }
+        throw new IllegalStateException("ShipType." + type + " missing from ShipType.values()");
     }
 
     @Override
