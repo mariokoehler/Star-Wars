@@ -3750,15 +3750,17 @@ backend has initialized any `Gdx.*` statics) — caught before ever running
 the app, by reasoning through the actual object-construction order rather
 than by hitting the resulting NPE live.
 
-**The 12 remappable actions** (Client's own former hardcoded keys, now
+**The remappable actions** (Client's own former hardcoded keys, now
 read via `keyBindings.isPressed`/`isJustPressed`): Thrust Forward (W),
 Turn Left (A), Turn Right (D), Fire Weapon (SPACE), Toggle Turret (T),
 Fire Missile (M), Radar Pulse (R), Power: Shields/Weapons/Engines/Reset
-(J/I/L/K), Show Scoreboard (TAB) — every gameplay key this project has
-ever added, not just the five 5.2 originally sketched before Toggle
-Turret/Fire Missile/Radar Pulse/Show Scoreboard existed. **ESC (leave
-match) is the one deliberate exception, hardcoded in `Client` exactly as
-5.2 always said it would be.**
+(J/I/L/K), Show Scoreboard (TAB), Show Player Names (N, added
+2026-09-11, internally `SHOW_DISPLAY_NAMES` — see 4.3's addendum) —
+every gameplay key this project has ever added, not just the five 5.2
+originally sketched before Toggle Turret/Fire Missile/Radar Pulse/Show
+Scoreboard/Show Player Names existed. **ESC (leave match) is the one
+deliberate exception, hardcoded in `Client` exactly as 5.2 always said
+it would be.**
 
 **Rebinding a key already bound to a different action swaps the two**
 (`KeyBindings.rebind`) rather than leaving one key silently bound to both
@@ -5419,6 +5421,49 @@ dev workflow.
   spawnable/playable (`ShipType` entries, stats, ship selection) is
   explicitly the next milestone after that.
 
+**Display names above remote ships — implemented 2026-09-11.** Every
+other visible player's display name floats above their own ship,
+horizontally centered, positioned by world Y-coordinate (not merely
+drawn-after in `SpriteBatch`'s painter's-algorithm sense, though that's
+also true) a fixed margin above the ship's own top edge — explicitly
+never for the local player's own ship, which this client never needs a
+label for. Toggled by a new remappable `GameAction.SHOW_DISPLAY_NAMES`
+("N" by default, design.md 3.8) rather than always-on.
+
+- **Font: deliberately libGDX's own built-in default, not "SF Distant
+  Galaxy"** — explicit user request, wanting something lighter/more
+  legible for a small floating label than that font's much more
+  stylized look (used everywhere else — logos, dialog chrome, HUD
+  readouts). `new BitmapFont()` loads a bitmap font baked directly into
+  libGDX itself, so unlike every other font this project has ever used,
+  there's no file to add to `assets/` and no licensing question at all
+  — the first time this project has drawn live text without either
+  baking art (the usual pre-2026-09-07 approach) or generating a font
+  via `gdx-freetype` (`GameFonts`, used since).
+- **No new wire data needed** — a display name was already broadcast to
+  every client via the existing `ScoreboardMessage`/`PlayerScoreEntry`
+  (design.md 2.11, originally built for the TAB scoreboard), so `Client`
+  just looks a ship's owning player id up in its already-held
+  `scoreboardEntries` array (`findDisplayName`) rather than needing a
+  new field on `ShipState` — the same "check whether existing broadcast
+  data already covers a new need before adding a wire field" instinct
+  this project's audio work applied repeatedly (e.g. reusing
+  `ShipState.isThrusting()` for engine sound instead of a new field). A
+  name silently doesn't render for the first second or so after a new
+  player connects, before their first `ScoreboardMessage` row exists —
+  accepted as harmless, same self-correcting-within-a-second character
+  as every other scoreboard-derived read.
+- **Positioned using each ship's own actual rendered height, not a
+  generic radius-based offset** — reuses `drawRemoteShips`' own already-
+  computed `heightPixels` (from that ship type's real hull sprite
+  dimensions) so a tall, non-square hull (the Star Destroyer, 256×432)
+  gets a correctly-clear label offset, not one sized for a square ship
+  and looking too close/embedded for a taller one. Not rotation-aware
+  (uses the un-rotated height regardless of the ship's current facing)
+  — a deliberate simplification, same tolerance for "close enough"
+  cosmetic positioning this project already accepts elsewhere (e.g. the
+  missile lock reticle's own radius-based sizing).
+
 ### 4.4 UI framework
 
 **Decision: [Scene2D](https://libgdx.com/wiki/graphics/2d/scene2d/scene2d)
@@ -6178,6 +6223,73 @@ of scope for the keybind remap work that was actually asked for; pick
 this up specifically by reproducing with real (non-scripted) keyboard
 input first, to rule out anything SendKeys-specific before assuming the
 scripted-input reproduction here generalizes.
+
+**Scrollable row list — implemented 2026-09-11**, once a 13th action
+(Show Player Names, 4.3's addendum) made the panel too short to fit
+every row at once. The row list is now a scrollable viewport (mouse
+wheel) rather than growing the panel indefinitely — `KeybindScreen`
+installs a persistent `InputAdapter` purely to capture
+`scrolled(...)` events (there's no polling equivalent for scroll delta
+the way key/button state has one), accumulated into a field and drained/
+clamped once per frame into `listScrollPixels`. Drawing is clipped to
+the list's own viewport rectangle via `ScissorStack` (works with a plain
+`SpriteBatch`, no Scene2D/Stage needed) so a partially-scrolled row
+doesn't bleed into the header/footer chrome; hit-testing (the per-row
+key-rebind click) separately checks each row's screen position against
+the same viewport bounds, since `ScissorStack` only clips drawing, not
+input — without that check a row scrolled out of view could still be
+clickable if the mouse happened to land where it would have been drawn.
+
+The background art's baked per-row hairline separators (originally
+assumed a fixed 12-row list) were removed — a static baked line can't scroll with
+dynamic content — leaving a plain navy viewport below the still-baked
+"ACTION"/"KEY" column headers; row separators aren't drawn at all
+anymore, live or baked (judged not worth the extra live-clipped draw
+calls for a first pass — revisit if the list reads as cluttered without
+them once there are enough rows to actually need scrolling in practice).
+"Reset to Defaults"/"Back" pressing `startListening`'s temporary key-
+capture processor now restores the scroll processor afterward (not
+`null`), so scrolling still works immediately after a rebind/cancel.
+
+**Not live-verified** — this environment has no way to simulate a mouse
+scroll wheel, so the scroll-direction sign convention
+(`amountY * SCROLL_PIXELS_PER_NOTCH`) and the exact scroll speed are
+both unconfirmed; the clipping/viewport math was checked via a static
+Python/Pillow composite at both scroll extremes (matching this
+project's own "verify layout against the real background before
+trusting it" convention) instead, confirming the row positions and
+clip boundary line up correctly — but that can't confirm the wheel
+itself feels right, only that the numbers are internally consistent.
+
+**Real bug, found immediately by the user via a screenshot, fixed same
+day: the row list rendered almost entirely blank, with only a sliver of
+the last row visible at the very bottom, overlapping the footer
+buttons.** Root cause: the clip rectangle's screen-Y calculation passed
+`LIST_TOP_DOWN_Y + LIST_HEIGHT` as `DialogLayout.toScreenY`'s `topDownY`
+argument *and* `LIST_HEIGHT` again as its `elementHeight` argument —
+double-counting the viewport height (that method's actual contract:
+`containerScreenY + containerHeight - topDownY - elementHeight`, so
+`topDownY` alone should already be the element's top edge, not
+top-edge-plus-height). The resulting scissor rectangle was computed
+~582px (one full `LIST_HEIGHT`) too far down, off the bottom of the
+panel entirely, so only the small sliver where it happened to still
+overlap the unmoved (never-scrolled, since `listScrollPixels` correctly
+starts at `0`) row content underneath was visible — exactly the
+"the very bottom you can see like a sliver of one keybind entry"
+symptom reported. The parallel bounds check in `handleInput` (used for
+hit-testing, not drawing) happened to compute the *same* total via a
+different split (`topDownY = LIST_TOP_DOWN_Y + LIST_HEIGHT`,
+`elementHeight = 0`) and was therefore already correct by coincidence —
+only the drawing-side clip rectangle had the actual bug. Fixed by
+passing `LIST_TOP_DOWN_Y` alone as `topDownY`. **General rule worth
+repeating: this project's own Python/Pillow "composite before trusting
+a layout" verification step above did not, and structurally could not,
+catch this** — it simulated the *intended* clip rectangle directly,
+never running the same `DialogLayout.toScreenY` call the real code
+path used, so a bug in that specific call site's arguments had no
+chance of surfacing there. A verification composite is only as strong
+as how faithfully it exercises the actual code, not just the intended
+math.
 
 ### 5.3 Audio Settings screen (implemented 2026-09-11)
 

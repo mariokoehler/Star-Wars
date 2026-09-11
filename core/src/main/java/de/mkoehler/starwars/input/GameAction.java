@@ -37,7 +37,8 @@ public enum GameAction {
     POWER_ENGINES("Power: Engines", Input.Keys.L),
     POWER_RESET("Power: Reset Distribution", Input.Keys.K),
 
-    SHOW_SCOREBOARD("Show Scoreboard", Input.Keys.TAB);
+    SHOW_SCOREBOARD("Show Scoreboard", Input.Keys.TAB),
+    SHOW_DISPLAY_NAMES("Show Player Names", Input.Keys.N);
 
     private final String displayName;
     private final int defaultKeycode;

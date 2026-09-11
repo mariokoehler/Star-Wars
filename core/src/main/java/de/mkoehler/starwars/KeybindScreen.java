@@ -10,6 +10,9 @@ import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
+import com.badlogic.gdx.math.MathUtils;
+import com.badlogic.gdx.math.Rectangle;
+import com.badlogic.gdx.scenes.scene2d.utils.ScissorStack;
 import com.badlogic.gdx.utils.ScreenUtils;
 import de.mkoehler.starwars.input.GameAction;
 import de.mkoehler.starwars.input.KeyBindings;
@@ -58,6 +61,20 @@ import de.mkoehler.starwars.render.ScrollingBackground;
  * change at runtime — see this class's own layout constants, which
  * <b>must stay in sync</b> with the Python generator script's own
  * (throwaway, not committed) copies of the same numbers.
+ * <p>
+ * <b>Scrollable row list (design.md 5.2's addendum):</b> once
+ * {@link GameAction} grew past what {@link #LIST_HEIGHT} fits on screen at
+ * once, the row list became a scrollable viewport (mouse wheel) rather
+ * than the panel simply growing forever — {@link #listScrollPixels} shifts
+ * every row up by that many pixels, clamped to
+ * {@code [0, contentHeight - LIST_HEIGHT]}, and the actual drawing is
+ * clipped to the viewport rectangle via {@link ScissorStack} so a
+ * partially-scrolled row doesn't visibly bleed into the header/footer
+ * chrome above/below it. The background art's per-row hairline separators
+ * (baked for a fixed row count) were removed for this reason — a static
+ * baked line can't scroll with dynamic content — leaving a plain
+ * viewport; only the "ACTION"/"KEY" column headers above it stayed baked,
+ * since those never move.
  */
 public class KeybindScreen implements Screen {
 
@@ -75,6 +92,13 @@ public class KeybindScreen implements Screen {
     private static final float ROW_BLOCK = 48f;
     private static final float KEY_BUTTON_HEIGHT = 34f;
     private static final float KEY_BUTTON_Y_INSET = 3f;
+
+    /** Top edge of the scrollable row-list viewport, top-down - just below the baked "ACTION"/"KEY" column headers. */
+    private static final float LIST_TOP_DOWN_Y = 134f;
+    /** Height of the scrollable row-list viewport - ends just above the baked bottom decorative line, leaving a small gap before it. */
+    private static final float LIST_HEIGHT = 582f;
+    /** How many pixels of scroll one mouse wheel "notch" moves the list - untuned, not independently verified live (no way to simulate a scroll wheel from here). */
+    private static final float SCROLL_PIXELS_PER_NOTCH = 40f;
 
     private static final float BUTTONS_TOP = 730f;
     private static final float BUTTON_HEIGHT = 56f;
@@ -129,6 +153,39 @@ public class KeybindScreen implements Screen {
     private GameAction listeningFor;
 
     /**
+     * How far the row list (design.md 5.2's scrollable-list addendum) is
+     * currently scrolled, in pixels - {@code 0} shows the first row at
+     * {@link #LIST_TOP_DOWN_Y}, a larger value shifts every row up by that
+     * many pixels, clamped in {@link #applyScroll} to
+     * {@code [0, contentHeight - LIST_HEIGHT]} (or {@code 0} if every row
+     * already fits without scrolling).
+     */
+    private float listScrollPixels;
+    /**
+     * Accumulates mouse-wheel {@code scrolled(...)} events between frames
+     * (design.md 5.2's addendum) - there's no polling equivalent for scroll
+     * delta the way {@link Gdx#input}'s key/button state has, so this
+     * screen installs a persistent {@link InputAdapter}
+     * ({@link #scrollProcessor}) purely to capture it, then drains/resets
+     * this field once per {@link #render} call, the same
+     * "accumulate via callback, drain via poll once a frame" shape this
+     * project already uses for cross-thread queues.
+     */
+    private float pendingScrollAmount;
+    /**
+     * The persistent input processor that only ever handles mouse-wheel
+     * scroll (see {@link #pendingScrollAmount}) - installed in
+     * {@link #show()}, temporarily swapped out by {@link #startListening}
+     * for its own key-capture processor, and restored by
+     * {@link #stopListening()} rather than resetting to {@code null}, so
+     * scrolling still works immediately after a rebind/cancel.
+     */
+    private InputAdapter scrollProcessor;
+    /** Reused across frames for {@link ScissorStack} clipping - avoids allocating a new {@link Rectangle} pair every frame. */
+    private final Rectangle listClipBounds = new Rectangle();
+    private final Rectangle listScissors = new Rectangle();
+
+    /**
      * Ignores input on this screen's first {@link #render} call — same
      * "just pressed" leak guard already used by {@link ShipSelectionScreen}
      * (e.g. a leftover F12 press from the previous screen could otherwise
@@ -166,6 +223,15 @@ public class KeybindScreen implements Screen {
 
         keyBindings = game.getKeyBindings();
 
+        scrollProcessor = new InputAdapter() {
+            @Override
+            public boolean scrolled(float amountX, float amountY) {
+                pendingScrollAmount += amountY;
+                return true;
+            }
+        };
+        Gdx.input.setInputProcessor(scrollProcessor);
+
         Gdx.app.log(TAG, "show() took " + (System.currentTimeMillis() - showStartMillis) + "ms total");
     }
 
@@ -196,8 +262,20 @@ public class KeybindScreen implements Screen {
         drawLogo(screenWidth, panelScreenY + PANEL_HEIGHT, screenHeight);
         batch.draw(panelTexture, panelScreenX, panelScreenY, PANEL_WIDTH, PANEL_HEIGHT);
 
-        for (int i = 0; i < ACTIONS.length; i++) {
-            drawRow(panelScreenX, panelScreenY, i, mouseX, mouseY);
+        // Clips the scrollable row list (design.md 5.2's addendum) to its own viewport rectangle,
+        // so a row scrolled halfway out doesn't visibly bleed into the header/footer chrome above/
+        // below it - ScissorStack works with a plain SpriteBatch fine, no Scene2D/Stage needed.
+        listClipBounds.set(panelScreenX,
+            DialogLayout.toScreenY(panelScreenY, PANEL_HEIGHT, LIST_TOP_DOWN_Y, LIST_HEIGHT),
+            PANEL_WIDTH, LIST_HEIGHT);
+        batch.flush();
+        ScissorStack.calculateScissors(camera, batch.getTransformMatrix(), listClipBounds, listScissors);
+        if (ScissorStack.pushScissors(listScissors)) {
+            for (int i = 0; i < ACTIONS.length; i++) {
+                drawRow(panelScreenX, panelScreenY, i, mouseX, mouseY);
+            }
+            batch.flush();
+            ScissorStack.popScissors();
         }
         drawFooterButtons(panelScreenX, panelScreenY, mouseX, mouseY);
 
@@ -210,6 +288,8 @@ public class KeybindScreen implements Screen {
      * this frame
      */
     private boolean handleInput(float panelScreenX, float panelScreenY, float mouseX, float mouseY) {
+        applyPendingScroll();
+
         if (firstFrame) {
             firstFrame = false;
             return false;
@@ -225,10 +305,18 @@ public class KeybindScreen implements Screen {
             return true;
         }
 
+        float listScreenBottomY = DialogLayout.toScreenY(panelScreenY, PANEL_HEIGHT, LIST_TOP_DOWN_Y + LIST_HEIGHT, 0f);
+        float listScreenTopY = listScreenBottomY + LIST_HEIGHT;
         for (int i = 0; i < ACTIONS.length; i++) {
-            float rowTopDownY = FIRST_ROW_TOP + i * ROW_BLOCK;
+            float rowTopDownY = FIRST_ROW_TOP + i * ROW_BLOCK - listScrollPixels;
             float x = DialogLayout.toScreenX(panelScreenX, KEY_BUTTON_X);
             float y = DialogLayout.toScreenY(panelScreenY, PANEL_HEIGHT, rowTopDownY + KEY_BUTTON_Y_INSET, KEY_BUTTON_HEIGHT);
+            // A row scrolled out of the viewport must not be clickable even if its computed
+            // rectangle would otherwise overlap the mouse - ScissorStack only clips drawing, not
+            // hit-testing, so this bound has to be checked explicitly.
+            if (y + KEY_BUTTON_HEIGHT < listScreenBottomY || y > listScreenTopY) {
+                continue;
+            }
             if (FlatButton.contains(x, y, KEY_BUTTON_WIDTH, KEY_BUTTON_HEIGHT, mouseX, mouseY)
                     && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT)) {
                 startListening(ACTIONS[i]);
@@ -280,7 +368,40 @@ public class KeybindScreen implements Screen {
 
     private void stopListening() {
         listeningFor = null;
-        Gdx.input.setInputProcessor(null);
+        // Restores scroll handling rather than clearing to null, so the list can still be
+        // scrolled immediately after a rebind/cancel without needing some other input first.
+        Gdx.input.setInputProcessor(scrollProcessor);
+    }
+
+    /**
+     * Drains {@link #pendingScrollAmount} (design.md 5.2's scrollable-list
+     * addendum) into {@link #listScrollPixels}, clamped so the list can
+     * never scroll past its first or last row - a no-op while
+     * {@link #listeningFor} is set, same "ignore other input during a
+     * capture" rule every other input path here already follows. Always
+     * resets {@link #pendingScrollAmount} to zero regardless, so a scroll
+     * that happened during a capture doesn't suddenly jump the list once
+     * the capture ends.
+     */
+    private void applyPendingScroll() {
+        float amount = pendingScrollAmount;
+        pendingScrollAmount = 0f;
+        if (listeningFor != null || amount == 0f) {
+            return;
+        }
+        listScrollPixels = MathUtils.clamp(listScrollPixels + amount * SCROLL_PIXELS_PER_NOTCH, 0f, maxScrollPixels());
+    }
+
+    /**
+     * Returns how far the list can scroll before the last row's bottom
+     * edge reaches {@link #LIST_HEIGHT}'s own bottom edge - {@code 0} if
+     * every row already fits without scrolling at all.
+     *
+     * @return the maximum {@link #listScrollPixels} value
+     */
+    private float maxScrollPixels() {
+        float contentHeight = (ACTIONS.length - 1) * ROW_BLOCK + ROW_HEIGHT;
+        return Math.max(0f, contentHeight - LIST_HEIGHT);
     }
 
     private void goBack() {
@@ -290,7 +411,7 @@ public class KeybindScreen implements Screen {
 
     private void drawRow(float panelScreenX, float panelScreenY, int index, float mouseX, float mouseY) {
         GameAction action = ACTIONS[index];
-        float rowTopDownY = FIRST_ROW_TOP + index * ROW_BLOCK;
+        float rowTopDownY = FIRST_ROW_TOP + index * ROW_BLOCK - listScrollPixels;
 
         float labelScreenX = DialogLayout.toScreenX(panelScreenX, LABEL_X);
         float rowScreenY = DialogLayout.toScreenY(panelScreenY, PANEL_HEIGHT, rowTopDownY, ROW_HEIGHT);
@@ -368,6 +489,7 @@ public class KeybindScreen implements Screen {
         if (listeningFor != null) {
             stopListening();
         }
+        Gdx.input.setInputProcessor(null);
         batch.dispose();
         // background/logoTexture/panelTexture are owned by StarWarsGame#getAssets() (design.md -
         // asset loading), not this screen - disposed once, at app shutdown, not here.

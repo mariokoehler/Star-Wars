@@ -7,6 +7,8 @@ import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.BitmapFont;
+import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.ParticleEffect;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
@@ -203,6 +205,13 @@ public class Client implements Screen {
     private static final float RECONCILE_SOFT_BLEND = 0.2f;
 
     private static final Color OTHER_SHIP_TINT = new Color(0.6f, 0.85f, 1f, 1f);
+
+    /** Display-name label color (design.md — display names) - a plain, readable light gray/white, untuned. */
+    private static final Color DISPLAY_NAME_COLOR = new Color(0.9f, 0.92f, 0.95f, 1f);
+    /** Gap between a ship's own top edge and its display-name label above it - untuned placeholder. */
+    private static final float DISPLAY_NAME_VERTICAL_MARGIN_PIXELS = 12f;
+    /** libGDX's built-in default font is fairly small (~15px cap height) - scaled up a bit for legibility at typical zoom, untuned. */
+    private static final float DISPLAY_NAME_FONT_SCALE = 1.15f;
 
     /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
     private static final Vector2 TURRET_OFFSET = new Vector2();
@@ -558,6 +567,29 @@ public class Client implements Screen {
     private float missileReticleAnimationSeconds;
     /** Latest scoreboard from the server (design.md 2.11) - only drawn while TAB is held. */
     private PlayerScoreEntry[] scoreboardEntries = NO_SCORES;
+    /**
+     * Whether every other visible player's display name is currently drawn
+     * above their ship (design.md — display names) - toggled by
+     * {@link de.mkoehler.starwars.input.GameAction#SHOW_DISPLAY_NAMES}
+     * ("N" by default). Defaults on - an untuned default, not confirmed
+     * with the user either way, easy to flip if it turns out
+     * distracting-by-default is the wrong call.
+     */
+    private boolean showDisplayNames = true;
+    /**
+     * Draws every other visible ship's name label (design.md — display
+     * names) - deliberately libGDX's own built-in default font, not the
+     * game's "SF Distant Galaxy" ({@link de.mkoehler.starwars.render.GameFonts}),
+     * per explicit user request: a plainer, more legible face for a small
+     * floating label, as opposed to that font's much more stylized look
+     * (already used everywhere else - logos, dialog chrome, HUD readouts).
+     * Needs no bundled asset at all ({@code new BitmapFont()} loads a
+     * baked-in bitmap font shipped inside libGDX itself), so unlike every
+     * other font this project uses, there's no licensing question and
+     * nothing to add to {@code assets/}.
+     */
+    private BitmapFont displayNameFont;
+    private final GlyphLayout displayNameLayout = new GlyphLayout();
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
     /**
      * A local mirror of the server's own {@code WeaponComponent} for this
@@ -640,6 +672,11 @@ public class Client implements Screen {
         // built once here rather than rebuilt per-spawn, since it depends on no ship-type-specific
         // attachment metadata.
         myRadarPulseEffect = createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE);
+
+        // libGDX's own built-in default font (design.md — display names) - no asset to load,
+        // deliberately plainer than GameFonts' "SF Distant Galaxy", per explicit user request.
+        displayNameFont = new BitmapFont();
+        displayNameFont.getData().setScale(DISPLAY_NAME_FONT_SCALE);
 
         background = new ParallaxBackground(
             // false: this texture is owned by StarWarsGame#getAssets() (design.md - asset
@@ -1305,6 +1342,10 @@ public class Client implements Screen {
             if (keyBindings.isJustPressed(GameAction.FIRE_MISSILE)) {
                 networkClient.sendTCP(new MissileFireRequest());
             }
+
+            if (keyBindings.isJustPressed(GameAction.SHOW_DISPLAY_NAMES)) {
+                showDisplayNames = !showDisplayNames;
+            }
         }
 
         extrapolateRemoteShips(deltaTime);
@@ -1695,7 +1736,8 @@ public class Client implements Screen {
 
     private void drawRemoteShips(float deltaTime) {
         batch.setColor(OTHER_SHIP_TINT);
-        for (RemoteShip ship : ships.values()) {
+        for (Map.Entry<Integer, RemoteShip> entry : ships.entrySet()) {
+            RemoteShip ship = entry.getValue();
             ShipStats stats = ShipStats.forType(ship.shipType);
             TextureRegion region = shipRegionsByType.get(ship.shipType);
             float screenScale = PhysicsConstants.PIXELS_PER_METER / stats.getPixelsPerMeter();
@@ -1727,8 +1769,53 @@ public class Client implements Screen {
                 ship.renderX, ship.renderY, ship.renderAngle, shipDamageFraction, deltaTime);
             ship.radarPulseEffect.update(ship.renderX, ship.renderY, deltaTime);
             ship.radarPulseEffect.draw(batch);
+            if (showDisplayNames) {
+                drawDisplayName(entry.getKey(), ship.renderX, ship.renderY + heightPixels / 2f + DISPLAY_NAME_VERTICAL_MARGIN_PIXELS);
+            }
         }
         batch.setColor(Color.WHITE);
+    }
+
+    /**
+     * Draws {@code playerId}'s display name, horizontally centered on
+     * {@code labelBottomY} (design.md — display names) - a no-op if that
+     * player's name isn't known yet ({@link #scoreboardEntries} hasn't
+     * included them in a broadcast yet, e.g. the first second after they
+     * connect). Never drawn for the local player - {@link #drawRemoteShips}
+     * is this method's only caller, and the local player is never present
+     * in {@link #ships} to begin with (design.md 2.14/3.5).
+     *
+     * @param playerId    the ship's owning player id, looked up in {@link #scoreboardEntries}
+     * @param centerX     screen X to center the label on
+     * @param labelBottomY the label text's own bottom edge, in screen coordinates
+     */
+    private void drawDisplayName(int playerId, float centerX, float labelBottomY) {
+        String displayName = findDisplayName(playerId);
+        if (displayName == null) {
+            return;
+        }
+        displayNameLayout.setText(displayNameFont, displayName);
+        displayNameFont.setColor(DISPLAY_NAME_COLOR);
+        displayNameFont.draw(batch, displayNameLayout, centerX - displayNameLayout.width / 2f,
+            labelBottomY + displayNameLayout.height);
+    }
+
+    /**
+     * Looks up {@code playerId}'s display name from the latest
+     * {@link #scoreboardEntries} broadcast (design.md 2.11) - the only
+     * place any client learns another player's display name at all, since
+     * neither {@code ShipState} nor any other per-tick message carries it.
+     *
+     * @param playerId the player id to look up
+     * @return that player's display name, or {@code null} if not yet known
+     */
+    private String findDisplayName(int playerId) {
+        for (PlayerScoreEntry entry : scoreboardEntries) {
+            if (entry.getPlayerId() == playerId) {
+                return entry.getDisplayName();
+            }
+        }
+        return null;
     }
 
     /**
@@ -2630,6 +2717,7 @@ public class Client implements Screen {
         background.dispose();
         scoreboardHud.dispose();
         radarHud.dispose();
+        displayNameFont.dispose();
 
         Gdx.app.log(TAG, "dispose() took " + (System.currentTimeMillis() - disposeStartMillis) + "ms total");
     }

@@ -4000,6 +4000,158 @@ mechanism already used elsewhere) so only a shot moves it, or let ships
 physically bump it too. **Not started** — the user is still working on
 the pickup's art, explicitly not ready to implement yet.
 
+**Display names above remote ships — implemented 2026-09-11.** See
+design.md 4.3's newest addendum for the full writeup. User's ask: show
+every other player's display name above their ship (by world Y position,
+explicitly clarified as not just render order), never for the local
+player's own ship, toggleable with a new remappable "N". Also asked
+outright whether libGDX ships any font options besides sourcing a TTF —
+answered directly: yes, `new BitmapFont()` loads a small bitmap font
+baked into libGDX itself, no file/license needed at all, and recommended
+it given the user explicitly wanted something *lighter* than "SF Distant
+Galaxy" (which is used for literally everything else drawn as live text
+in this project so far - `GameFonts`/`gdx-freetype`). Went with that
+default and implemented directly rather than pausing on it further,
+consistent with this project's own "propose a concrete default, don't
+stall on a reversible aesthetic choice" convention - first time this
+project has drawn live text with neither baked art nor `gdx-freetype`.
+
+**No new wire message needed** - a display name was already broadcast
+per-player via the existing scoreboard mechanism
+(`ScoreboardMessage`/`PlayerScoreEntry`, 2.11), so `Client.findDisplayName`
+just looks a ship's owning player id up there instead of adding a field
+to `ShipState`. New remappable `GameAction.SHOW_DISPLAY_NAMES` ("N"),
+toggled the same `isJustPressed`-flips-a-boolean way `TOGGLE_TURRET`
+already works, defaulting **on** (untuned default, not confirmed with
+the user either way - flagged, easy to flip). `drawRemoteShips` had to
+switch from iterating `ships.values()` to `ships.entrySet()` since
+`RemoteShip` itself has no `playerId` field (it's the map's own key,
+same as every other lookup-by-id in this codebase) - a small, mechanical
+change, not a redesign.
+
+**Positioned using each ship's own real rendered height, not a generic
+radius guess** - reuses `drawRemoteShips`' already-computed
+`heightPixels` (from that ship type's actual hull sprite dimensions), so
+the label sits at a sensible offset for a tall, non-square hull (the
+Star Destroyer, 256×432) too, not one tuned for a square ship. Not
+rotation-aware (always offsets along the un-rotated "up," matching what
+the user actually asked for - Y position, not "above the nose") -
+deliberate, same "close enough" cosmetic tolerance this project already
+accepts for the missile lock reticle's own radius-based sizing.
+
+**Verification status:** full `mvn clean install`/`mvn test` (166
+tests, unaffected - pure rendering/input wiring, no new pure logic)
+green. **Not yet live-verified** — needs the user to confirm names
+render legibly above the right ships, toggle correctly with N, and that
+the default-on choice feels right (or should default off instead).
+
+**Two follow-ups, same day, right after the display-names feature:
+player-facing label reword + a scrollable keybind list.** See design.md
+4.3's addendum (for the label) and 5.2's newest addendum (for scrolling)
+for the full writeups.
+
+1. **"Show Display Names" → "Show Player Names" on the Keybind screen.**
+   User's own framing: "Display Name" is a technical term that might
+   confuse players, but internally the term is fine as-is. Changed only
+   `GameAction.SHOW_DISPLAY_NAMES`'s player-facing `displayName` string
+   literal - the enum constant name, every internal comment/Javadoc, and
+   `design.md`'s own prose all still say "display name(s)" deliberately,
+   exactly matching the user's own internal/external split.
+2. **The keybind list is now genuinely scrollable**, since adding a 13th
+   action (this same session's own display-names toggle) made the panel
+   too short - the user asked for scrolling specifically, not a taller
+   panel. New scroll state (`listScrollPixels`, clamped every frame) fed
+   by a persistent `InputAdapter` installed in `show()` purely to catch
+   `scrolled(...)` - **there's no polling equivalent for scroll delta**
+   the way `Gdx.input.isKeyPressed`/`isButtonPressed` work regardless of
+   which processor is installed; scroll genuinely only arrives via that
+   callback, so this project's first-ever persistent (not just
+   momentary/listening-mode) `InputAdapter` was needed here.
+   `startListening`'s temporary key-capture processor now hands back to
+   this persistent one afterward (`stopListening` no longer resets to
+   `null`), so scrolling still works immediately after a rebind or
+   cancel.
+3. **Real clipping via `ScissorStack`** (`com.badlogic.gdx.scenes.scene2d.utils`,
+   despite the package name it works with a plain `SpriteBatch`, no
+   Scene2D/Stage needed) - `batch.flush()` before `pushScissors`/before
+   `popScissors`, same pattern Scene2D's own `Group` clipping uses
+   internally (confirmed by reading the actual libGDX source,
+   `gdx-1.14.2-sources.jar`, not guessed - also how `calculateScissors`'s
+   real signature was confirmed `void`, not `boolean`, after a first
+   draft wrongly assumed it returned one and chained it into an `&&`).
+   **`ScissorStack` only clips drawing, not input** - the per-row
+   key-rebind click handler needed its own explicit "is this row's
+   screen position actually inside the visible viewport" check, or a row
+   scrolled out of view could still register a click if the mouse
+   happened to land where it would have been drawn.
+4. **Background art regenerated, not just re-laid-out:** the baked
+   per-row hairline separators assumed a fixed 12-row list - a static
+   line can't scroll with dynamic content, so they had to go. First
+   attempt at erasing them **also erased the "ACTION"/"KEY" column
+   headers**, caught immediately by comparing the result against the
+   original screenshot rather than assuming the blanket-rectangle erase
+   band was safe - the headers turned out to sit inside the same
+   *y*-range as the erase band's naive first guess (114-717), not safely
+   above it. Fixed by scanning the actual pixel data at the header
+   text's real *x*-range (not the coordinate that happened to be probed
+   first, dead-center, which missed both left-aligned "ACTION" and
+   right-ish "KEY") to find their true bounds (~y 118-133) and starting
+   the erase band *below* that instead (134-717). **General rule worth
+   repeating: when editing baked art by erasing a pixel region, verify
+   the erase band's bounds against actually-measured content bounds, not
+   an assumption from a single-column color scan** - a scan that doesn't
+   cross the actual text's *x*-position gives a false "nothing there"
+   reading.
+5. **Verified via the same "composite before trusting the layout"
+   discipline used for prior art work, not live** (no way to simulate a
+   mouse scroll wheel in this environment) - a throwaway Python/Pillow
+   script rendered the real 13-action list at both scroll extremes
+   (`scroll=0`, `scroll=maxScrollPixels()`) against the actual edited
+   background, confirming the clip boundary and row positions line up
+   correctly at both ends, though this can't confirm the wheel itself
+   feels right, only that the underlying numbers are internally
+   consistent.
+
+**Verification status:** full `mvn clean install`/`mvn test` (166
+tests, unaffected) green. **Not yet live-verified** — needs the user to
+confirm the relabeled action reads clearly, that scrolling actually
+works with their mouse wheel (direction and speed both unconfirmed -
+`amountY`'s sign was implemented by best understanding of the libGDX
+convention, not tested), and that clicking a row near either edge of the
+scrolled viewport doesn't register on the wrong (clipped-away) row.
+
+**Real bug, caught immediately by the user via a screenshot, fixed same
+day: the keybind list rendered almost completely blank.** See design.md
+5.2's newest addendum for the full writeup. The user pasted a screenshot
+(couldn't paste directly into the terminal, saved it to a local path
+and gave the path instead - read fine via the `Read` tool) showing the
+whole row area empty except a sliver of the last row overlapping the
+footer buttons - exactly what a clip rectangle computed ~582px too far
+down would look like. Root cause: `DialogLayout.toScreenY`'s real
+contract is `containerScreenY + containerHeight - topDownY -
+elementHeight` (`topDownY` alone is the element's own top edge) - the
+clip-rect call passed `LIST_TOP_DOWN_Y + LIST_HEIGHT` as `topDownY`
+*and* `LIST_HEIGHT` again as `elementHeight`, double-counting the
+viewport height. The parallel bounds check used for hit-testing
+happened to split the same total differently (`topDownY = LIST_TOP_DOWN_Y
++ LIST_HEIGHT`, `elementHeight = 0`) and was correct by coincidence -
+only the drawing-side clip rectangle had the actual bug. One-line fix:
+pass `LIST_TOP_DOWN_Y` alone.
+
+**Confirms a real limitation of this session's own verification step,
+worth stating plainly rather than glossing over:** the Python/Pillow
+composite used to "verify" the scroll layout simulated the *intended*
+clip rectangle directly - it never ran the actual `DialogLayout.toScreenY`
+call the real code used, so a bug in that specific call's arguments had
+zero chance of showing up there. **General rule for future composite-
+before-trusting-it verification in this project: a composite is only as
+strong as how faithfully it exercises the real code path, not just the
+intended math** - simulating the *goal* isn't the same as simulating the
+*implementation*, and this project's own established "verify with a
+composite" convention needs the composite to actually call (or exactly
+mirror) the real method, not just reproduce what it's supposed to
+compute.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
