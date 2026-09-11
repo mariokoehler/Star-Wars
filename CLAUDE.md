@@ -3987,6 +3987,19 @@ actually attempt a missile lock and confirm "trying" plays immediately
 on cone entry, switches cleanly to "acquired" with no overlap, and cuts
 off instantly on firing or losing the target.
 
+**Power-ups — design question only, noted for later, 2026-09-11.** User
+is planning a pickup-on-contact power-up and asked ahead of time whether
+projectiles currently have real mass/impart an impulse on hit, with an
+eye toward using a stray/deliberate shot to shove a light power-up
+across the arena. Confirmed yes on both counts (blaster/missile fixtures
+are non-sensor, real Box2D mass) — this would come essentially free once
+built. Recorded as a new bullet in design.md §7 (Open design questions),
+including the one real decision to make later: filter ship↔power-up
+contact to detection-only (`CollisionCategories`/`ContactFilter`, same
+mechanism already used elsewhere) so only a shot moves it, or let ships
+physically bump it too. **Not started** — the user is still working on
+the pickup's art, explicitly not ready to implement yet.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

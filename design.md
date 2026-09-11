@@ -6489,3 +6489,22 @@ the relevant section above once decided.
 - **Tick rate / snapshot rate** for the netcode.
 - **Lag compensation** for hit detection (rewind-time hit registration vs.
   simple current-state checks) — matters more as ping increases.
+- **Power-ups (2026-09-11, not started — user is still working on the art):**
+  a world pickup a ship collects on contact. Confirmed feasible ahead of
+  time: since projectiles already have real, non-sensor Box2D mass
+  (design.md 2.4/2.15 — a blaster bolt is density `0.01`, a missile
+  density `1.0`, neither a sensor), a light enough power-up body would
+  already get a real physical impulse from a stray or deliberate shot,
+  making it drift across the arena, with zero new physics code — a
+  natural side effect of collision resolution already running before a
+  hit is resolved, not something that needs to be built. **One real
+  decision for whenever this is actually implemented:** whether a *ship*
+  touching a power-up should also physically shove it (simplest, but a
+  light body would fling away fast on contact, making "touch to pick up"
+  feel twitchy) or whether ship↔power-up contact should be filtered to
+  detection-only via `CollisionCategories`/the custom `ContactFilter`
+  (same per-category-pair filtering machinery already used for ship-vs-
+  own-shooter and every other exclusion in this project), leaving
+  projectile/missile↔power-up contact fully physical so only a shot
+  actually moves it. Leaning toward the filtered approach for pickup
+  feel, but not decided.
