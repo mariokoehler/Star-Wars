@@ -116,6 +116,10 @@ public class DeathScreen implements Screen {
 
     @Override
     public void show() {
+        // Design.md - hangar ambience: resumes here (Client faded it out on entering gameplay),
+        // continuing uninterrupted into whichever hangar-zone screen comes next.
+        game.playHangarAmbience();
+
         batch = new SpriteBatch();
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());

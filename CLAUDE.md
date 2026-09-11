@@ -4392,6 +4392,55 @@ to actually bump into things and pick up a power-up to confirm both
 sounds play (with real sample variety across several impacts) and fade
 correctly with distance for a remote event.
 
+**Hangar ambience — implemented 2026-09-11, same session.** See
+design.md's newest audio addendum for the full writeup. User asked, as a
+feasibility question first, whether a background ambience track could
+play seamlessly across Ship Selection/Death Screen/Keybind Settings/
+Audio Settings with no interruption switching between them — answered
+directly (yes, own the `Music` on `StarWarsGame` same as every other
+cross-screen resource there, since `Music.play()` no-ops if already
+playing) and got the go-ahead to build it in the same message.
+
+**Mapped the real screen-transition graph before writing anything** —
+those four screens ("the hangar zone") only ever lead to each other or
+to `Client` (gameplay); nothing ever leads back to `ConnectScreen`. So
+only two chokepoints needed touching: `playHangarAmbience()` in each
+zone screen's own `show()`, `fadeOutHangarAmbience()` once in
+`Client.show()` — no per-transition special-casing anywhere.
+
+**Deliberately a different lifecycle from `ConnectScreen`'s own theme
+music, not a copy of `fadeOutAndDisposeMusic`:** one `Music` instance
+for the app's whole run, loaded once and disposed only at app shutdown,
+paused (not stopped/disposed) on leaving the zone and resumed by a later
+`play()` — cheaper than reloading from disk every match, and a loop has
+nothing meaningful to rewind to anyway. Volume is kept live-synced every
+frame (`StarWarsGame.render()`), not set once at `play()` time like the
+Connect theme — `AudioSettingsScreen`, where the master volume slider
+lives, is itself one of the four zone screens this track plays through,
+so a live drag needs to audibly affect it immediately.
+
+**Verification:** full `mvn clean install`/`mvn test` (178 core + 30
+server, unaffected — pure screen-lifecycle wiring) green. A real
+packaged server + client booted together, zero exceptions (confirms
+`ambience_hangar.mp3` loads via `Gdx.audio.newMusic` at `create()` time
+— the earliest point a missing/corrupt file would throw, before any
+screen exists). **Not live-verified** — needs the user to actually walk
+the four-screen loop and confirm no restart/gap anywhere, correct resume
+at Death Screen after a combat death, a clean fade-out starting a match,
+and the master volume slider audibly affecting it live.
+
+**Real turret-fire sound swapped in, 2026-09-11.** The placeholder
+flagged when turret sound first shipped (this file's own weapon-sound
+entry above: "the user copied `snowspeeder_shooting.mp3` to
+`turret_shooting.mp3`... with the real clip to follow later as a
+straight file swap, no code change expected when it arrives") arrived —
+`assets-raw/sfx/weapons/turret_shooting.mp3`/`assets/audio/weapons/turret_shooting.mp3`
+overwritten with the user's real clip, confirmed genuinely different
+from both the old placeholder file and `snowspeeder_shooting.mp3`
+before committing. Exactly the predicted no-code-change case:
+`GameAssets.TURRET_SOUND` already points at this same path, nothing
+else to touch.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

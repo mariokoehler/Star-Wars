@@ -695,6 +695,11 @@ public class Client implements Screen {
         // pause (CLAUDE.md) - logged once show() finishes, below.
         long showStartMillis = System.currentTimeMillis();
 
+        // Design.md - hangar ambience: gameplay is the one place a player actually leaves the
+        // hangar zone (Ship Selection/Keybind/Audio Settings/Death Screen) - a no-op if it wasn't
+        // playing (e.g. still faded out from a previous match this session).
+        game.fadeOutHangarAmbience();
+
         Box2D.init();
         long box2dInitMillis = System.currentTimeMillis();
 

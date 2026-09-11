@@ -52,7 +52,15 @@ import java.util.Random;
  * (design.md — audio settings) follows the identical pattern once more:
  * loaded once here from the local audio-settings file, shared by every
  * screen/system that plays a sound, mutated (and re-saved) by
- * {@link AudioSettingsScreen}. Every other screen only ever needs a
+ * {@link AudioSettingsScreen}. {@link #hangarAmbience} (design.md — hangar
+ * ambience) is the same "must outlive any single screen instance" story
+ * again, but for a track meant to keep playing, uninterrupted, across
+ * {@link ShipSelectionScreen}/{@link KeybindScreen}/{@link AudioSettingsScreen}/
+ * {@link DeathScreen} — collectively "the hangar zone" — rather than fading
+ * out once like {@link ConnectScreen}'s theme: one persistent {@link Music}
+ * instance, loaded once and never disposed until the app itself closes,
+ * simply paused/resumed ({@link #playHangarAmbience()}/{@link #fadeOutHangarAmbience()})
+ * as the player enters/leaves that zone. Every other screen only ever needs a
  * {@link Game} reference to switch away from itself, but constructors are
  * typed to this concrete class instead so they can reach
  * {@link #getQuoteDeck()}/{@link #getAssets()}/{@link #fadeOutAndDisposeMusic}
@@ -81,10 +89,20 @@ public class StarWarsGame extends Game {
     private Music fadingMusic;
     private float fadingMusicElapsedSeconds;
 
+    /**
+     * Not loaded as a field initializer, same "{@code Gdx.files} isn't set up yet" reasoning as
+     * {@link #keyBindings}/{@link #audioSettings} - loaded in {@link #create()} instead.
+     */
+    private Music hangarAmbience;
+    private boolean hangarAmbienceFadingOut;
+    private float hangarAmbienceFadeElapsedSeconds;
+
     @Override
     public void create() {
         keyBindings = KeyBindings.load();
         audioSettings = AudioSettingsStore.load().orElseGet(AudioSettings::new);
+        hangarAmbience = Gdx.audio.newMusic(Gdx.files.internal("audio/ambience_hangar.mp3"));
+        hangarAmbience.setLooping(true);
         setScreen(new SplashScreen(this));
     }
 
@@ -118,6 +136,22 @@ public class StarWarsGame extends Game {
             } else {
                 fadingMusic.setVolume(volume);
             }
+        }
+        if (hangarAmbienceFadingOut) {
+            hangarAmbienceFadeElapsedSeconds += Gdx.graphics.getDeltaTime();
+            float volume = audioSettings.getMasterVolume() * (1f - hangarAmbienceFadeElapsedSeconds / MUSIC_FADE_OUT_SECONDS);
+            if (volume <= 0f) {
+                hangarAmbience.pause();
+                hangarAmbienceFadingOut = false;
+            } else {
+                hangarAmbience.setVolume(volume);
+            }
+        } else if (hangarAmbience.isPlaying()) {
+            // Kept in sync continuously, unlike ConnectScreen's own theme (volume set once, at
+            // play() time) - AudioSettingsScreen, where the master volume slider actually lives, is
+            // itself one of the hangar-zone screens this track plays through, so a live drag must
+            // audibly affect it immediately, not just on the next play().
+            hangarAmbience.setVolume(audioSettings.getMasterVolume());
         }
     }
 
@@ -178,6 +212,7 @@ public class StarWarsGame extends Game {
     public void dispose() {
         super.dispose();
         assetManager.dispose();
+        hangarAmbience.dispose();
     }
 
     /**
@@ -203,5 +238,42 @@ public class StarWarsGame extends Game {
         }
         fadingMusic = music;
         fadingMusicElapsedSeconds = 0f;
+    }
+
+    /**
+     * Starts (or resumes) the hangar ambience loop (design.md — hangar
+     * ambience) at the current master volume, canceling any in-progress
+     * {@link #fadeOutHangarAmbience()}. Called from every hangar-zone
+     * screen's own {@code show()} ({@link ShipSelectionScreen}/
+     * {@link KeybindScreen}/{@link AudioSettingsScreen}/{@link DeathScreen})
+     * — {@link Music#play()} is already a no-op if the track is already
+     * playing, so moving between any two of those screens never restarts
+     * it, only arriving from outside the zone (Connect, or leaving
+     * gameplay) actually starts it audibly.
+     */
+    public void playHangarAmbience() {
+        hangarAmbienceFadingOut = false;
+        hangarAmbience.setVolume(audioSettings.getMasterVolume());
+        hangarAmbience.play();
+    }
+
+    /**
+     * Fades the hangar ambience loop out to silence over
+     * {@link #MUSIC_FADE_OUT_SECONDS}, then pauses it — deliberately
+     * paused, not stopped/disposed like {@link #fadeOutAndDisposeMusic}'s
+     * one-shot handoff: this track is reused for the rest of the app's
+     * run (every future return to the hangar zone), so pausing in place
+     * is cheaper and avoids reloading it from disk, and a loop has no
+     * meaningful "start" position to rewind to anyway. A no-op if it
+     * isn't currently playing or already mid-fade. Called once, from
+     * {@link Client#show()} — the one place a player actually leaves the
+     * hangar zone for real gameplay.
+     */
+    public void fadeOutHangarAmbience() {
+        if (!hangarAmbience.isPlaying() || hangarAmbienceFadingOut) {
+            return;
+        }
+        hangarAmbienceFadingOut = true;
+        hangarAmbienceFadeElapsedSeconds = 0f;
     }
 }

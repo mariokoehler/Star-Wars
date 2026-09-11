@@ -222,6 +222,11 @@ public class ShipSelectionScreen implements Screen {
         // pause (CLAUDE.md) - logged once show() finishes, below.
         long showStartMillis = System.currentTimeMillis();
 
+        // Design.md - hangar ambience: keeps playing uninterrupted whether arriving here from
+        // Connect, a combat death/ESC leave in Client, or another hangar-zone screen - a no-op if
+        // already playing.
+        game.playHangarAmbience();
+
         batch = new SpriteBatch();
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());

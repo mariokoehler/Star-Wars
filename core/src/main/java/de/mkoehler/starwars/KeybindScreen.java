@@ -210,6 +210,10 @@ public class KeybindScreen implements Screen {
     public void show() {
         long showStartMillis = System.currentTimeMillis();
 
+        // Design.md - hangar ambience: keeps playing uninterrupted across the transition from
+        // Ship Selection - a no-op if already playing.
+        game.playHangarAmbience();
+
         batch = new SpriteBatch();
         camera = new OrthographicCamera();
         camera.setToOrtho(false, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());

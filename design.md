@@ -6199,6 +6199,69 @@ another ship and confirm a "thud" plays (with some sample variety across
 several impacts) and to pick up a power-up and confirm the pickup chime
 plays, both fading correctly with distance for a remote event.
 
+**Hangar ambience — implemented 2026-09-11.** User's ask: play a looping
+ambience track (`assets-raw/sfx/other/ambience_hangar.mp3`, copied to
+`assets/audio/ambience_hangar.mp3`, same loose-file convention as
+`StarWarsTheme.mp3` — a `Music` track, not something the shared
+`AssetManager` manages) continuously across four specific screens —
+Ship Selection, Death Screen, Keybind Settings, Audio Settings —
+**without any audio interruption switching between them**. Mapped the
+actual screen-transition graph first, not assumed: those four screens
+(collectively "the hangar zone") only ever transition to each other or
+to `Client` (gameplay) — `ConnectScreen` only ever leads *into* the zone
+(via Ship Selection), never back out to itself. So the real requirement
+reduces to two chokepoints: start/resume the track on entry to *any*
+zone screen, fade it out on the one path leaving the zone for real
+gameplay.
+
+**Owned by `StarWarsGame`, not any single screen** — same "must outlive
+any one screen instance" reasoning already established there for
+`assetManager`/`quoteDeck`/`keyBindings`/`audioSettings`/`fadingMusic`.
+Unlike `ConnectScreen`'s own theme (a fresh `Music` instance per screen
+visit, handed off to `fadeOutAndDisposeMusic` and disposed once silent),
+the hangar ambience is **one persistent `Music` instance for the app's
+entire run**, loaded once in `create()` and never disposed until the app
+itself closes — reused every time the player re-enters the zone rather
+than reloaded from disk, and paused (not stopped) when leaving so a loop
+has nothing meaningful to rewind to anyway.
+
+**Two new `StarWarsGame` methods, each screen only ever needs to know
+which one applies to itself:**
+- `playHangarAmbience()` — called from every hangar-zone screen's own
+  `show()` (`ShipSelectionScreen`/`KeybindScreen`/`AudioSettingsScreen`/
+  `DeathScreen`). `Music.play()` is already a no-op when the track is
+  already playing, so moving between any two of these four screens
+  never restarts it — the actual mechanism the "no interruption"
+  requirement rides on, not any special-cased transition logic.
+- `fadeOutHangarAmbience()` — called once, from `Client.show()`, the
+  single real exit point from the zone. Fades over the same
+  `MUSIC_FADE_OUT_SECONDS` `fadeOutAndDisposeMusic` already uses, then
+  pauses (a no-op if it wasn't playing, e.g. a second match started
+  later in the same session).
+
+**Volume kept live-synced every frame, not set once at `play()` time —
+deliberately different from `ConnectScreen`'s theme.** `AudioSettingsScreen`,
+where the master volume slider actually lives, is itself one of the four
+hangar-zone screens this track plays through — dragging that slider
+while the ambience is audibly playing needs to change its volume
+immediately, not just on the next `play()` call (which, per the point
+above, may never happen again this session if the player just keeps
+bouncing between hangar screens). `StarWarsGame.render()` sets
+`hangarAmbience`'s volume from `audioSettings.getMasterVolume()` every
+frame it's playing and not mid-fade.
+
+**Verified:** full `mvn clean install`/`mvn test` (178 core + 30 server,
+unaffected — pure screen-lifecycle wiring, no new pure logic to test)
+green. A real packaged server + client booted together, zero exceptions
+on either side (confirms `ambience_hangar.mp3` actually loads via
+`Gdx.audio.newMusic` at `create()` time, before any screen — the
+earliest possible point a missing/corrupt file would throw). **Not
+live-verified** — needs the user to actually walk the four-screen loop
+and confirm the ambience truly never audibly restarts or gaps, that it
+resumes correctly arriving at Death Screen after a combat death, that it
+fades out cleanly starting a match, and that dragging the master volume
+slider on Audio Settings audibly affects it in real time.
+
 ## 5. UX flow
 
 **Note (2026-09-11):** inserting 5.3 (Audio Settings screen) bumped the
