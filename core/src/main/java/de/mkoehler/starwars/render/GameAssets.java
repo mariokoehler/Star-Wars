@@ -38,6 +38,7 @@ public final class GameAssets {
     public static final String PROJECTILES_ATLAS = "textures/projectiles.atlas";
     public static final String ASTEROIDS_ATLAS = "textures/asteroids.atlas";
     public static final String POWERUPS_ATLAS = "textures/powerups.atlas";
+    public static final String MINES_ATLAS = "textures/mines.atlas";
 
     public static final String LOGO = "textures/menu/logo.png";
     public static final String MENU_STARFIELD = "textures/backgrounds/menu_starfield.png";
@@ -254,6 +255,7 @@ public final class GameAssets {
         manager.load(PROJECTILES_ATLAS, TextureAtlas.class);
         manager.load(ASTEROIDS_ATLAS, TextureAtlas.class);
         manager.load(POWERUPS_ATLAS, TextureAtlas.class);
+        manager.load(MINES_ATLAS, TextureAtlas.class);
 
         manager.load(LOGO, Texture.class);
         manager.load(MENU_STARFIELD, Texture.class);

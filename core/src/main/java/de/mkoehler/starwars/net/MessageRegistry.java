@@ -6,6 +6,8 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MineDetonatedMessage;
+import de.mkoehler.starwars.net.messages.MineState;
 import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
@@ -97,5 +99,8 @@ public final class MessageRegistry {
         kryo.register(PowerUpType.class);
         kryo.register(PowerUpState.class);
         kryo.register(PowerUpState[].class);
+        kryo.register(MineState.class);
+        kryo.register(MineState[].class);
+        kryo.register(MineDetonatedMessage.class);
     }
 }

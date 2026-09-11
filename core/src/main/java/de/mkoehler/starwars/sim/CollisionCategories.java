@@ -64,6 +64,22 @@ public final class CollisionCategories {
      */
     public static final short POWERUP = 0x0010;
 
+    /**
+     * Category for a mine's fixture (design.md — mines) — masked into ship,
+     * projectile, asteroid, and power-up fixtures, but deliberately not the
+     * arena boundary: a mine is a permanently stationary
+     * {@link com.badlogic.gdx.physics.box2d.BodyDef.BodyType#StaticBody},
+     * spawned at least {@link SpawnPointFinder#BOUNDARY_MARGIN_METERS}
+     * inside the arena edge and never moving afterward, so it can never
+     * actually reach the boundary — masking that pairing in would be dead
+     * weight. Its one fixture is a sensor (see {@code MineFactory}), same
+     * "detect contact without any real collision response" reasoning as a
+     * power-up's own sensor fixture — a mine is destroyed the instant
+     * anything touches it, so there's no point giving a static, infinite-
+     * mass body real collision response first.
+     */
+    public static final short MINE = 0x0020;
+
     private CollisionCategories() {
     }
 

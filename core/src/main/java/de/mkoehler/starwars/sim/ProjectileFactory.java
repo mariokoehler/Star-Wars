@@ -75,9 +75,10 @@ public final class ProjectileFactory {
         fixtureDef.filter.categoryBits = CollisionCategories.PROJECTILE;
         // POWERUP added alongside SHIP/ASTEROID (design.md - power-ups): a shot hitting a
         // power-up's physical fixture imparts a real Box2D impulse before being destroyed, same
-        // "indestructible obstacle" treatment as an asteroid hit.
+        // "indestructible obstacle" treatment as an asteroid hit. MINE added the same way
+        // (design.md - mines): a shot touching a mine's sensor fixture detonates it.
         fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID
-            | CollisionCategories.POWERUP);
+            | CollisionCategories.POWERUP | CollisionCategories.MINE);
         body.createFixture(fixtureDef);
         shape.dispose();
 

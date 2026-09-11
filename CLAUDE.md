@@ -4239,6 +4239,125 @@ deferred BOMB effect. Left alone per this file's own standing
 "investigate, don't assume, don't touch" rule for exactly this
 situation.
 
+**Mines — implemented 2026-09-11, same session, right after the
+power-ups commit was pushed.** See design.md 2.19 for the full writeup.
+Resolves the BOMB power-up's own deferred payoff — the
+`assets-raw/mine/` folder noticed-but-not-touched above turned out to
+be exactly what it looked like: 64 frames of a rotating mine at 32px/m.
+Mines spawn **only** as a BOMB pickup, capped at 10 active, permanently
+stationary/non-rotating, detonate on any touch (missile-tier chunked
+damage, ships only), reuse the existing ship-destruction explosion+sound.
+
+**Direct answer to the user's own question ("can Box2D be told never to
+rotate the mine body?"):** yes, `BodyDef.fixedRotation = true` — but
+`MineFactory` goes one step further and builds a plain `StaticBody`
+instead, which is immovable *and* non-rotating by Box2D's own
+definition, the strongest version of "no movement, no rotation" with
+zero bookkeeping, while still generating contacts against every dynamic
+body that touches it. Its one fixture is a sensor (same "detect without
+physically shoving" reasoning already established for a power-up's own
+sensor fixture) — no point giving a static, infinite-mass body real
+collision response right before it's destroyed anyway.
+
+**`advisor` consulted twice, same process as power-ups** — before
+writing code and again after the implementation looked complete. Real
+things it changed: `CollisionCategories.MINE` deliberately excludes the
+arena boundary from its mask (a mine spawns inside the boundary margin
+and never moves, so that pairing can never fire — would've been dead
+weight); `resolvePendingMineTouches` broadcasts `MineDetonatedMessage`
+and destroys the mine's body *before* looping its touchers to apply
+damage, so a `handleShipDestroyed` side effect from one victim's death
+can't run between reading the mine's own transform and destroying it
+(same discipline `resolvePendingHits` already follows for a projectile
+hit); a detonation is treated as an environmental hazard, not combat —
+no kill credit, no `CombatTimerComponent` mark, consistent with mines
+having no tracked owner at all (the BOMB pickup spawns one anonymously);
+a projectile/missile among a mine's touchers is destroyed too, same
+"consumed by any solid obstacle" treatment every other one already
+gets, guarded by the same per-tick `projectilesDestroyedThisTick` dedupe
+set `resolvePendingHits` already populates.
+
+**Client's first-ever use of `com.badlogic.gdx.graphics.g2d.Animation`
+for real frame-by-frame sprite playback** — every earlier "animation" in
+this codebase (engine/light/smoke particles) is a libGDX particle
+effect instead. The 64 `mine_0000.png`..`mine_0063.png` source files
+pack into one indexed region set via `TextureAtlas.findRegions("mine")`
+— the same TexturePacker numeric-suffix mechanism a ship's own
+bank-angle frames already rely on, confirmed (not assumed) by grepping
+the regenerated `mines.atlas` for `index: 0`..`63` before trusting it,
+given this exact assumption has bitten this project before (the A-Wing
+crash, CLAUDE.md's own earlier entry). One shared animation clock for
+every active mine, not one per instance — the user asked for a rotating
+mine, not independently-phased ones. `RemoteMine` needs no dead
+reckoning at all (a mine never moves) and no local-prediction Box2D
+mirror either (nothing for a locally-predicted ship body to diverge
+from, same reasoning as a power-up) — the simplest remote-entity class
+in this file by a wide margin.
+
+**Verification:** full `mvn clean test` (176 core + 30 server, +2 new
+`CollisionCategoriesTest` cases for the mine fixture's real pairings, +1
+extended `MessageRegistryTest` `WorldSnapshotMessage` round trip, +1 new
+`mineDetonatedMessageSurvivesRoundTrip`) and `mvn clean install` (all 4
+modules) green. `AtlasPacker` re-run; the incidental `ships.atlas`/
+`ships.png` repack it always triggers was reverted via `git checkout`,
+not committed (same now-routine gotcha as every earlier atlas-adding
+session). Checked `Get-CimInstance Win32_Process` before starting the
+smoke test (clean, nothing already running) and again before tearing it
+down (found and killed exactly the two PIDs this session started, both
+correctly identified by full command line, not just process name). A
+real packaged server + a real packaged client were both booted
+standalone together, zero exceptions on either side — confirms
+`mines.atlas` actually resolves through `GameAssets`/`SplashScreen` and
+the new `ContactListener`/`resolvePendingMineTouches` wiring runs
+cleanly with no mines yet active (nothing spawns one until a real BOMB
+pickup happens — this boot check can't exercise detonation itself).
+**Not live-verified** — no multiplayer session was driven this time;
+the user's next play session needs to confirm a BOMB pickup actually
+spawns a visibly rotating mine, that touching one detonates it (big
+explosion + sound) and damages only an actual ship toucher, and that
+the 10-mine cap genuinely holds on an 11th pickup. The `1/30s`-per-frame
+animation rate (~2.13s per full rotation) is also untuned, same as
+every other timing/physics number in this project — worth a look if it
+reads as too slow/fast once actually seen.
+
+**Mine spawn point corrected to match asteroids/power-ups, same day,
+before any live testing.** See design.md 2.19's addendum for the full
+writeup. User caught their own earlier BOMB-effect wording gap
+unprompted: "that was my bad that i didn't specify the minimum distance
+on spawn - we should use the same strategy we use for spawning the
+asteroids and power-ups for the mines also." The original implementation
+had taken the BOMB power-up's original "randomly somewhere in the arena"
+phrasing literally (`minEnemyDistance = 0f`), which the earlier
+mines-milestone entry above had already flagged to the user as a real
+risk (a mine spawning inside a ship) before they ever played it — this
+is that flag being acted on. Now uses `SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS`
+(100m) + `BOUNDARY_MARGIN_METERS` (20m), rejecting the fallback outright
+via `isFarEnoughFromEnemies`, same rule asteroids/power-ups/ship spawns
+already use.
+
+**Needed a real retry mechanism, not just a stricter check** — unlike
+asteroids/power-ups, mine spawning isn't a continuously-maintained
+field with its own "try again every tick while under target count"
+loop to lean on for free; a mine spawn is a one-shot event tied to a
+specific BOMB pickup. New `pendingMineSpawns` (a plain int) is reserved
+immediately at pickup time (so `MINE_ACTIVE_LIMIT` correctly counts
+active+pending, not just active), then drained one attempt per tick by
+a new `tickMines()`/`trySpawnMine()` pair mirroring
+`tickAsteroids()`/`trySpawnAsteroid`'s own shape — so a too-crowded
+arena no longer silently wastes the pickup, it just retries until a
+valid point opens up.
+
+**Verification:** full `mvn clean test` (176 core + 30 server,
+unaffected — pure server wiring on top of already-tested pure functions
+`SpawnPointFinder`/`ShipDamage`, matching this project's own convention
+of not adding a dedicated test for that kind of change, same treatment
+`trySpawnAsteroid`/`trySpawnPowerUp` themselves got) and `mvn clean
+install` (all 4 modules) green. **Not live-verified** — same standing
+note as the mines milestone itself; the user's next play session should
+confirm a BOMB pickup in a crowded arena no longer risks spawning a
+mine on top of a player, and that it still eventually spawns rather
+than silently vanishing.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

@@ -8,6 +8,8 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MineDetonatedMessage;
+import de.mkoehler.starwars.net.messages.MineState;
 import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
@@ -73,7 +75,8 @@ class MessageRegistryTest {
             ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class,
             MissileFireRequest.class, ProjectileHitMessage.class,
             AsteroidType.class, AsteroidState.class, AsteroidState[].class,
-            PowerUpType.class, PowerUpState.class, PowerUpState[].class
+            PowerUpType.class, PowerUpState.class, PowerUpState[].class,
+            MineState.class, MineState[].class, MineDetonatedMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -176,6 +179,9 @@ class MessageRegistryTest {
             },
             new PowerUpState[]{
                 new PowerUpState(3, PowerUpType.BOOST, 12f, -8f, 0.9f, 2.5f, -1.5f, 0.2f)
+            },
+            new MineState[]{
+                new MineState(4, 30f, -60f)
             });
         WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
         assertEquals(2, copy.getShips().length);
@@ -232,6 +238,10 @@ class MessageRegistryTest {
         assertEquals(2.5f, copy.getPowerUps()[0].getVelocityX());
         assertEquals(-1.5f, copy.getPowerUps()[0].getVelocityY());
         assertEquals(0.2f, copy.getPowerUps()[0].getAngularVelocity());
+        assertEquals(1, copy.getMines().length);
+        assertEquals(4, copy.getMines()[0].getMineId());
+        assertEquals(30f, copy.getMines()[0].getX());
+        assertEquals(-60f, copy.getMines()[0].getY());
     }
 
     @Test
@@ -343,6 +353,14 @@ class MessageRegistryTest {
         ProjectileHitMessage copy = roundTrip(original, ProjectileHitMessage.class);
         assertEquals(12.5f, copy.getX());
         assertEquals(-7.25f, copy.getY());
+    }
+
+    @Test
+    void mineDetonatedMessageSurvivesRoundTrip() {
+        MineDetonatedMessage original = new MineDetonatedMessage(18.5f, -33.25f);
+        MineDetonatedMessage copy = roundTrip(original, MineDetonatedMessage.class);
+        assertEquals(18.5f, copy.getX());
+        assertEquals(-33.25f, copy.getY());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

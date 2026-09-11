@@ -3238,6 +3238,163 @@ session's own verification. Left completely alone, same "investigate,
 don't assume, don't touch" rule this file has flagged before for
 exactly this situation.
 
+### 2.19 Mines (2026-09-11)
+
+Resolves the BOMB power-up's deferred payoff (§2.18): `assets-raw/mine/`
+turned out to be exactly what it looked like — 64 textures
+(`mine_0000.png`..`mine_0063.png`, confirmed 64×64px each), a baked
+rotating-mine animation at 32px/m (a 2m-diameter circle, "about half the
+size of an X-wing" per the user's own comparison, matching the X-wing's
+4m). User spec: mines spawn **exclusively** as a BOMB power-up pickup,
+never spontaneously; capped at 10 active at once (picking up another
+BOMB past the cap does nothing further, the power-up is still consumed/
+respawns elsewhere as usual); permanently stationary and non-rotating
+once spawned; anything touching one detonates it, dealing missile-tier
+damage via the same 10-step chunked mechanic (§2.15's addendum) but only
+ever to an actual ship — a non-ship toucher just makes it "explode and
+despawn"; reuses the existing ship-destruction explosion particle +
+sound rather than authoring anything new.
+
+**The user's own direct question — "is there a way to tell Box2D it's
+not allowed to ever rotate the mine body?" — yes, `BodyDef.fixedRotation
+= true`, but the actual implementation goes one step further and doesn't
+need it at all.** `MineFactory` builds a `BodyType.StaticBody` — immovable
+and non-rotating by Box2D's own definition, the strongest possible
+guarantee of "no movement, no rotation" with zero bookkeeping to
+maintain, rather than a dynamic body that merely has rotation locked.
+Box2D still generates contacts between a static body and every dynamic
+body that overlaps it, so detonation-on-touch works identically either
+way. The one fixture is a **sensor**, deliberately (same "detect without
+physically shoving" reasoning as a power-up's own sensor fixture, §2.18)
+— a mine is destroyed the instant anything touches it, so there's no
+point (and a real visual downside: a static, infinite-mass body would
+otherwise impart a hard one-physics-step "bounce" to whatever hit it,
+a beat before the explosion) in giving it real collision response first.
+
+**Consulted `advisor` twice** — once with the full plan before writing
+any code, once after the implementation looked complete — mirroring the
+power-ups milestone's own process. Real changes made as a result:
+- **New `CollisionCategories.MINE` bit, masked into ship/projectile/
+  asteroid/power-up fixtures (both directions, `shouldCollide`'s mutual
+  AND) but deliberately *not* the arena boundary** — a mine spawns at
+  least `SpawnPointFinder.BOUNDARY_MARGIN_METERS` inside the edge and
+  never moves afterward, so that pairing can never actually fire; adding
+  it would have been dead weight and one more reciprocal edit to keep in
+  sync for no reason.
+- **Damage/explosion broadcast happens *before* any damage is applied,
+  not after** — `resolvePendingMineTouches` reads the mine's position and
+  sends `MineDetonatedMessage`, then destroys the mine's body/entity,
+  *then* loops its touchers applying damage — so a `handleShipDestroyed`
+  side effect from one victim's death can never run between reading the
+  mine's own transform and destroying it. Same "broadcast before
+  destroying the body" discipline `resolvePendingHits` already follows
+  for a projectile hit.
+- **Detonation is treated as an environmental hazard, not combat** — no
+  kill credit (`handleShipDestroyed(ship, null)`), no `CombatTimerComponent`
+  mark, same treatment a wall/asteroid impact already gets. Consistent
+  with the deliberate choice not to track which player placed a mine at
+  all (the BOMB pickup spawns it anonymously) — there's no owner to
+  credit a kill to even if the code wanted to.
+- **A projectile/missile among a mine's touchers is destroyed too**,
+  consistent with every other solid obstacle in this game (a shot never
+  survives hitting a ship/asteroid/power-up either) — guarded by the same
+  `projectilesDestroyedThisTick` dedupe set `resolvePendingHits` already
+  populates this same tick, in case that same shot also hit something
+  else. An asteroid or power-up among the touchers is left otherwise
+  unaffected (neither is destroyed by contact under any existing
+  mechanic) — it just triggered the detonation.
+- **Touches are grouped by mine before resolving**, not processed event-
+  by-event — a mine could in principle register contacts from more than
+  one body in the same tick (two ships and a stray shot all touching it
+  at once), and every ship among that group takes damage, not just
+  whichever contact happened to be registered first.
+
+**Spawn point — corrected same day, right after the first play-test
+feedback.** The user caught their own earlier wording as underspecified:
+"that was my bad that i didn't specify the minimum distance on spawn — we
+should use the same strategy we use for spawning the asteroids and
+power-ups for the mines also." The original implementation had literally
+followed the BOMB power-up's original "randomly somewhere in the arena"
+phrasing (`minEnemyDistance = 0f`, empty enemy list — any point ≥20m
+inside the boundary, no player-distance constraint at all), which meant
+a mine could in principle materialize inside a ship and detonate on the
+very next tick. Now uses the exact same rule asteroids/power-ups/ship
+spawns already do: `SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS` (100m)
+alongside `BOUNDARY_MARGIN_METERS` (20m), rejecting
+`findSpawnPoint`'s best-effort fallback outright via
+`isFarEnoughFromEnemies` — same "don't ever accept a too-close point,
+retry later" reasoning `trySpawnAsteroid`/`trySpawnPowerUp` already use.
+
+**Needed a real retry mechanism, unlike asteroids/power-ups — mine
+spawning isn't a continuously-maintained field.** Asteroids/power-ups
+retry for free every tick because `tickAsteroids`/`tickPowerUps` already
+call their spawn attempt every tick while under a target active count. A
+mine spawn is a one-shot event tied to a specific BOMB pickup, with no
+such loop to lean on — if the very first spawn attempt rejected a
+too-close point and nothing retried it, that pickup would be silently
+wasted forever in a crowded arena. New `pendingMineSpawns` (a plain
+int, not a queue of details — a mine spawn point doesn't need to
+remember anything from the pickup that earned it) is reserved
+immediately in `applyPowerUpEffect`'s `BOMB` case (so `MINE_ACTIVE_LIMIT`
+correctly counts active+pending together, not just active, while a spawn
+is still pending), then drained one attempt per tick by a new
+`tickMines()`/`trySpawnMine()` pair (mirroring `tickAsteroids`/
+`trySpawnAsteroid`'s own shape) until it actually succeeds. Placement
+itself still needed no tick-ordering deferral the way missile creation
+does (§2.15) — `tickMines()` runs in the same after-`physicsSystem.update()`
+section as `tickAsteroids()`/`tickPowerUps()`, so creating a Box2D body
+there was already safe.
+
+**Client:** `assets-raw/mine/` → `textures/mines.atlas`
+(`AtlasPacker.pack("mine", "mines")`) — the 64 numerically-suffixed
+source files pack into one indexed region set (TexturePacker's own
+detection, the same mechanism a ship's bank-angle frames already use),
+retrieved via `TextureAtlas.findRegions("mine")` into a
+`com.badlogic.gdx.graphics.g2d.Animation<TextureRegion>` — this
+project's first use of `Animation` for actual frame-by-frame sprite
+playback (every earlier "animation" in this codebase, engine/light/smoke
+particles, is a libGDX particle effect instead). One shared animation
+clock (`mineAnimationStateTime`) for every currently-active mine, not
+one per instance — the user asked for a rotating mine, not independently
+-phased ones. Untuned frame duration, `1/30s` per frame → a ~2.13s full
+rotation, flagged for the user's own feel-testing.
+
+`RemoteMine` needs no dead reckoning at all, unlike every other remote
+entity in this file — a mine never moves, so its position is exactly
+whatever the last snapshot reported, held as-is; no local-prediction
+Box2D mirror either, same "nothing for a locally-predicted ship body to
+diverge from" reasoning as a power-up (a ship never physically collides
+with a mine, only its sensor triggers a server-side detonation).
+`MineDetonatedMessage` (x/y only, no mine id — same "just a VFX trigger"
+shape as `ProjectileHitMessage`) triggers a new, dedicated
+`mineExplosionPool` reusing `GameAssets.EXPLOSION_PARTICLE`/
+`EXPLOSION_SOUND` — confirmed by reading the actual client code that
+this is the *only* particle+sound pair that exists (the small impact
+explosion has no accompanying sound), so "the explosion particle system
+and sound effect we already have" could only mean this one.
+
+**Verified:** full `mvn clean test` green (176 core tests — +2 new
+`CollisionCategoriesTest` cases covering the mine fixture's real
+pairings, +1 extended `MessageRegistryTest` `WorldSnapshotMessage` round
+trip, +1 new `mineDetonatedMessageSurvivesRoundTrip` — + 30 server) and a
+full `mvn clean install` (all 4 modules, packaging included) green.
+`AtlasPacker` re-run; `mines.atlas` confirmed to contain exactly 64
+`mine` regions (`index: 0`..`63`) at 64×64px each, on one 2048×256 page.
+The incidental `ships.atlas`/`ships.png` repack `AtlasPacker` always
+triggers (CLAUDE.md's own recurring gotcha) was reverted via `git
+checkout`, not committed. A real packaged server + a real packaged
+client were both booted standalone with zero exceptions — confirms
+`mines.atlas` actually resolves through `GameAssets`/`SplashScreen`, and
+that `MineFactory`/the new `ContactListener` wiring/`resolvePendingMineTouches`
+all run cleanly with no mines yet active (nothing spawns one until a
+real BOMB pickup happens). **Not live-verified** — no multiplayer
+session was driven this time; the real test needs the user to actually
+pick up a BOMB power-up, confirm a mine appears and rotates, confirm it
+detonates (with the big explosion + sound) the instant anything touches
+it, confirm only a ship touching it takes real (missile-tier, chunked)
+damage, and confirm the 10-mine cap actually holds picking up an 11th
+BOMB.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape

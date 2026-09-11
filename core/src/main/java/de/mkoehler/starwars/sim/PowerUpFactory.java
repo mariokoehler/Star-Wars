@@ -100,8 +100,11 @@ public final class PowerUpFactory {
         physical.friction = FRICTION;
         physical.restitution = RESTITUTION;
         physical.filter.categoryBits = CollisionCategories.POWERUP;
+        // MINE added alongside ARENA_BOUNDARY/ASTEROID/PROJECTILE (design.md - mines): a power-up
+        // physically drifting into a mine detonates it, though it's never itself affected by the
+        // contact (same as an asteroid touching one).
         physical.filter.maskBits = (short) (CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID
-            | CollisionCategories.PROJECTILE);
+            | CollisionCategories.PROJECTILE | CollisionCategories.MINE);
         body.createFixture(physical);
 
         FixtureDef sensor = new FixtureDef();

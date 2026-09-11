@@ -153,9 +153,13 @@ public final class ShipFactory {
         // confirms) a contact test against a power-up's fixtures - specifically its sensor
         // fixture (design.md - power-ups), which is the only one that ever masks in SHIP. The
         // power-up's own physical fixture never masks in SHIP, so this addition can't cause a
-        // real (non-sensor) ship-vs-power-up collision despite widening this mask.
+        // real (non-sensor) ship-vs-power-up collision despite widening this mask. MINE is the
+        // same story (design.md - mines): a mine's one fixture is a sensor too, so this can't
+        // cause a real collision response with a mine either, only the contact event that
+        // detonates it.
         fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
-            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.POWERUP);
+            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.POWERUP
+            | CollisionCategories.MINE);
         body.createFixture(fixtureDef);
 
         shape.dispose();

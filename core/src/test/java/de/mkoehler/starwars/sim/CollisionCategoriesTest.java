@@ -19,11 +19,13 @@ class CollisionCategoriesTest {
     // Mirrors ShipFactory.createBody's fixtureDef.filter exactly.
     private static final Filter SHIP = filter(CollisionCategories.SHIP,
         (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
-            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.POWERUP));
+            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.POWERUP
+            | CollisionCategories.MINE));
 
     // Mirrors ProjectileFactory/MissileFactory's fixtureDef.filter exactly.
     private static final Filter PROJECTILE = filter(CollisionCategories.PROJECTILE,
-        (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID | CollisionCategories.POWERUP));
+        (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID | CollisionCategories.POWERUP
+            | CollisionCategories.MINE));
 
     // Mirrors ArenaBounds.createBoundary's fixtureDef.filter exactly.
     private static final Filter ARENA_BOUNDARY = filter(CollisionCategories.ARENA_BOUNDARY,
@@ -31,13 +33,20 @@ class CollisionCategoriesTest {
 
     // Mirrors AsteroidFactory.createAsteroid's fixtureDef.filter exactly.
     private static final Filter ASTEROID = filter(CollisionCategories.ASTEROID,
-        (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE | CollisionCategories.POWERUP));
+        (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE | CollisionCategories.POWERUP
+            | CollisionCategories.MINE));
 
     // Mirrors PowerUpFactory.createPowerUp's two fixtures exactly - the physical one (real mass,
     // never masks in SHIP) and the sensor one (isSensor=true, masks in SHIP only).
     private static final Filter POWERUP_PHYSICAL = filter(CollisionCategories.POWERUP,
-        (short) (CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.PROJECTILE));
+        (short) (CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.PROJECTILE
+            | CollisionCategories.MINE));
     private static final Filter POWERUP_SENSOR = filter(CollisionCategories.POWERUP, CollisionCategories.SHIP);
+
+    // Mirrors MineFactory.createMine's one (sensor) fixture exactly.
+    private static final Filter MINE = filter(CollisionCategories.MINE,
+        (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE | CollisionCategories.ASTEROID
+            | CollisionCategories.POWERUP));
 
     @Test
     void shipsCollideWithEachOther() {
@@ -115,6 +124,30 @@ class CollisionCategoriesTest {
         assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, ARENA_BOUNDARY));
         assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, ASTEROID));
         assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, PROJECTILE));
+    }
+
+    @Test
+    void mineCollidesWithShipsProjectilesAsteroidsAndPowerUpsPhysicalFixture() {
+        assertTrue(CollisionCategories.shouldCollide(MINE, SHIP));
+        assertTrue(CollisionCategories.shouldCollide(SHIP, MINE));
+        assertTrue(CollisionCategories.shouldCollide(MINE, PROJECTILE));
+        assertTrue(CollisionCategories.shouldCollide(PROJECTILE, MINE));
+        assertTrue(CollisionCategories.shouldCollide(MINE, ASTEROID));
+        assertTrue(CollisionCategories.shouldCollide(ASTEROID, MINE));
+        assertTrue(CollisionCategories.shouldCollide(MINE, POWERUP_PHYSICAL));
+        assertTrue(CollisionCategories.shouldCollide(POWERUP_PHYSICAL, MINE));
+    }
+
+    @Test
+    void mineNeverCollidesWithTheArenaBoundaryOrAPowerUpsSensorFixture() {
+        // A mine is spawned inside the boundary margin and never moves (design.md - mines), so
+        // this pairing can never actually be consulted in practice - kept as a test anyway, same
+        // as asteroidsDoNotCollideWithTheArenaBoundary, to keep CollisionCategories' own filter
+        // constants honest.
+        assertFalse(CollisionCategories.shouldCollide(MINE, ARENA_BOUNDARY));
+        assertFalse(CollisionCategories.shouldCollide(ARENA_BOUNDARY, MINE));
+        assertFalse(CollisionCategories.shouldCollide(MINE, POWERUP_SENSOR));
+        assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, MINE));
     }
 
     @Test

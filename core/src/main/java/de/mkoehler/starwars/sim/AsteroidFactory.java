@@ -96,9 +96,12 @@ public final class AsteroidFactory {
         fixtureDef.restitution = RESTITUTION;
         fixtureDef.filter.categoryBits = CollisionCategories.ASTEROID;
         // POWERUP added alongside SHIP/PROJECTILE (design.md - power-ups): an asteroid physically
-        // bounces a power-up drifting into it, same as any other dynamic obstacle here.
+        // bounces a power-up drifting into it, same as any other dynamic obstacle here. MINE
+        // added the same way (design.md - mines): an asteroid drifting into a mine detonates it
+        // (with no damage to the asteroid itself - it has no HullComponent), though it's never
+        // itself affected by the contact.
         fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
-            | CollisionCategories.POWERUP);
+            | CollisionCategories.POWERUP | CollisionCategories.MINE);
         body.createFixture(fixtureDef);
         shape.dispose();
 

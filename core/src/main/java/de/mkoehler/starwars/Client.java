@@ -7,6 +7,7 @@ import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.g2d.Animation;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.GlyphLayout;
 import com.badlogic.gdx.graphics.g2d.ParticleEffect;
@@ -29,6 +30,8 @@ import de.mkoehler.starwars.net.messages.AsteroidState;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MineDetonatedMessage;
+import de.mkoehler.starwars.net.messages.MineState;
 import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
@@ -63,6 +66,7 @@ import de.mkoehler.starwars.render.ThrusterEffect;
 import de.mkoehler.starwars.sim.ArenaBounds;
 import de.mkoehler.starwars.sim.AsteroidFactory;
 import de.mkoehler.starwars.sim.AsteroidType;
+import de.mkoehler.starwars.sim.MineFactory;
 import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
@@ -249,6 +253,15 @@ public class Client implements Screen {
      */
     private static final float PREDICTED_PROJECTILE_MAX_UNMATCHED_SECONDS = 0.5f;
 
+    /**
+     * How long {@link #mineAnimation} holds each of its 64 baked rotation
+     * frames (design.md — mines) — untuned, flagged for the user's own
+     * feel-testing like every other timing constant in this project; at
+     * this rate a mine completes one full visual rotation roughly every
+     * 64 * this = ~2.13s.
+     */
+    private static final float MINE_ANIMATION_FRAME_DURATION_SECONDS = 1f / 30f;
+
     /** Size, in screen pixels, of the ship status HUD widget - placeholder until tuned by feel. */
     private static final float HUD_STATUS_SIZE = 220f;
     /** Screen-pixel margin from the bottom-left corner for the ship status HUD widget. */
@@ -340,6 +353,16 @@ public class Client implements Screen {
     private final Map<AsteroidType, TextureRegion> asteroidRegionsByType = new EnumMap<>(AsteroidType.class);
     private TextureAtlas powerupsAtlas;
     private final Map<PowerUpType, TextureRegion> powerUpRegionsByType = new EnumMap<>(PowerUpType.class);
+    private TextureAtlas minesAtlas;
+    /**
+     * A mine's rotating animation (design.md — mines: a baked 64-frame
+     * sequence, {@code assets-raw/mine/mine_0000.png}..{@code mine_0063.png}).
+     * One shared instance/state-time for every currently-active mine — the
+     * user asked for a rotating mine, not independently-phased mines, so
+     * there's no reason to track a per-mine animation clock.
+     */
+    private Animation<TextureRegion> mineAnimation;
+    private float mineAnimationStateTime;
     private ParallaxBackground background;
     private ArenaBoundaryRenderer arenaBoundaryRenderer;
     private ShipStatusHud statusHud;
@@ -357,6 +380,7 @@ public class Client implements Screen {
     private final Map<Integer, RemoteProjectile> projectiles = new HashMap<>();
     private final Map<Integer, RemoteAsteroid> asteroids = new HashMap<>();
     private final Map<Integer, RemotePowerUp> powerUps = new HashMap<>();
+    private final Map<Integer, RemoteMine> mines = new HashMap<>();
     /**
      * Client-side "puppet" Box2D bodies mirroring each currently-active
      * asteroid into {@link #localWorld} (design.md — asteroids' addendum) —
@@ -497,6 +521,16 @@ public class Client implements Screen {
      * render). Same fixed-position-per-entry shape as {@link #hitExplosionPool}.
      */
     private final List<PositionedOneShotEffect> shipExplosionPool = new ArrayList<>();
+    /**
+     * A small, self-growing pool of mine-detonation explosions (design.md —
+     * mines), one per {@link MineDetonatedMessage} — reuses the same big
+     * explosion particle effect/sound as {@link #shipExplosionPool}, per
+     * the user's own explicit ask, but in its own pool since a mine
+     * detonation is a distinct event from a ship's own destruction. Same
+     * fixed-position-per-entry shape as {@link #hitExplosionPool}/
+     * {@link #shipExplosionPool}.
+     */
+    private final List<PositionedOneShotEffect> mineExplosionPool = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -689,6 +723,14 @@ public class Client implements Screen {
         for (PowerUpType type : PowerUpType.values()) {
             powerUpRegionsByType.put(type, powerupsAtlas.findRegion(type.getResourceName()));
         }
+        minesAtlas = game.getAssets().get(GameAssets.MINES_ATLAS, TextureAtlas.class);
+        // findRegions (plural), not findRegion - the 64 "mine_0000.png".."mine_0063.png" source
+        // files pack into one indexed region set (TexturePacker's own numeric-suffix detection,
+        // same mechanism a ship's own bank-angle frames use), retrievable as one ordered Array.
+        // Untuned frame duration (design.md — mines): 64 frames at this rate is a ~2.13s full
+        // rotation.
+        mineAnimation = new Animation<>(MINE_ANIMATION_FRAME_DURATION_SECONDS,
+            minesAtlas.findRegions("mine"), Animation.PlayMode.LOOP);
         // One shared effect regardless of ship type, unlike myThrusters/myLights/myDamageSmoke -
         // built once here rather than rebuilt per-spawn, since it depends on no ship-type-specific
         // attachment metadata.
@@ -770,6 +812,8 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> onShipDestroyed(destroyed));
                 } else if (object instanceof ProjectileHitMessage hit) {
                     pendingUpdates.add(() -> onProjectileHit(hit));
+                } else if (object instanceof MineDetonatedMessage detonated) {
+                    pendingUpdates.add(() -> onMineDetonated(detonated));
                 } else if (object instanceof LeaveMatchDeniedMessage) {
                     pendingUpdates.add(Client.this::onLeaveMatchDenied);
                 } else if (object instanceof ScoreboardMessage scoreboard) {
@@ -928,6 +972,27 @@ public class Client implements Screen {
     private void onProjectileHit(ProjectileHitMessage hit) {
         triggerPooledExplosion(hitExplosionPool, GameAssets.EXPLOSION_SMALL_PARTICLE,
             hit.getX() * PhysicsConstants.PIXELS_PER_METER, hit.getY() * PhysicsConstants.PIXELS_PER_METER);
+    }
+
+    /**
+     * Handles a {@link MineDetonatedMessage} (design.md — mines) by
+     * triggering the same big explosion particle effect + sound
+     * {@link #onShipDestroyed} plays for another player's own destruction —
+     * the user's own explicit ask, to reuse existing VFX rather than author
+     * anything new for a mine's own explosion. The detonated mine itself
+     * needs no explicit removal here — same as a picked-up power-up or a
+     * destroyed asteroid, it simply stops appearing in the next snapshot,
+     * and {@link #onWorldSnapshot}'s own presence-based prune (see
+     * {@link #mines}) takes it out of the map from there.
+     *
+     * @param detonated the mine-detonated message
+     */
+    private void onMineDetonated(MineDetonatedMessage detonated) {
+        float x = detonated.getX() * PhysicsConstants.PIXELS_PER_METER;
+        float y = detonated.getY() * PhysicsConstants.PIXELS_PER_METER;
+        triggerPooledExplosion(mineExplosionPool, GameAssets.EXPLOSION_PARTICLE, x, y);
+        playPositionalSound(game.getAssets().get(GameAssets.EXPLOSION_SOUND, Sound.class), x, y,
+            game.getAudioSettings().getEffectiveSoundEffectsVolume());
     }
 
     private void onLeaveMatchDenied() {
@@ -1220,6 +1285,20 @@ public class Client implements Screen {
                 state.getAngularVelocity());
         }
         powerUps.keySet().removeIf(id -> !presentPowerUpIds.contains(id));
+
+        // Same presence-based prune as above - a mine has no destroyed/despawned notification of
+        // its own in a WorldSnapshotMessage either (design.md - mines, MineDetonatedMessage is
+        // purely a VFX trigger, see onMineDetonated), a client infers it's gone the same way.
+        // Simpler than RemoteAsteroid/RemotePowerUp - a mine never moves, so there's no velocity/
+        // angle to track and nothing to extrapolate between snapshots.
+        Set<Integer> presentMineIds = new HashSet<>();
+        for (MineState state : snapshot.getMines()) {
+            presentMineIds.add(state.getMineId());
+            float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
+            float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
+            mines.computeIfAbsent(state.getMineId(), id -> new RemoteMine(x, y));
+        }
+        mines.keySet().removeIf(id -> !presentMineIds.contains(id));
     }
 
     private PowerUpEffect createPowerUpEffect() {
@@ -1409,6 +1488,7 @@ public class Client implements Screen {
         extrapolatePowerUps(deltaTime);
         updateCamera(deltaTime);
         missileReticleAnimationSeconds += deltaTime;
+        mineAnimationStateTime += deltaTime;
 
         batch.setProjectionMatrix(camera.combined);
         batch.begin();
@@ -1416,6 +1496,7 @@ public class Client implements Screen {
         arenaBoundaryRenderer.render(batch);
         drawAsteroids();
         drawPowerUps(deltaTime);
+        drawMines();
         // Missiles draw *before* ships, deliberately (design.md - missiles' addendum): they now
         // spawn at the firing ship's exact center, so drawing every ship on top of them is what
         // makes a fresh missile read as launched from underneath the ship and emerging as it
@@ -1429,6 +1510,7 @@ public class Client implements Screen {
         updateAndDrawRemoteMuzzleFlashes(deltaTime);
         updateAndDrawExplosions(hitExplosionPool, deltaTime);
         updateAndDrawExplosions(shipExplosionPool, deltaTime);
+        updateAndDrawExplosions(mineExplosionPool, deltaTime);
         drawMissileLockReticle();
         batch.end();
 
@@ -1798,6 +1880,26 @@ public class Client implements Screen {
                 widthPixels, heightPixels,
                 1f, 1f,
                 powerUp.renderAngle * MathUtils.radiansToDegrees);
+        }
+    }
+
+    /**
+     * Draws every currently-active mine (design.md — mines) — no dead
+     * reckoning needed at all, unlike {@link #drawAsteroids}/{@link #drawPowerUps}:
+     * a mine never moves, so its position is exactly whatever the last
+     * snapshot reported. The visible "rotation" is purely
+     * {@link #mineAnimation}'s baked 64-frame sequence, driven by
+     * {@link #mineAnimationStateTime}, not any server-authoritative angle.
+     */
+    private void drawMines() {
+        for (RemoteMine mine : mines.values()) {
+            TextureRegion region = mineAnimation.getKeyFrame(mineAnimationStateTime);
+            float screenScale = PhysicsConstants.PIXELS_PER_METER / MineFactory.PIXELS_PER_METER;
+            float widthPixels = region.getRegionWidth() * screenScale;
+            float heightPixels = region.getRegionHeight() * screenScale;
+            batch.draw(region,
+                mine.x - widthPixels / 2f, mine.y - heightPixels / 2f,
+                widthPixels, heightPixels);
         }
     }
 
@@ -2809,7 +2911,7 @@ public class Client implements Screen {
             ship.stopEngineSound();
         }
         batch.dispose();
-        // shipsAtlas/projectilesAtlas/asteroidsAtlas/powerupsAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
+        // shipsAtlas/projectilesAtlas/asteroidsAtlas/powerupsAtlas/minesAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
         // owned by StarWarsGame#getAssets() (design.md - asset loading), not this screen -
         // disposed once, at app shutdown, not here. background.dispose() below still frees the
         // procedurally-generated starfield layer, which this screen alone owns (see #show()).
@@ -2942,6 +3044,23 @@ public class Client implements Screen {
             renderX = baseX + velocityX * elapsedSinceUpdate;
             renderY = baseY + velocityY * elapsedSinceUpdate;
             renderAngle = baseAngle + angularVelocity * elapsedSinceUpdate;
+        }
+    }
+
+    /**
+     * A mine (design.md — mines). Unlike every other remote entity in this
+     * class, needs no dead reckoning at all — a mine is a permanently
+     * stationary Box2D body (design.md — mines: {@code MineFactory}'s
+     * {@code StaticBody}), so its position is simply whatever the last
+     * snapshot reported, held as-is.
+     */
+    private static final class RemoteMine {
+        final float x;
+        final float y;
+
+        RemoteMine(float x, float y) {
+            this.x = x;
+            this.y = y;
         }
     }
 

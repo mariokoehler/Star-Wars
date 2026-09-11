@@ -21,6 +21,8 @@ import de.mkoehler.starwars.net.messages.HandshakeRequest;
 import de.mkoehler.starwars.net.messages.HandshakeResponse;
 import de.mkoehler.starwars.net.messages.LeaveMatchDeniedMessage;
 import de.mkoehler.starwars.net.messages.LeaveMatchRequest;
+import de.mkoehler.starwars.net.messages.MineDetonatedMessage;
+import de.mkoehler.starwars.net.messages.MineState;
 import de.mkoehler.starwars.net.messages.MissileFireRequest;
 import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
@@ -48,6 +50,7 @@ import de.mkoehler.starwars.sim.AsteroidSpawner;
 import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.CollisionCategories;
 import de.mkoehler.starwars.sim.KillXp;
+import de.mkoehler.starwars.sim.MineFactory;
 import de.mkoehler.starwars.sim.MissileFactory;
 import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PowerSystem;
@@ -63,6 +66,7 @@ import de.mkoehler.starwars.sim.SpawnPointFinder;
 import de.mkoehler.starwars.sim.components.AsteroidComponent;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
+import de.mkoehler.starwars.sim.components.MineComponent;
 import de.mkoehler.starwars.sim.components.MissileLockComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
@@ -91,6 +95,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -167,6 +172,14 @@ public class GameNetworkServer extends NetworkServer {
     /** A power-up's initial rotation speed range (design.md — power-ups: "stationary but with a slight rotation"). */
     private static final float POWERUP_MAX_ANGULAR_VELOCITY_RADIANS_PER_SECOND = 0.5f;
 
+    /**
+     * The maximum number of mines allowed active in the arena at once
+     * (design.md — mines: the user's own spec) — once at this cap, picking
+     * up another BOMB power-up simply doesn't spawn a new one (the
+     * power-up is still consumed/respawns elsewhere as usual).
+     */
+    private static final int MINE_ACTIVE_LIMIT = 10;
+
     private final World world = new World(new Vector2(0, 0), true);
     // Kept for identity comparison in the ContactListener below - a ship-vs-boundary contact is
     // recognized by "the other body is this exact reference", not by re-checking filter bits.
@@ -236,6 +249,22 @@ public class GameNetworkServer extends NetworkServer {
     // (projectilesDestroyedThisTick) rather than a second one, since a single shot can register a
     // contact against a ship AND a power-up in the same tick.
     private final Set<Entity> pendingPowerUpProjectileHits = new HashSet<>();
+    // The arena's mine field (design.md - mines) - unlike asteroidsById/powerUpsById, never
+    // topped up to a target count on its own: mines spawn exclusively as a result of a BOMB
+    // power-up pickup (see applyPowerUpEffect), gated at MINE_ACTIVE_LIMIT, and only ever leave
+    // this map via resolvePendingMineTouches - a mine has no despawn path of its own.
+    private final Map<Integer, Entity> minesById = new HashMap<>();
+    private final AtomicInteger nextMineId = new AtomicInteger();
+    // Mines spawned via a BOMB pickup but not yet placed, because SpawnPointFinder's own
+    // boundary/enemy-distance constraint couldn't be satisfied on the first attempt (design.md -
+    // mines' addendum) - retried once per tick by tickMines() until placed. Reserved immediately
+    // at pickup time (applyPowerUpEffect), not only once actually placed, so MINE_ACTIVE_LIMIT
+    // still holds correctly while a spawn is pending.
+    private int pendingMineSpawns;
+    // Collected during beginContact (anything touching a mine's sensor fixture), resolved after
+    // physicsSystem.update() returns - same "don't act mid-callback" shape as pendingHits/
+    // pendingPowerUpPickups.
+    private final List<MineTouchEvent> pendingMineTouches = new ArrayList<>();
     // Resolved via Gdx.files.local (relative to wherever the server process is launched from,
     // design.md 3.6) rather than hardcoded, but AccountStore itself has no libGDX dependency -
     // it's directly unit-tested against a plain java.nio.file.Path.
@@ -308,6 +337,8 @@ public class GameNetworkServer extends NetworkServer {
                 registerPotentialAsteroidHit(b, a);
                 registerPotentialPowerUpContact(a, b);
                 registerPotentialPowerUpContact(b, a);
+                registerPotentialMineTouch(a, b);
+                registerPotentialMineTouch(b, a);
             }
 
             @Override
@@ -336,12 +367,16 @@ public class GameNetworkServer extends NetworkServer {
      * the projectile but never damages either indestructible obstacle,
      * design.md — asteroids/power-ups) and a ship faceplanting into the
      * arena boundary or an asteroid at speed (design.md — arena bounds'
-     * addendum / asteroids) — resolves power-up pickups (design.md —
-     * power-ups), regenerates shields, ticks down every ship's active power
-     * boost, advances every ship's combat-lock timers (design.md 2.3),
-     * expires old projectiles, advances respawn timers, maintains the
-     * arena's asteroid and power-up fields (design.md — asteroids/power-ups),
-     * broadcasts the resulting world state to every connected client, and - on its own,
+     * addendum / asteroids) — resolves mine detonations (design.md — mines:
+     * anything touching a mine destroys it, damaging only an actual ship
+     * toucher, via the same chunked mechanic a missile hit uses) — resolves
+     * power-up pickups (design.md — power-ups, including spawning a new
+     * mine on a BOMB pickup if under the cap), regenerates shields, ticks
+     * down every ship's active power boost, advances every ship's
+     * combat-lock timers (design.md 2.3), expires old projectiles, advances
+     * respawn timers, maintains the arena's asteroid and power-up fields
+     * (design.md — asteroids/power-ups), broadcasts the resulting world
+     * state to every connected client, and - on its own,
      * much slower cadence, see
      * {@link #broadcastScoreboard()} - the scoreboard overlay's data
      * (design.md 2.11).
@@ -396,9 +431,14 @@ public class GameNetworkServer extends NetworkServer {
         resolvePendingEnvironmentalHits();
         resolveIndestructibleObstacleProjectileHits(pendingAsteroidProjectileHits);
         resolveIndestructibleObstacleProjectileHits(pendingPowerUpProjectileHits);
+        // Same "after resolvePendingHits has populated projectilesDestroyedThisTick this tick"
+        // placement reasoning as the two calls above - resolvePendingMineTouches shares that same
+        // dedupe guard for any projectile/missile among a mine's touchers (design.md - mines).
+        resolvePendingMineTouches();
         // After every above resolution that can destroy a ship this tick (a projectile hit, a
-        // wall/asteroid impact), not before - resolvePendingPowerUpPickups' own hull.isDestroyed()
-        // guard (design.md - power-ups) needs to see a same-tick death from any of those causes.
+        // wall/asteroid impact, a mine detonation), not before - resolvePendingPowerUpPickups' own
+        // hull.isDestroyed() guard (design.md - power-ups) needs to see a same-tick death from any
+        // of those causes.
         resolvePendingPowerUpPickups();
         shieldRegenSystem.update(deltaTime);
         powerBoostSystem.update(deltaTime);
@@ -411,6 +451,8 @@ public class GameNetworkServer extends NetworkServer {
         tickAsteroids();
         // Same placement/reasoning as tickAsteroids() above (design.md - power-ups).
         tickPowerUps();
+        // Same placement/reasoning as tickAsteroids()/tickPowerUps() above (design.md - mines).
+        tickMines();
 
         // Recomputed against this tick's freshest (post-physics-step) positions, immediately
         // before broadcastSnapshot() reads it to decide what each player actually sees.
@@ -579,6 +621,29 @@ public class GameNetworkServer extends NetworkServer {
     }
 
     /**
+     * Registers a potential mine-touch contact (design.md — mines) —
+     * {@code maybeMine} must belong to a real mine, or this is a no-op.
+     * Deliberately symmetric, unlike {@link #registerPotentialPowerUpContact}
+     * — the user's own spec is "if mines are touched/collided by
+     * <em>anything</em> they explode," so every toucher type (ship,
+     * projectile/missile, asteroid, power-up) is treated identically here;
+     * {@link #resolvePendingMineTouches} is what tells them apart (only a
+     * ship among a mine's touchers this tick actually takes damage).
+     *
+     * @param maybeOther the other body in the contact
+     * @param maybeMine  the body to test for being a mine
+     */
+    private void registerPotentialMineTouch(Entity maybeOther, Entity maybeMine) {
+        if (maybeOther == null || maybeMine == null) {
+            return;
+        }
+        if (maybeMine.getComponent(MineComponent.class) == null) {
+            return;
+        }
+        pendingMineTouches.add(new MineTouchEvent(maybeMine, maybeOther));
+    }
+
+    /**
      * Resolves every non-combat ship impact registered this tick — a wall
      * ({@link #registerPotentialWallHit}) or an asteroid
      * ({@link #registerPotentialAsteroidHit}) — applies damage
@@ -704,9 +769,137 @@ public class GameNetworkServer extends NetworkServer {
                 } // else: no missile capability on this ship type - the user's own spec, a no-op
             }
             case BOMB -> {
-                // Deliberately a no-op placeholder (design.md — power-ups): the user explicitly
-                // asked for an empty dummy implementation here until the mine/bomb feature itself
-                // is designed and built in a later milestone.
+                // Mines spawn exclusively as a result of this pickup (design.md — mines), gated at
+                // MINE_ACTIVE_LIMIT - once active+pending mines are at the cap, this pickup simply
+                // does nothing further (still consumed/respawns elsewhere as usual, same as every
+                // other power-up type). Only reserves a slot here - the actual spawn-point search
+                // (which can fail and needs retrying, see tickMines()) happens later in tick(),
+                // same "don't spawn a body before this tick's physics stepping has run" placement
+                // every other spawn in this class already follows.
+                if (minesById.size() + pendingMineSpawns < MINE_ACTIVE_LIMIT) {
+                    pendingMineSpawns++;
+                }
+            }
+        }
+    }
+
+    /**
+     * Attempts to place one pending mine spawn (see {@link #pendingMineSpawns})
+     * per tick, same one-attempt-per-tick cadence as
+     * {@link #trySpawnAsteroid}/{@link #trySpawnPowerUp}. A BOMB pickup
+     * ({@link #applyPowerUpEffect}) only ever reserves a slot; the actual
+     * placement — and its distance constraint, which can legitimately fail
+     * in a crowded arena — happens here, retried every subsequent tick
+     * until it succeeds.
+     */
+    private void tickMines() {
+        if (pendingMineSpawns > 0 && trySpawnMine()) {
+            pendingMineSpawns--;
+        }
+    }
+
+    /**
+     * Attempts to spawn one pending mine at a random point at least
+     * {@link SpawnPointFinder#BOUNDARY_MARGIN_METERS} inside the arena edge
+     * and at least {@link SpawnPointFinder#MIN_ENEMY_DISTANCE_METERS} from
+     * every currently-alive ship — the same spawn rule asteroids/power-ups
+     * already use (design.md — mines' addendum, correcting this class's own
+     * original "no minimum distance from any player" reading of the BOMB
+     * power-up's wording, which could place a mine on top of a ship).
+     * Deliberately does <b>not</b> accept {@link SpawnPointFinder#findSpawnPoint}'s
+     * best-effort fallback when the arena is too crowded to satisfy that
+     * distance exactly — same "reject the fallback outright, retry later"
+     * reasoning as {@link #trySpawnAsteroid}/{@link #trySpawnPowerUp}, and a
+     * mine spawn already has a retry mechanism of its own
+     * ({@link #pendingMineSpawns}/{@link #tickMines()}) to lean on for that.
+     *
+     * @return {@code true} if a mine was actually placed this attempt
+     */
+    private boolean trySpawnMine() {
+        List<Vector2> playerPositions = allShipPositions();
+        Vector2 point = SpawnPointFinder.findSpawnPoint(ArenaBounds.HALF_SIZE_METERS, SpawnPointFinder.BOUNDARY_MARGIN_METERS,
+            SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, playerPositions, spawnRandom);
+        if (!SpawnPointFinder.isFarEnoughFromEnemies(point, SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, playerPositions)) {
+            return false;
+        }
+        Entity mine = MineFactory.createMine(engine, world, nextMineId.getAndIncrement(), point.x, point.y);
+        minesById.put(mine.getComponent(MineComponent.class).getMineId(), mine);
+        return true;
+    }
+
+    /**
+     * Resolves every mine-touch contact registered this tick
+     * ({@link #registerPotentialMineTouch}): every mine touched by anything
+     * detonates exactly once, regardless of how many things touched it or
+     * what kind of thing they were (design.md — mines: "if mines are
+     * touched/collided by anything they explode"). Groups touches by mine
+     * first (a mine could in principle register contacts from more than one
+     * body in the same tick), then for each detonating mine:
+     * <ul>
+     *     <li>broadcasts {@link MineDetonatedMessage} and destroys the mine's
+     *     body/entity <em>before</em> touching any toucher — same "read the
+     *     transform and broadcast before any side effect that could run
+     *     between reading it and destroying the body" discipline
+     *     {@link #resolvePendingHits} already follows for a projectile hit;</li>
+     *     <li>applies the same damage a missile deals, via the same 10-step
+     *     chunked mechanic ({@link ShipDamage#applyChunked}), to every
+     *     toucher that's an actual ship — "of course the damage only
+     *     applies to players" (the user's own spec) — never marking combat
+     *     or crediting a kill, same environmental-hazard treatment as a
+     *     wall/asteroid impact (a mine has no tracked owner to credit);</li>
+     *     <li>destroys any projectile/missile among the touchers too, same
+     *     "consumed by hitting a solid obstacle" treatment every other
+     *     obstacle in this game already gives a projectile — guarded by the
+     *     same {@link #projectilesDestroyedThisTick} dedupe set
+     *     {@link #resolvePendingHits} populates, in case that same
+     *     projectile already hit something else this same tick;</li>
+     *     <li>leaves an asteroid or a power-up among the touchers otherwise
+     *     unaffected — neither is destroyed by contact under any existing
+     *     mechanic, they just triggered the detonation.</li>
+     * </ul>
+     */
+    private void resolvePendingMineTouches() {
+        if (pendingMineTouches.isEmpty()) {
+            return;
+        }
+        Map<Entity, List<Entity>> touchersByMine = new LinkedHashMap<>();
+        for (MineTouchEvent event : pendingMineTouches) {
+            touchersByMine.computeIfAbsent(event.mine(), key -> new ArrayList<>()).add(event.toucher());
+        }
+        pendingMineTouches.clear();
+
+        for (Map.Entry<Entity, List<Entity>> entry : touchersByMine.entrySet()) {
+            Entity mine = entry.getKey();
+            MineComponent mineComponent = mine.getComponent(MineComponent.class);
+            if (mineComponent == null) {
+                continue; // already detonated by another contact resolved earlier this tick
+            }
+            Body mineBody = mine.getComponent(PhysicsBodyComponent.class).getBody();
+            sendToAllUDP(new MineDetonatedMessage(mineBody.getPosition().x, mineBody.getPosition().y));
+            world.destroyBody(mineBody);
+            engine.removeEntity(mine);
+            minesById.remove(mineComponent.getMineId());
+
+            Set<Entity> shipsToCheck = new HashSet<>();
+            for (Entity toucher : entry.getValue()) {
+                if (toucher.getComponent(PlayerIdComponent.class) != null) {
+                    HullComponent hull = toucher.getComponent(HullComponent.class);
+                    if (hull == null || hull.isDestroyed()) {
+                        continue;
+                    }
+                    ShipDamage.applyChunked(toucher.getComponent(ShieldComponent.class), hull,
+                        MissileStats.INSTANCE.getDamage(), MissileStats.INSTANCE.getDamageChunkCount());
+                    shipsToCheck.add(toucher);
+                } else if (toucher.getComponent(ProjectileComponent.class) != null
+                    && projectilesDestroyedThisTick.add(toucher)) {
+                    world.destroyBody(toucher.getComponent(PhysicsBodyComponent.class).getBody());
+                    engine.removeEntity(toucher);
+                }
+            }
+            for (Entity ship : shipsToCheck) {
+                if (ship.getComponent(HullComponent.class).isDestroyed()) {
+                    handleShipDestroyed(ship, null);
+                }
             }
         }
     }
@@ -1507,6 +1700,16 @@ public class GameNetworkServer extends NetworkServer {
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity());
         }
 
+        // Mines, like asteroids/power-ups/projectiles (design.md 2.14's own scope boundary), are
+        // broadcast unfiltered to everyone - not radar-gated.
+        MineState[] mineStates = new MineState[minesById.size()];
+        int m = 0;
+        for (Entity mine : minesById.values()) {
+            MineComponent mineComponent = mine.getComponent(MineComponent.class);
+            Body body = mine.getComponent(PhysicsBodyComponent.class).getBody();
+            mineStates[m++] = new MineState(mineComponent.getMineId(), body.getPosition().x, body.getPosition().y);
+        }
+
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
             int playerId = entry.getKey();
             Connection connection = connectionsByPlayerId.get(playerId);
@@ -1523,7 +1726,7 @@ public class GameNetworkServer extends NetworkServer {
                 }
             }
             connection.sendUDP(new WorldSnapshotMessage(visibleShips.toArray(new ShipState[0]), projectileStates,
-                asteroidStates, powerUpStates));
+                asteroidStates, powerUpStates, mineStates));
         }
     }
 
@@ -1600,5 +1803,13 @@ public class GameNetworkServer extends NetworkServer {
      * sensor fixture, resolved by {@link #resolvePendingPowerUpPickups}.
      */
     private record PowerUpPickupEvent(Entity ship, Entity powerUp) {
+    }
+
+    /**
+     * One detected, not-yet-resolved mine-touch contact (design.md —
+     * mines) — {@code toucher} touched {@code mine}, resolved by
+     * {@link #resolvePendingMineTouches}.
+     */
+    private record MineTouchEvent(Entity mine, Entity toucher) {
     }
 }
