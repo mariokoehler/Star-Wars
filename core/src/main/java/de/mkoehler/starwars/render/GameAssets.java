@@ -2,6 +2,7 @@ package de.mkoehler.starwars.render;
 
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.assets.AssetManager;
+import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.files.FileHandle;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.ParticleEffect;
@@ -133,6 +134,36 @@ public final class GameAssets {
     }
 
     /**
+     * Returns the classpath path of {@code type}'s continuous engine-loop
+     * sound (design.md — engine sound), loaded as a {@link Sound} (not
+     * {@link com.badlogic.gdx.audio.Music}) so {@code Client} can drive one
+     * long-lived {@code loop()} instance per ship and fade its volume via
+     * {@code setVolume(long, float)} without ever restarting playback.
+     * <p>
+     * The seven source files (user-authored, {@code assets-raw/sfx/engines/})
+     * don't follow {@link ShipType#getResourceName()}'s naming convention for
+     * three ships — same kind of mismatch as
+     * {@code Client.hullRegionName}/{@code ShipSelectionScreen.descriptionRegionName},
+     * handled the same way, with an explicit lookup rather than renaming the
+     * user's own files.
+     *
+     * @param type the ship type
+     * @return the sound's classpath path
+     */
+    public static String engineSoundPath(ShipType type) {
+        String fileName = switch (type) {
+            case XWING -> "xwing_engine_loop.mp3";
+            case FALCON -> "falcon_engine_loop.mp3";
+            case SNOWSPEEDER -> "snowspeeder_engine_loop.mp3";
+            case STARDESTROYER -> "star_destroyer_engine_loop.mp3";
+            case TIEFIGHTER -> "tie_engine_loop.mp3";
+            case TIEINTERCEPTOR -> "interceptor_engine_loop.mp3";
+            case AWING -> "awing_engine_loop.mp3";
+        };
+        return "audio/engines/" + fileName;
+    }
+
+    /**
      * Returns the classpath path of one Death Screen quote image
      * (design.md 5.1).
      *
@@ -213,6 +244,10 @@ public final class GameAssets {
                     manager.load(effectPath, ParticleEffect.class);
                 }
             });
+            String enginePath = engineSoundPath(type);
+            if (Gdx.files.internal(enginePath).exists()) {
+                manager.load(enginePath, Sound.class);
+            }
         }
         for (int i = 1; i <= AFTER_DEATH_QUOTE_COUNT; i++) {
             manager.load(afterDeathQuotePath(i), Texture.class);

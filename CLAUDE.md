@@ -3683,6 +3683,78 @@ testing personally; the real test is firing a missile and watching it
 actually emerge from under the ship rather than pop into view already
 clear of it.
 
+**Engine sound — implemented 2026-09-11.** See design.md 4.5's addendum
+for the full writeup. User provided one seamless engine-loop `.mp3` per
+ship type (`assets-raw/sfx/engines/`, copied as-is to
+`assets/audio/engines/`) and specified the exact mechanic: the loop plays
+continuously in the background for as long as a ship exists, and the
+thrust key ("W") only fades its *volume* (250ms in/out) — never
+restarting playback. Used libGDX `Sound` (not `Music`) specifically for
+this: `loop()` returns an instance id whose volume can be adjusted
+(`setVolume(long, float)`)/stopped (`stop(long)`) independently, which
+`Music` has no equivalent for. New pure `render.EngineAudioMath`
+(`EngineAudioMathTest`, 9 cases) — a constant-rate fade-approach function
+and a linear distance-to-volume falloff — `public` (not package-private
+like `RadarScopeMath`/`HudGaugeClip`) since `Client` calls it directly,
+there being no separate HUD-widget wrapper class for this feature, same
+as the existing thrusters/lights/damage-smoke convention.
+
+**Same filename-mismatch handling as `Client.hullRegionName`:** three of
+the seven source files don't follow `ShipType.getResourceName()`
+(`interceptor_engine_loop.mp3`, `star_destroyer_engine_loop.mp3`,
+`tie_engine_loop.mp3`) — a new `GameAssets.engineSoundPath(ShipType)` is
+an explicit switch lookup rather than renaming the user's files, same
+shape as `shipHullTexturePath`.
+
+**Deliberately not rebuilt on every respawn, unlike every other
+per-ship-type effect in this codebase (`myThrusters`/`myLights`/etc.):**
+those are all rebuilt from scratch on every `onShipSpawned` since a
+respawn can in principle change ship type, but restarting a `Sound.loop()`
+the same way would audibly glitch the loop even on a same-type respawn.
+`Client.ensureLocalEngineSound(shipType)` only swaps to a fresh loop
+instance when the type actually changed since last spawn — first
+"per-ship-type effect that intentionally *doesn't* follow the rebuild-
+every-spawn convention" in this codebase; flagged here so a future
+similar feature doesn't get built the "normal" way by reflex and glitch
+the same way.
+
+**Optional distance-falloff feature also built, same session, since the
+user asked for it as an explicit (non-blocking) "would be cool" add-on:**
+every visible `RemoteShip` gets its own loop instance (started once, at
+creation), volume = thrust-fade-fraction × distance-fraction, full at 0m
+down to silent at 40m — reusing `ShipState.isThrusting()`, which already
+existed for the particle thruster effect, no wire protocol change needed.
+Computed in a new `Client.updateRemoteEngineSounds`, called deliberately
+*after* `drawLocalShip` in `render()` (not alongside `drawRemoteShips`,
+which runs first) specifically so the distance math reads this frame's
+fresh local-ship position rather than the previous frame's.
+
+**Every `ships` map removal site needed a stop-the-loop call added,
+including one real restructuring:** `onWorldSnapshot`'s radar-pruning
+line was a bare `ships.keySet().removeIf(...)`, which doesn't expose the
+removed value — switched to an explicit `Iterator` walk (same shape as
+the existing `localAsteroidBodies` pruning a few lines above it in the
+same method) so `RemoteShip.stopEngineSound()` can be called on each one
+actually removed. `PlayerLeftMessage`'s handler and `onShipDestroyed`
+both already captured the removed value, just needed the stop call added.
+**General rule worth remembering: any per-entity resource that outlives
+a single frame (a sound loop, a pooled effect holding external state)
+means every existing removal site for that entity's map needs to be
+checked, not just the "obvious" one (death) — a `removeIf`/`keySet()`
+one-liner is a sign a removal site might be silently discarding a value
+that needed cleanup.** `Client.dispose()` also stops the local player's
+loop and every still-present `RemoteShip`'s loop — every loop instance
+here is on an `AssetManager`-owned, shared `Sound` that outlives this
+screen, so skipping this would leave it looping in the background forever
+after the screen is gone.
+
+**Verification status:** full `mvn clean install` (all 4 modules,
+including the new `EngineAudioMathTest`) and `mvn test` (166 tests) green.
+**Not live-verified** — same standing pattern, user testing personally;
+this one especially needs actual ears (does the fade feel like 250ms, is
+the 40m distance cutoff a sensible in-game range) rather than anything a
+screenshot or log could confirm.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

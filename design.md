@@ -5523,6 +5523,75 @@ disposing itself, and `StarWarsGame` overrides the top-level
 down every frame regardless of which screen is now showing, disposing
 the track once it reaches silence.
 
+**Engine sound — implemented 2026-09-11.** Every ship type has its own
+seamless engine-loop clip (user-authored, `assets-raw/sfx/engines/`, copied
+as-is to `assets/audio/engines/`) — unlike the Connect Screen theme, these
+use libGDX `Sound`, not `Music`: a `Sound.loop()` instance id can have its
+volume adjusted (`setVolume(long, float)`) and be stopped (`stop(long)`)
+independently, without ever restarting playback — exactly what a
+continuously-playing, volume-faded loop needs, whereas `Music` has no
+equivalent "adjust one already-playing instance's volume" API. The loop
+starts once per ship (not muted-until-needed as a separate step) and simply
+sits at volume 0 until the thrust key is held.
+
+- **The thrust button ("W"/`GameAction.THRUST_FORWARD`) controls volume,
+  not playback** (the user's own framing): holding it fades the local
+  player's engine loop's volume from 0 to 1 over 250ms, releasing fades it
+  back to 0 over 250ms — the loop itself never stops or restarts while
+  held/released, only its volume changes. `Client.updateLocalEngineSound`
+  drives this every frame from the same `keyBindings.isPressed(THRUST_FORWARD)`
+  boolean already used for the thruster particle effect (`ThrusterEffect`) —
+  zero extra input latency, no new wire message needed.
+- **New pure, unit-tested `render.EngineAudioMath`** (`EngineAudioMathTest`)
+  — `approachFraction(current, target, deltaTime, fadeDuration)` (a
+  constant-rate linear ease that reaches the target in exactly
+  `fadeDuration` and never overshoots) and `distanceVolumeFraction(distance,
+  maxRange)` (linear 1.0 at 0m down to 0.0 at `maxRange`+) — same "logic-
+  heavy pure function pulled out for GL-context-free testing" convention as
+  `RadarScopeMath`/`HudGaugeClip`, just `public` instead of package-private
+  since `Client` (a different package) calls it directly rather than going
+  through a same-package rendering widget — there's deliberately no
+  separate "EngineSoundHud"/manager class, matching the existing
+  thrusters/lights/damage-smoke convention of driving everything from
+  `Client` itself.
+- **Filename-convention mismatch, handled the same way as
+  `Client.hullRegionName`:** the 7 source files don't all follow
+  `ShipType.getResourceName()` (`interceptor_engine_loop.mp3`,
+  `star_destroyer_engine_loop.mp3`, `tie_engine_loop.mp3`) — a new
+  `GameAssets.engineSoundPath(ShipType)` is an explicit switch-based
+  lookup, same shape as `shipHullTexturePath`, rather than renaming the
+  user's own files.
+- **Not rebuilt on every respawn, unlike the particle thruster effect:**
+  `myThrusters`/`myLights`/etc. are deliberately rebuilt from scratch on
+  every `onShipSpawned` — restarting a `Sound.loop()` the same way would
+  audibly glitch the loop even on a same-ship-type respawn. Instead
+  `Client.ensureLocalEngineSound(shipType)` only swaps to a new loop
+  instance when the ship type actually changed since the last spawn,
+  leaving an already-playing loop alone otherwise.
+- **Optional distance-falloff feature, also implemented:** every visible
+  `RemoteShip` gets its own `Sound.loop()` instance (started once, at
+  creation, muted) whose volume is `thrustFadeFraction × distanceFraction`
+  every frame (`Client.updateRemoteEngineSounds`) — full volume at 0m,
+  linearly down to silent at 40m and beyond
+  (`ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS`, user-specified), using
+  `ship.thrusting` (`ShipState.isThrusting()`, already broadcast for the
+  particle effect) for the same 250ms fade as the local player's own loop.
+  Deliberately computed *after* `drawLocalShip` in the frame (not alongside
+  `drawRemoteShips`, which runs first) so the distance calculation uses
+  this same frame's fresh interpolated local-ship position, not one frame
+  stale.
+- **Every `ships` map removal site now also stops that ship's loop**
+  (`RemoteShip.stopEngineSound()`) — `PlayerLeftMessage`, `onShipDestroyed`,
+  and the radar fog-of-war pruning in `onWorldSnapshot` (the last of which
+  needed restructuring from a `removeIf` on `keySet()` alone, since that
+  doesn't expose the removed value, to an explicit `Iterator` walk, same
+  shape as the existing local-asteroid-body pruning). `Client.dispose()`
+  also stops the local player's own loop and every still-present
+  `RemoteShip`'s loop — every `Sound.loop()` instance here is on an
+  `AssetManager`-owned, shared `Sound` object that outlives this screen, so
+  an unstopped instance would otherwise keep looping in the background
+  forever after the screen is gone.
+
 ## 5. UX flow
 
 ### 5.1 Screen flow

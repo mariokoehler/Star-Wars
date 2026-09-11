@@ -3,6 +3,7 @@ package de.mkoehler.starwars;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.Input;
+import com.badlogic.gdx.audio.Sound;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.Texture;
@@ -43,6 +44,7 @@ import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ArenaBoundaryRenderer;
 import de.mkoehler.starwars.render.DamageSmokeEffect;
+import de.mkoehler.starwars.render.EngineAudioMath;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
@@ -276,6 +278,11 @@ public class Client implements Screen {
     /** Gap from the top of the screen to the banner's top edge - kept near the top, deliberately away from the player's own ship (which stays near screen-center via camera-follow) since this fires during tense moments. */
     private static final float WARNING_BANNER_TOP_MARGIN = 48f;
 
+    /** How long the engine-loop sound's fade-in/fade-out takes (design.md — engine sound), user-specified. */
+    private static final float ENGINE_SOUND_FADE_SECONDS = 0.25f;
+    /** Beyond this distance, another player's engine loop is fully inaudible (design.md — engine sound), user-specified. */
+    private static final float ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS = 40f;
+
     private static final PlayerScoreEntry[] NO_SCORES = new PlayerScoreEntry[0];
     /**
      * Scoreboard row order (design.md 2.11 doesn't specify one): most kills
@@ -369,6 +376,26 @@ public class Client implements Screen {
      * (design.md's addendum), so this isn't local-player-only anymore.
      */
     private final List<EngineThruster> myThrusters = new ArrayList<>();
+    /**
+     * The local player's own continuous engine-loop sound (design.md —
+     * engine sound), shared with whichever other ship(s) of the same type
+     * exist (an {@link com.badlogic.gdx.assets.AssetManager}-owned
+     * {@link Sound} — one loaded file, many independent {@code loop()}
+     * instances). Unlike {@link #myThrusters}, this is <em>not</em> rebuilt
+     * on every {@link #onShipSpawned} - restarting {@code loop()} on every
+     * spawn/respawn would glitch the loop audibly even when the ship type
+     * hasn't actually changed, so {@link #ensureLocalEngineSound} only
+     * swaps it out when {@link #myEngineSoundShipType} actually differs
+     * from {@link #myShipType}. {@code null} if this ship type has no
+     * engine sound loaded (see {@link GameAssets#engineSoundPath}).
+     */
+    private Sound myEngineSound;
+    /** The specific {@code loop()} instance id of {@link #myEngineSound} - see {@link Sound#setVolume(long, float)}/{@link Sound#stop(long)}. */
+    private long myEngineSoundId = -1;
+    /** Which ship type {@link #myEngineSound} was loaded for - see {@link #ensureLocalEngineSound}. */
+    private ShipType myEngineSoundShipType;
+    /** This frame's engine-loop volume, eased toward 0/1 by {@link #updateLocalEngineSound} - see {@link EngineAudioMath#approachFraction}. */
+    private float myEngineVolumeFraction;
     /**
      * The local player's own positioning lights (design.md — positioning
      * lights), one per {@code "LIGHT_RED"}/{@code "LIGHT_GREEN"} attachment
@@ -658,7 +685,12 @@ public class Client implements Screen {
                 } else if (object instanceof WorldSnapshotMessage snapshot) {
                     pendingUpdates.add(() -> onWorldSnapshot(snapshot));
                 } else if (object instanceof PlayerLeftMessage left) {
-                    pendingUpdates.add(() -> ships.remove(left.getPlayerId()));
+                    pendingUpdates.add(() -> {
+                        RemoteShip ship = ships.remove(left.getPlayerId());
+                        if (ship != null) {
+                            ship.stopEngineSound();
+                        }
+                    });
                 } else if (object instanceof ShipDestroyedMessage destroyed) {
                     pendingUpdates.add(() -> onShipDestroyed(destroyed));
                 } else if (object instanceof ProjectileHitMessage hit) {
@@ -761,6 +793,8 @@ public class Client implements Screen {
         myDamageSmoke.addAll(buildDamageSmokePoints(myStats));
         myMuzzleFlashes.clear();
         myMuzzleFlashes.addAll(buildMuzzleFlashPoints(myStats));
+
+        ensureLocalEngineSound(myShipType);
     }
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
@@ -790,6 +824,7 @@ public class Client implements Screen {
         } else {
             RemoteShip ship = ships.remove(destroyed.getPlayerId());
             if (ship != null) {
+                ship.stopEngineSound();
                 triggerPooledExplosion(shipExplosionPool, GameAssets.EXPLOSION_PARTICLE, ship.renderX, ship.renderY);
             }
         }
@@ -899,13 +934,24 @@ public class Client implements Screen {
             float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
             RemoteShip ship = ships.computeIfAbsent(state.getPlayerId(), id -> {
                 ShipStats remoteStats = ShipStats.forType(state.getShipType());
+                // One long-lived loop() instance for this ship's own engine sound (design.md —
+                // engine sound), started muted (updateRemoteEngineSounds fades it in/out every
+                // frame) and stopped only when this ship is later removed from `ships`.
+                Sound engineSound = null;
+                long engineSoundId = -1;
+                String enginePath = GameAssets.engineSoundPath(state.getShipType());
+                if (game.getAssets().isLoaded(enginePath, Sound.class)) {
+                    engineSound = game.getAssets().get(enginePath, Sound.class);
+                    engineSoundId = engineSound.loop(0f);
+                }
                 // Seeded with this ship's current cooldown (not 0) so a ship first seen mid-cooldown,
                 // or the instant it pulses, doesn't spuriously fire the wave effect the moment it's
                 // first detected - see the edge-detection comment below for why that would otherwise
                 // look identical to a real trigger.
                 return new RemoteShip(x, y, state.getAngle(), state.getShipType(),
                     buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats),
-                    createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE), state.getRadarPulseCooldownRemaining());
+                    createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE), state.getRadarPulseCooldownRemaining(),
+                    engineSound, engineSoundId);
             });
             ship.updateFromSnapshot(x, y, state.getAngle(),
                 state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
@@ -922,7 +968,14 @@ public class Client implements Screen {
             }
             ship.radarPulseCooldownRemaining = newShipRadarPulseCooldown;
         }
-        ships.keySet().removeIf(id -> !presentShipIds.contains(id));
+        Iterator<Map.Entry<Integer, RemoteShip>> shipIterator = ships.entrySet().iterator();
+        while (shipIterator.hasNext()) {
+            Map.Entry<Integer, RemoteShip> entry = shipIterator.next();
+            if (!presentShipIds.contains(entry.getKey())) {
+                entry.getValue().stopEngineSound();
+                shipIterator.remove();
+            }
+        }
 
         // Projectiles have no destroyed-notification of their own (design.md 3.5's
         // ProjectileState note) - presence in this snapshot means alive, so anything not
@@ -1223,6 +1276,7 @@ public class Client implements Screen {
         drawMissiles();
         drawRemoteShips(deltaTime);
         drawLocalShip(deltaTime);
+        updateRemoteEngineSounds(deltaTime);
         drawBlasterProjectiles();
         updateAndDrawRemoteMuzzleFlashes(deltaTime);
         updateAndDrawExplosions(hitExplosionPool, deltaTime);
@@ -1622,6 +1676,34 @@ public class Client implements Screen {
     }
 
     /**
+     * Fades every visible {@link RemoteShip}'s engine-loop volume toward
+     * {@code ship.thrusting}'s implied 0/1 target, then scales it down by
+     * distance from the local player's own ship (design.md — engine sound's
+     * optional distance-falloff addendum: full volume up close, silent
+     * beyond {@link #ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS}). Deliberately
+     * called <em>after</em> {@link #drawLocalShip} in {@code render()} (not
+     * alongside {@link #drawRemoteShips}, which runs first) so
+     * {@link #myRenderScreenX}/{@link #myRenderScreenY} are this same
+     * frame's fresh values, not one frame stale.
+     *
+     * @param deltaTime time since the last frame, in seconds
+     */
+    private void updateRemoteEngineSounds(float deltaTime) {
+        for (RemoteShip ship : ships.values()) {
+            if (ship.engineSound == null) {
+                continue;
+            }
+            float dxMeters = (ship.renderX - myRenderScreenX) / PhysicsConstants.PIXELS_PER_METER;
+            float dyMeters = (ship.renderY - myRenderScreenY) / PhysicsConstants.PIXELS_PER_METER;
+            float distanceMeters = (float) Math.sqrt(dxMeters * dxMeters + dyMeters * dyMeters);
+            ship.engineVolumeFraction = EngineAudioMath.approachFraction(ship.engineVolumeFraction,
+                ship.thrusting ? 1f : 0f, deltaTime, ENGINE_SOUND_FADE_SECONDS);
+            float distanceFraction = EngineAudioMath.distanceVolumeFraction(distanceMeters, ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS);
+            ship.engineSound.setVolume(ship.engineSoundId, ship.engineVolumeFraction * distanceFraction);
+        }
+    }
+
+    /**
      * Draws a ship's turret(s), if its type has any (design.md — turret
      * weapons: currently only the Falcon and Star Destroyer). Each mount's
      * screen position is the ship's own position plus its local attachment
@@ -1699,8 +1781,10 @@ public class Client implements Screen {
         // opaque hull sprite then paints over whatever part of the flame overlaps it, so only the
         // portion actually extending past the tail is visible - reads as the engine sitting
         // underneath/behind the hull instead of floating on top of it.
+        boolean thrustForwardHeld = keyBindings.isPressed(GameAction.THRUST_FORWARD);
         updateAndDrawThrusters(myThrusters, myStats.getPixelsPerMeter(), x, y, angle,
-            keyBindings.isPressed(GameAction.THRUST_FORWARD), deltaTime);
+            thrustForwardHeld, deltaTime);
+        updateLocalEngineSound(thrustForwardHeld, deltaTime);
         batch.draw(region,
             x - widthPixels / 2f, y - heightPixels / 2f,
             widthPixels / 2f, heightPixels / 2f,
@@ -1780,6 +1864,69 @@ public class Client implements Screen {
             thrusters.add(new EngineThruster(point, new ThrusterEffect(template)));
         }
         return thrusters;
+    }
+
+    /**
+     * Loads (or swaps) the local player's own {@link #myEngineSound} for
+     * {@code shipType}, if not already loaded for that exact type —
+     * deliberately does <em>not</em> restart an already-loaded, already-
+     * playing loop, since a respawn with the same ship type would otherwise
+     * glitch the audio for no gameplay reason (see {@link #myEngineSound}'s
+     * Javadoc). Calling this with the same {@code shipType} repeatedly
+     * (every {@link #onShipSpawned}) is therefore cheap and safe.
+     *
+     * @param shipType the ship type to ensure an engine loop is playing for
+     */
+    private void ensureLocalEngineSound(ShipType shipType) {
+        if (myEngineSound != null && myEngineSoundShipType == shipType) {
+            return;
+        }
+        stopLocalEngineSound();
+        String path = GameAssets.engineSoundPath(shipType);
+        if (!game.getAssets().isLoaded(path, Sound.class)) {
+            return;
+        }
+        myEngineSound = game.getAssets().get(path, Sound.class);
+        myEngineSoundShipType = shipType;
+        myEngineVolumeFraction = 0f;
+        myEngineSoundId = myEngineSound.loop(0f);
+    }
+
+    /**
+     * Stops and forgets the local player's own {@link #myEngineSound}
+     * instance, if any — called before loading a different ship type's loop
+     * ({@link #ensureLocalEngineSound}) and from {@link #dispose()}, so this
+     * client never leaves a shared, {@code AssetManager}-owned {@link Sound}
+     * looping forever in the background after this screen is gone.
+     */
+    private void stopLocalEngineSound() {
+        if (myEngineSound != null) {
+            myEngineSound.stop(myEngineSoundId);
+        }
+        myEngineSound = null;
+        myEngineSoundShipType = null;
+        myEngineSoundId = -1;
+    }
+
+    /**
+     * Fades the local player's own engine loop's volume toward 1 while
+     * {@code thrustForwardHeld}, toward 0 otherwise (design.md — engine
+     * sound: "the thrust button simply controlling the volume"), over
+     * {@link #ENGINE_SOUND_FADE_SECONDS} either way — never restarting the
+     * loop itself, just adjusting its volume via
+     * {@link Sound#setVolume(long, float)} on the one long-lived
+     * {@link #myEngineSoundId} instance.
+     *
+     * @param thrustForwardHeld whether the thrust key is currently held
+     * @param deltaTime         time since the last frame, in seconds
+     */
+    private void updateLocalEngineSound(boolean thrustForwardHeld, float deltaTime) {
+        if (myEngineSound == null) {
+            return;
+        }
+        myEngineVolumeFraction = EngineAudioMath.approachFraction(myEngineVolumeFraction,
+            thrustForwardHeld ? 1f : 0f, deltaTime, ENGINE_SOUND_FADE_SECONDS);
+        myEngineSound.setVolume(myEngineSoundId, myEngineVolumeFraction);
     }
 
     /**
@@ -2254,6 +2401,13 @@ public class Client implements Screen {
         if (localWorld != null) {
             localWorld.dispose();
         }
+        // Every engine-loop Sound instance below is AssetManager-owned (shared, outlives this
+        // screen) - without explicitly stopping each loop() instance here, it would otherwise
+        // keep looping in the background forever after this screen is gone (design.md — engine sound).
+        stopLocalEngineSound();
+        for (RemoteShip ship : ships.values()) {
+            ship.stopEngineSound();
+        }
         batch.dispose();
         // shipsAtlas/projectilesAtlas/asteroidsAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
         // owned by StarWarsGame#getAssets() (design.md - asset loading), not this screen -
@@ -2330,19 +2484,46 @@ public class Client implements Screen {
         float hullMax;
         /** The last-known radar pulse cooldown, seeded at creation (see the call site) so the very first sighting of this ship can't spuriously trigger {@link #radarPulseEffect}. */
         float radarPulseCooldownRemaining;
+        /**
+         * This ship's own continuous engine-loop sound (design.md — engine
+         * sound), one long-lived {@code loop()} instance started at creation
+         * and stopped only when this ship is removed from {@code ships} -
+         * {@code null} if this ship type has no engine sound loaded.
+         */
+        final Sound engineSound;
+        /** The specific {@code loop()} instance id of {@link #engineSound} - see {@link Sound#setVolume(long, float)}/{@link Sound#stop(long)}. */
+        final long engineSoundId;
+        /** This ship's own engine-loop volume fraction, eased toward 0/1 by {@link #updateRemoteEngineSounds} - see {@link EngineAudioMath#approachFraction}. */
+        float engineVolumeFraction;
 
         RemoteShip(float x, float y, float angle, ShipType shipType, List<EngineThruster> thrusters,
                    List<ShipLight> lights, List<DamageSmokePoint> damageSmoke,
-                   OneShotParticleEffect radarPulseEffect, float radarPulseCooldownRemaining) {
+                   OneShotParticleEffect radarPulseEffect, float radarPulseCooldownRemaining,
+                   Sound engineSound, long engineSoundId) {
             this.shipType = shipType;
             this.thrusters = thrusters;
             this.lights = lights;
             this.damageSmoke = damageSmoke;
             this.radarPulseEffect = radarPulseEffect;
             this.radarPulseCooldownRemaining = radarPulseCooldownRemaining;
+            this.engineSound = engineSound;
+            this.engineSoundId = engineSoundId;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;
+        }
+
+        /**
+         * Stops this ship's {@link #engineSound} loop instance, if any -
+         * called from every {@code ships} map removal site so a shared,
+         * {@code AssetManager}-owned {@link Sound} never keeps looping in
+         * the background for a ship that no longer exists/is no longer
+         * detected (design.md — engine sound).
+         */
+        void stopEngineSound() {
+            if (engineSound != null) {
+                engineSound.stop(engineSoundId);
+            }
         }
 
         void updateFromSnapshot(float x, float y, float angle, float velocityX, float velocityY, float angularVelocity) {
