@@ -13,11 +13,13 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpPickedUpMessage;
 import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
+import de.mkoehler.starwars.net.messages.ShipImpactMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
@@ -102,5 +104,7 @@ public final class MessageRegistry {
         kryo.register(MineState.class);
         kryo.register(MineState[].class);
         kryo.register(MineDetonatedMessage.class);
+        kryo.register(ShipImpactMessage.class);
+        kryo.register(PowerUpPickedUpMessage.class);
     }
 }

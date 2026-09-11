@@ -37,12 +37,14 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpPickedUpMessage;
 import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
+import de.mkoehler.starwars.net.messages.ShipImpactMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
@@ -814,6 +816,10 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> onProjectileHit(hit));
                 } else if (object instanceof MineDetonatedMessage detonated) {
                     pendingUpdates.add(() -> onMineDetonated(detonated));
+                } else if (object instanceof ShipImpactMessage impact) {
+                    pendingUpdates.add(() -> onShipImpact(impact));
+                } else if (object instanceof PowerUpPickedUpMessage pickedUp) {
+                    pendingUpdates.add(() -> onPowerUpPickedUp(pickedUp));
                 } else if (object instanceof LeaveMatchDeniedMessage) {
                     pendingUpdates.add(Client.this::onLeaveMatchDenied);
                 } else if (object instanceof ScoreboardMessage scoreboard) {
@@ -992,6 +998,35 @@ public class Client implements Screen {
         float y = detonated.getY() * PhysicsConstants.PIXELS_PER_METER;
         triggerPooledExplosion(mineExplosionPool, GameAssets.EXPLOSION_PARTICLE, x, y);
         playPositionalSound(game.getAssets().get(GameAssets.EXPLOSION_SOUND, Sound.class), x, y,
+            game.getAudioSettings().getEffectiveSoundEffectsVolume());
+    }
+
+    /**
+     * Handles a {@link ShipImpactMessage} (design.md — impact sounds) by
+     * playing one of the four shared impact clips, picked randomly and
+     * independently on this client — purely cosmetic, so there's no need
+     * for every client observing the same collision to hear the exact
+     * same sample.
+     *
+     * @param impact the ship-impact message
+     */
+    private void onShipImpact(ShipImpactMessage impact) {
+        String path = GameAssets.IMPACT_SOUNDS[MathUtils.random(GameAssets.IMPACT_SOUNDS.length - 1)];
+        playPositionalSound(game.getAssets().get(path, Sound.class),
+            impact.getX() * PhysicsConstants.PIXELS_PER_METER, impact.getY() * PhysicsConstants.PIXELS_PER_METER,
+            game.getAudioSettings().getEffectiveSoundEffectsVolume());
+    }
+
+    /**
+     * Handles a {@link PowerUpPickedUpMessage} (design.md — power-ups'
+     * audio addendum) by playing the shared pickup sound at the power-up's
+     * last position.
+     *
+     * @param pickedUp the power-up-picked-up message
+     */
+    private void onPowerUpPickedUp(PowerUpPickedUpMessage pickedUp) {
+        playPositionalSound(game.getAssets().get(GameAssets.POWERUP_PICKUP_SOUND, Sound.class),
+            pickedUp.getX() * PhysicsConstants.PIXELS_PER_METER, pickedUp.getY() * PhysicsConstants.PIXELS_PER_METER,
             game.getAudioSettings().getEffectiveSoundEffectsVolume());
     }
 

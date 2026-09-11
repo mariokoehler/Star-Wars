@@ -15,11 +15,13 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpPickedUpMessage;
 import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
+import de.mkoehler.starwars.net.messages.ShipImpactMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
@@ -76,7 +78,8 @@ class MessageRegistryTest {
             MissileFireRequest.class, ProjectileHitMessage.class,
             AsteroidType.class, AsteroidState.class, AsteroidState[].class,
             PowerUpType.class, PowerUpState.class, PowerUpState[].class,
-            MineState.class, MineState[].class, MineDetonatedMessage.class
+            MineState.class, MineState[].class, MineDetonatedMessage.class,
+            ShipImpactMessage.class, PowerUpPickedUpMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -361,6 +364,22 @@ class MessageRegistryTest {
         MineDetonatedMessage copy = roundTrip(original, MineDetonatedMessage.class);
         assertEquals(18.5f, copy.getX());
         assertEquals(-33.25f, copy.getY());
+    }
+
+    @Test
+    void shipImpactMessageSurvivesRoundTrip() {
+        ShipImpactMessage original = new ShipImpactMessage(9.5f, -14.25f);
+        ShipImpactMessage copy = roundTrip(original, ShipImpactMessage.class);
+        assertEquals(9.5f, copy.getX());
+        assertEquals(-14.25f, copy.getY());
+    }
+
+    @Test
+    void powerUpPickedUpMessageSurvivesRoundTrip() {
+        PowerUpPickedUpMessage original = new PowerUpPickedUpMessage(22f, -6.5f);
+        PowerUpPickedUpMessage copy = roundTrip(original, PowerUpPickedUpMessage.class);
+        assertEquals(22f, copy.getX());
+        assertEquals(-6.5f, copy.getY());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

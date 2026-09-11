@@ -28,12 +28,14 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpPickedUpMessage;
 import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
 import de.mkoehler.starwars.net.messages.ScoreboardMessage;
 import de.mkoehler.starwars.net.messages.ShipDestroyedMessage;
+import de.mkoehler.starwars.net.messages.ShipImpactMessage;
 import de.mkoehler.starwars.net.messages.ShipSpawnedMessage;
 import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
@@ -261,6 +263,11 @@ public class GameNetworkServer extends NetworkServer {
     // at pickup time (applyPowerUpEffect), not only once actually placed, so MINE_ACTIVE_LIMIT
     // still holds correctly while a spawn is pending.
     private int pendingMineSpawns;
+    // Collected during beginContact (design.md - impact sounds), resolved after physicsSystem
+    // .update() returns - same "don't act mid-callback" shape as every other pending list here,
+    // even though this one only ever sends a network message (no Box2D body create/destroy), for
+    // consistency with the rest of this class.
+    private final List<ShipImpactEvent> pendingShipImpacts = new ArrayList<>();
     // Collected during beginContact (anything touching a mine's sensor fixture), resolved after
     // physicsSystem.update() returns - same "don't act mid-callback" shape as pendingHits/
     // pendingPowerUpPickups.
@@ -339,6 +346,8 @@ public class GameNetworkServer extends NetworkServer {
                 registerPotentialPowerUpContact(b, a);
                 registerPotentialMineTouch(a, b);
                 registerPotentialMineTouch(b, a);
+                registerPotentialShipImpact(bodyA, bodyB);
+                registerPotentialShipImpact(bodyB, bodyA);
             }
 
             @Override
@@ -429,6 +438,9 @@ public class GameNetworkServer extends NetworkServer {
 
         resolvePendingHits();
         resolvePendingEnvironmentalHits();
+        // Independent of every above/below resolution - just a cosmetic sound broadcast, no shared
+        // dedupe state or ship-destroying side effects to order against (design.md - impact sounds).
+        resolvePendingShipImpacts();
         resolveIndestructibleObstacleProjectileHits(pendingAsteroidProjectileHits);
         resolveIndestructibleObstacleProjectileHits(pendingPowerUpProjectileHits);
         // Same "after resolvePendingHits has populated projectilesDestroyedThisTick this tick"
@@ -541,6 +553,58 @@ public class GameNetworkServer extends NetworkServer {
         if (damage > 0f) {
             pendingEnvironmentalHits.add(new EnvironmentalHitEvent(ship, damage));
         }
+    }
+
+    /**
+     * Registers a potential ship-impact sound event (design.md — impact
+     * sounds) if {@code maybeShipBody} belongs to a real ship and
+     * {@code other} is something worth a "thud" for: the arena boundary,
+     * an asteroid, or another ship. Fires on <b>any</b> such contact,
+     * unlike {@link #registerPotentialWallHit}/{@link #registerPotentialAsteroidHit}
+     * — this is a purely cosmetic physical-contact sound, not tied to
+     * either of those methods' own damage threshold. A ship-vs-ship
+     * collision naturally registers twice (this method is called
+     * symmetrically from {@code beginContact}, once per body) — one
+     * impact sound per ship, at its own position, rather than deduped to
+     * a single shared event; accepted as a reasonable simplification, not
+     * a bug.
+     *
+     * @param maybeShipBody the body to test for being a ship
+     * @param other         the other body in the contact
+     */
+    private void registerPotentialShipImpact(Body maybeShipBody, Body other) {
+        Entity ship = asEntity(maybeShipBody);
+        if (ship == null || ship.getComponent(PlayerIdComponent.class) == null) {
+            return;
+        }
+        boolean isRelevantTarget;
+        if (other == arenaBoundaryBody) {
+            isRelevantTarget = true;
+        } else {
+            Entity otherEntity = asEntity(other);
+            isRelevantTarget = otherEntity != null
+                && (otherEntity.getComponent(AsteroidComponent.class) != null
+                    || otherEntity.getComponent(PlayerIdComponent.class) != null);
+        }
+        if (!isRelevantTarget) {
+            return;
+        }
+        pendingShipImpacts.add(new ShipImpactEvent(maybeShipBody.getPosition().x, maybeShipBody.getPosition().y));
+    }
+
+    /**
+     * Broadcasts one {@link ShipImpactMessage} per ship-impact event
+     * registered this tick ({@link #registerPotentialShipImpact}) — no
+     * ship/hull state to touch, just a cosmetic sound trigger.
+     */
+    private void resolvePendingShipImpacts() {
+        if (pendingShipImpacts.isEmpty()) {
+            return;
+        }
+        for (ShipImpactEvent event : pendingShipImpacts) {
+            sendToAllUDP(new ShipImpactMessage(event.x(), event.y()));
+        }
+        pendingShipImpacts.clear();
     }
 
     /**
@@ -741,6 +805,10 @@ public class GameNetworkServer extends NetworkServer {
             applyPowerUpEffect(event.ship(), powerUp.getType());
 
             Body body = event.powerUp().getComponent(PhysicsBodyComponent.class).getBody();
+            // Broadcast before destroying the body (design.md - power-ups' audio addendum), same
+            // "read the transform and notify clients before tearing anything down" discipline every
+            // other contact-triggered broadcast in this class already follows.
+            sendToAllUDP(new PowerUpPickedUpMessage(body.getPosition().x, body.getPosition().y));
             world.destroyBody(body);
             engine.removeEntity(event.powerUp());
             powerUpsById.remove(powerUp.getPowerUpId());
@@ -1811,5 +1879,12 @@ public class GameNetworkServer extends NetworkServer {
      * {@link #resolvePendingMineTouches}.
      */
     private record MineTouchEvent(Entity mine, Entity toucher) {
+    }
+
+    /**
+     * One detected, not-yet-resolved ship-impact sound event (design.md —
+     * impact sounds), resolved by {@link #resolvePendingShipImpacts}.
+     */
+    private record ShipImpactEvent(float x, float y) {
     }
 }

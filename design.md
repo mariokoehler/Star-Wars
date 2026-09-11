@@ -6147,6 +6147,58 @@ every spawn/respawn (a fresh ship gets a fresh, un-locked
 after this screen is gone" reason the engine loop's own `dispose()`
 cleanup exists for.
 
+**Impact sounds + power-up pickup sound — implemented 2026-09-11.** User
+provided four interchangeable ship-impact clips
+(`assets-raw/sfx/other/impact1-4.mp3`) and one power-up pickup clip
+(`powerup_pickup.mp3`), copied to `assets/audio/effects/` (the same
+"Sound Effects" category folder `explosion.mp3` already lives in — a
+physical bump or a pickup chime isn't a weapon firing). Spec: play a
+random one of the four impact clips whenever a ship physically collides
+with "other ships, arena boundary, asteroids"; play the pickup clip
+whenever a ship picks up a power-up.
+
+**Two new one-shot server broadcasts, same "just an SFX trigger, x/y
+only" shape as `ProjectileHitMessage`/`MineDetonatedMessage`:**
+`ShipImpactMessage` and `PowerUpPickedUpMessage`. Neither carries which
+sample to play — the random pick among the four impact clips happens
+independently on each client (`MathUtils.random(3)`), since it's purely
+cosmetic and there's no reason two players watching the same collision
+need to hear the identical sample.
+
+**Impact detection is a genuinely new `ContactListener` hook, not a
+reuse of the existing wall/asteroid damage path.** `registerPotentialWallHit`/
+`registerPotentialAsteroidHit` (design.md 2.16/2.17) only queue an event
+above a speed threshold, since those exist to compute *damage*. This
+sound is a plain physical-contact cue with no such threshold — new
+`registerPotentialShipImpact(Body, Body)` fires on <em>any</em> contact
+between a ship and the arena boundary, an asteroid, or another ship,
+called symmetrically from `beginContact` the same way every other
+contact hook here is. A ship-vs-ship collision naturally registers
+twice (both sides pass the "is this body a ship, is the other body a
+relevant target" check) — one impact sound per ship, at its own
+position, accepted as a reasonable simplification rather than deduped
+to a single shared event via a pairwise-contact tracking structure that
+would add real complexity for a purely cosmetic effect.
+
+**Power-up pickup reuses the existing pickup-resolution path with no
+new detection logic at all** — `resolvePendingPowerUpPickups` (design.md
+2.18) already reads a power-up's body position right before destroying
+it; the new broadcast is one line inserted there, before the
+`world.destroyBody` call, same "broadcast before destroying the body"
+discipline every other contact-triggered broadcast in this class
+already follows.
+
+**Verified:** full `mvn clean test` (178 core — +2 new
+`MessageRegistryTest` round trips — + 30 server) and `mvn clean install`
+(all 4 modules) green. A real packaged server + client were both booted
+together, zero exceptions on either side (confirms all 5 new clips
+actually resolve through `GameAssets`/`SplashScreen`, and the new
+`ContactListener`/broadcast wiring runs cleanly at idle). **Not
+live-verified** — needs the user to actually bump into a wall/asteroid/
+another ship and confirm a "thud" plays (with some sample variety across
+several impacts) and to pick up a power-up and confirm the pickup chime
+plays, both fading correctly with distance for a remote event.
+
 ## 5. UX flow
 
 **Note (2026-09-11):** inserting 5.3 (Audio Settings screen) bumped the

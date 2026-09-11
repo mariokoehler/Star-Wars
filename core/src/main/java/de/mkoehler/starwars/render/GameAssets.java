@@ -135,6 +135,31 @@ public final class GameAssets {
      */
     public static final String EXPLOSION_SOUND = "audio/effects/explosion.mp3";
 
+    /**
+     * Four interchangeable ship-impact "thud" clips (design.md — impact
+     * sounds) — played whenever a ship physically collides with the
+     * arena boundary, an asteroid, or another ship (see
+     * {@code de.mkoehler.starwars.net.messages.ShipImpactMessage}), one
+     * picked at random independently by each client every time. Falls
+     * under the "Sound Effects" volume category, same as
+     * {@link #EXPLOSION_SOUND}/{@link #POWERUP_PICKUP_SOUND} — a physical
+     * bump isn't a weapon firing.
+     */
+    public static final String[] IMPACT_SOUNDS = {
+        "audio/effects/impact1.mp3",
+        "audio/effects/impact2.mp3",
+        "audio/effects/impact3.mp3",
+        "audio/effects/impact4.mp3",
+    };
+
+    /**
+     * The power-up pickup sound (design.md — power-ups' audio addendum)
+     * — played whenever a ship picks up a power-up (see
+     * {@code de.mkoehler.starwars.net.messages.PowerUpPickedUpMessage}).
+     * "Sound Effects" volume category, same as {@link #EXPLOSION_SOUND}.
+     */
+    public static final String POWERUP_PICKUP_SOUND = "audio/effects/powerup_pickup.mp3";
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -290,6 +315,10 @@ public final class GameAssets {
         manager.load(MISSILE_LAUNCH_SOUND, Sound.class);
         manager.load(TURRET_SOUND, Sound.class);
         manager.load(EXPLOSION_SOUND, Sound.class);
+        for (String impactSound : IMPACT_SOUNDS) {
+            manager.load(impactSound, Sound.class);
+        }
+        manager.load(POWERUP_PICKUP_SOUND, Sound.class);
         manager.load(MISSILE_LOCK_TRYING_SOUND, Sound.class);
         manager.load(MISSILE_LOCK_ACQUIRED_SOUND, Sound.class);
 

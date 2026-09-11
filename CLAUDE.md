@@ -4358,6 +4358,40 @@ confirm a BOMB pickup in a crowded arena no longer risks spawning a
 mine on top of a player, and that it still eventually spawns rather
 than silently vanishing.
 
+**Impact sounds + power-up pickup sound — implemented 2026-09-11.** See
+design.md 4.5's newest addendum for the full writeup. User provided 5
+more clips (`assets-raw/sfx/other/impact1-4.mp3` + `powerup_pickup.mp3`),
+copied to `assets/audio/effects/` alongside `explosion.mp3`. Spec: a
+random one of the 4 impact clips plays whenever a ship physically
+collides with another ship, the arena boundary, or an asteroid; the
+pickup clip plays whenever a ship picks up a power-up.
+
+New `ShipImpactMessage`/`PowerUpPickedUpMessage` (x/y only, same "just
+an SFX trigger" shape as `ProjectileHitMessage`/`MineDetonatedMessage`)
+— neither carries which of the 4 impact samples to play, since each
+client picks independently and randomly (`MathUtils.random(3)`), purely
+cosmetic with no need for cross-client consistency. New
+`GameNetworkServer.registerPotentialShipImpact` is a genuinely new
+`ContactListener` hook, not a reuse of `registerPotentialWallHit`/
+`registerPotentialAsteroidHit` — those only fire above a damage speed
+threshold, this fires on *any* ship contact with a relevant target
+(no threshold, purely a physical-contact cue). A ship-vs-ship collision
+naturally fires this twice (both sides of the symmetric `beginContact`
+check pass), producing two impact sounds — deliberately accepted rather
+than deduped via a pairwise-contact tracking structure, judged not worth
+the complexity for a cosmetic effect. Power-up pickup needed zero new
+detection logic — `resolvePendingPowerUpPickups` already reads the
+power-up's body position right before destroying it; the broadcast is
+one line inserted there.
+
+**Verification:** full `mvn clean test` (178 core, +2 new
+`MessageRegistryTest` round trips — + 30 server) and `mvn clean install`
+(all 4 modules) green. A real packaged server + client booted together,
+zero exceptions on either side. **Not live-verified** — needs the user
+to actually bump into things and pick up a power-up to confirm both
+sounds play (with real sample variety across several impacts) and fade
+correctly with distance for a remote event.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on
