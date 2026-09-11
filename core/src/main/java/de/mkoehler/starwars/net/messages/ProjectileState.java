@@ -27,6 +27,7 @@ public class ProjectileState {
     private float velocityX;
     private float velocityY;
     private int trackedTargetPlayerId;
+    private boolean turretShot;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -52,9 +53,12 @@ public class ProjectileState {
      * @param velocityY     the projectile's actual world-frame velocity, in meters/second
      * @param trackedTargetPlayerId the enemy player id this projectile is tracking (a missile), or
      *                              {@link de.mkoehler.starwars.sim.components.ProjectileComponent#NO_TRACKED_TARGET}
+     * @param turretShot            whether this projectile was fired by a turret mount rather than the
+     *                              firing ship's own main gun (design.md — weapon sound: which sound
+     *                              clip a client plays for it)
      */
     public ProjectileState(int projectileId, int ownerPlayerId, float x, float y,
-                            float velocityX, float velocityY, int trackedTargetPlayerId) {
+                            float velocityX, float velocityY, int trackedTargetPlayerId, boolean turretShot) {
         this.projectileId = projectileId;
         this.ownerPlayerId = ownerPlayerId;
         this.x = x;
@@ -62,6 +66,7 @@ public class ProjectileState {
         this.velocityX = velocityX;
         this.velocityY = velocityY;
         this.trackedTargetPlayerId = trackedTargetPlayerId;
+        this.turretShot = turretShot;
     }
 
     /**
@@ -127,5 +132,16 @@ public class ProjectileState {
      */
     public int getTrackedTargetPlayerId() {
         return trackedTargetPlayerId;
+    }
+
+    /**
+     * Returns whether this projectile was fired by a turret mount, rather
+     * than the firing ship's own main gun (design.md — weapon sound: which
+     * sound clip a client plays for it).
+     *
+     * @return {@code true} for a turret-fired shot, {@code false} for a main-gun shot or a missile
+     */
+    public boolean isTurretShot() {
+        return turretShot;
     }
 }

@@ -5592,6 +5592,77 @@ sits at volume 0 until the thrust key is held.
   an unstopped instance would otherwise keep looping in the background
   forever after the screen is gone.
 
+**Weapon sound — implemented 2026-09-11.** One-shot firing sounds for the
+main gun (per ship type), turrets (one shared clip), and missile launches
+(one shared clip) — `assets-raw/sfx/weapons/`, copied to
+`assets/audio/weapons/`. Unlike the continuous engine loop, these are true
+one-shot `Sound.play(volume)` calls (no instance id kept around, nothing to
+fade or stop later) computed at the moment of firing.
+
+- **Same distance/volume falloff as the engine loop, reused directly:**
+  `GameAssets.weaponSoundPath(ShipType)` mirrors `engineSoundPath`
+  (`"audio/weapons/" + type.getResourceName() + "_shooting.mp3"`); a new
+  `Client.playPositionalSound(Sound, x, y)` computes volume via
+  `EngineAudioMath.distanceVolumeFraction` against the same
+  `REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS` (40m, renamed from the engine-
+  sound-only constant it started as, now shared by both features) and skips
+  playing entirely once fully out of range. The local player's own shots
+  route through the identical helper — since the source position is always
+  ~0m from the local ship's own render position, no separate "am I the
+  shooter" branch is needed anywhere.
+- **One sound per firing volley, not per projectile:** a ship with more
+  than one `"PROJECTILE"` attachment point (or a Star Destroyer with
+  several turret mounts) firing everything at once must only be heard
+  once. The local player's own main-gun sound is triggered exactly once
+  per `predictLocalWeapon` call (after the per-attachment-point spawn
+  loop, not inside it). For every other player's shots — and any turret
+  shot, including the local player's own (turret fire is never locally
+  predicted) — `onWorldSnapshot`'s existing "new, unadopted projectile"
+  branch (already used for muzzle flash) dedupes per shooter, per
+  snapshot, via two small `Set<Integer>` (`weaponSoundOwnersThisSnapshot`/
+  `turretSoundOwnersThisSnapshot`), so a multi-point volley in one
+  snapshot only triggers the sound once per shooter.
+- **New wire field distinguishes a turret shot from a main-gun shot:**
+  nothing on the wire previously told the two apart (`TurretSystem` calls
+  the exact same `ProjectileFactory.createProjectile` `WeaponSystem`
+  does) — added `ProjectileComponent`/`ProjectileState#isTurretShot()`
+  (a new `boolean` parameter threaded through
+  `ProjectileFactory.createProjectile`, `false` from `WeaponSystem`'s two
+  call sites, `true` from `TurretSystem`'s one, `false` from
+  `MissileFactory`'s own separate `ProjectileComponent` construction).
+  Missiles still need no separate boolean of their own — their existing
+  `trackedTargetPlayerId != NO_TRACKED_TARGET` already fully distinguishes
+  them, checked first.
+- **Missile launch sound needs no dedup** — a single "M" press can only
+  ever fire one missile at a time, so every new missile-tracking projectile
+  appearing in `onWorldSnapshot`'s "new" branch (again, never locally
+  predicted, so this covers the local player's own launch too) just plays
+  the shared clip directly.
+- **Filename-mismatch handling simplified, not just for this feature —
+  retroactively for the engine sound one too:** the user explicitly
+  offered to rename any `assets-raw/` file rather than have code carry a
+  lookup-table exception, so every source file was renamed to match
+  `ShipType.getResourceName()` before wiring anything up:
+  `interceptor_engine_loop.mp3`→`tieinterceptor_engine_loop.mp3`,
+  `star_destroyer_engine_loop.mp3`→`stardestroyer_engine_loop.mp3`,
+  `tie_engine_loop.mp3`→`tiefighter_engine_loop.mp3`, and the equivalent
+  three renames for the weapon-sound files. `GameAssets.engineSoundPath`'s
+  switch-based lookup (added for the mismatch when the engine sound
+  feature first shipped, the day before) was deleted entirely, replaced
+  by the same one-line `resourceName + suffix` pattern `weaponSoundPath`
+  uses. The one exception that couldn't be resolved by a rename alone —
+  `tie_shooting.mp3` was authored as a single clip shared by both TIE
+  Fighter and TIE Interceptor — was resolved by **duplicating the file**
+  (`tiefighter_shooting.mp3`/`tieinterceptor_shooting.mp3`, identical
+  bytes) rather than keeping a lookup exception for it: a few KB of
+  duplicate audio was judged simpler than carrying a special case forward
+  indefinitely.
+- **The turret sound is an explicitly temporary placeholder** — the user
+  provided it as a copy of `snowspeeder_shooting.mp3` specifically so
+  turret firing could be wired up now, with the real clip to follow later
+  (a straight asset swap at `assets/audio/weapons/turret_shooting.mp3`,
+  no code change expected).
+
 ## 5. UX flow
 
 ### 5.1 Screen flow

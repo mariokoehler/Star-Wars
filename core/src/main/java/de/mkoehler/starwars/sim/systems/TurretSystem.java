@@ -142,7 +142,7 @@ public class TurretSystem extends IteratingSystem {
         if (aligned && mount.getCooldownRemaining() <= 0f && weapon.canFire()) {
             ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
                 turretX, turretY, mount.getAimAngleRadians(),
-                ownBody.getLinearVelocity().x, ownBody.getLinearVelocity().y, weapon.getStats());
+                ownBody.getLinearVelocity().x, ownBody.getLinearVelocity().y, weapon.getStats(), true);
             weapon.consumeShot();
             mount.resetCooldown(config.getCooldownSeconds());
             combatTimerMapper.get(ownEntity).markFired();

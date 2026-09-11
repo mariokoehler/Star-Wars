@@ -134,33 +134,47 @@ public final class GameAssets {
     }
 
     /**
+     * The one-shot missile-launch sound (design.md — missiles' audio
+     * addendum) — a single shared clip for every ship type's missile, same
+     * "one global template regardless of ship type" reasoning as the
+     * particle effects above.
+     */
+    public static final String MISSILE_LAUNCH_SOUND = "audio/weapons/missile_launch.mp3";
+    /**
+     * The one-shot turret-fire sound (design.md — turret weapons' audio
+     * addendum) — a single shared clip for every turret mount on every
+     * turret-equipped ship type (currently the Falcon/Star Destroyer),
+     * distinct from each ship's own main-gun {@link #weaponSoundPath}.
+     */
+    public static final String TURRET_SOUND = "audio/weapons/turret_shooting.mp3";
+
+    /**
      * Returns the classpath path of {@code type}'s continuous engine-loop
      * sound (design.md — engine sound), loaded as a {@link Sound} (not
      * {@link com.badlogic.gdx.audio.Music}) so {@code Client} can drive one
      * long-lived {@code loop()} instance per ship and fade its volume via
      * {@code setVolume(long, float)} without ever restarting playback.
-     * <p>
-     * The seven source files (user-authored, {@code assets-raw/sfx/engines/})
-     * don't follow {@link ShipType#getResourceName()}'s naming convention for
-     * three ships — same kind of mismatch as
-     * {@code Client.hullRegionName}/{@code ShipSelectionScreen.descriptionRegionName},
-     * handled the same way, with an explicit lookup rather than renaming the
-     * user's own files.
      *
      * @param type the ship type
      * @return the sound's classpath path
      */
     public static String engineSoundPath(ShipType type) {
-        String fileName = switch (type) {
-            case XWING -> "xwing_engine_loop.mp3";
-            case FALCON -> "falcon_engine_loop.mp3";
-            case SNOWSPEEDER -> "snowspeeder_engine_loop.mp3";
-            case STARDESTROYER -> "star_destroyer_engine_loop.mp3";
-            case TIEFIGHTER -> "tie_engine_loop.mp3";
-            case TIEINTERCEPTOR -> "interceptor_engine_loop.mp3";
-            case AWING -> "awing_engine_loop.mp3";
-        };
-        return "audio/engines/" + fileName;
+        return "audio/engines/" + type.getResourceName() + "_engine_loop.mp3";
+    }
+
+    /**
+     * Returns the classpath path of {@code type}'s one-shot main-gun firing
+     * sound (design.md — weapon sound), played once per firing volley
+     * regardless of how many {@code "PROJECTILE"} attachment points fire
+     * together. The TIE Fighter and TIE Interceptor share one underlying
+     * clip (two identical files, one per {@link ShipType#getResourceName()})
+     * rather than needing a lookup exception here.
+     *
+     * @param type the ship type
+     * @return the sound's classpath path
+     */
+    public static String weaponSoundPath(ShipType type) {
+        return "audio/weapons/" + type.getResourceName() + "_shooting.mp3";
     }
 
     /**
@@ -232,6 +246,8 @@ public final class GameAssets {
         manager.load(MUZZLE_FLASH_PARTICLE, ParticleEffect.class);
         manager.load(EXPLOSION_SMALL_PARTICLE, ParticleEffect.class);
         manager.load(EXPLOSION_PARTICLE, ParticleEffect.class);
+        manager.load(MISSILE_LAUNCH_SOUND, Sound.class);
+        manager.load(TURRET_SOUND, Sound.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);
@@ -247,6 +263,10 @@ public final class GameAssets {
             String enginePath = engineSoundPath(type);
             if (Gdx.files.internal(enginePath).exists()) {
                 manager.load(enginePath, Sound.class);
+            }
+            String weaponPath = weaponSoundPath(type);
+            if (Gdx.files.internal(weaponPath).exists()) {
+                manager.load(weaponPath, Sound.class);
             }
         }
         for (int i = 1; i <= AFTER_DEATH_QUOTE_COUNT; i++) {

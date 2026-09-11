@@ -26,6 +26,7 @@ public class ProjectileComponent implements Component {
     private final int ownerPlayerId;
     private final float damage;
     private final int trackedTargetPlayerId;
+    private final boolean turretShot;
     private float remainingLifetime;
 
     /**
@@ -37,14 +38,19 @@ public class ProjectileComponent implements Component {
      * @param remainingLifetime      how much longer, in seconds, this projectile survives before expiring
      * @param trackedTargetPlayerId  the id of the enemy player this projectile is tracking (a missile),
      *                               or {@link #NO_TRACKED_TARGET} for an ordinary, non-tracking projectile
+     * @param turretShot             whether this projectile was fired by a turret mount ({@code TurretSystem})
+     *                               rather than a ship's own main gun ({@code WeaponSystem}) — the one field
+     *                               that tells the two apart on the wire, since both draw from the same
+     *                               shared capacitor and otherwise look identical (design.md — weapon sound)
      */
     public ProjectileComponent(int projectileId, int ownerPlayerId, float damage, float remainingLifetime,
-                                int trackedTargetPlayerId) {
+                                int trackedTargetPlayerId, boolean turretShot) {
         this.projectileId = projectileId;
         this.ownerPlayerId = ownerPlayerId;
         this.damage = damage;
         this.remainingLifetime = remainingLifetime;
         this.trackedTargetPlayerId = trackedTargetPlayerId;
+        this.turretShot = turretShot;
     }
 
     /**
@@ -102,5 +108,16 @@ public class ProjectileComponent implements Component {
      */
     public int getTrackedTargetPlayerId() {
         return trackedTargetPlayerId;
+    }
+
+    /**
+     * Returns whether this projectile was fired by a turret mount, rather
+     * than a ship's own main gun (design.md — weapon sound: which sound
+     * clip the client should play for it).
+     *
+     * @return {@code true} for a turret-fired shot, {@code false} for a main-gun shot or a missile
+     */
+    public boolean isTurretShot() {
+        return turretShot;
     }
 }

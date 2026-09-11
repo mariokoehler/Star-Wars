@@ -1227,7 +1227,8 @@ public class GameNetworkServer extends NetworkServer {
             Body body = entity.getComponent(PhysicsBodyComponent.class).getBody();
             projectileStates[j] = new ProjectileState(projectile.getProjectileId(), projectile.getOwnerPlayerId(),
                 body.getPosition().x, body.getPosition().y,
-                body.getLinearVelocity().x, body.getLinearVelocity().y, projectile.getTrackedTargetPlayerId());
+                body.getLinearVelocity().x, body.getLinearVelocity().y, projectile.getTrackedTargetPlayerId(),
+                projectile.isTurretShot());
         }
 
         // Asteroids, like projectiles (design.md 2.14's own scope boundary), are broadcast

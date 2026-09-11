@@ -83,7 +83,7 @@ public final class MissileFactory {
         Entity entity = new Entity();
         entity.add(new PhysicsBodyComponent(body));
         entity.add(new ProjectileComponent(projectileId, ownerPlayerId, stats.getDamage(),
-            stats.getFlightSeconds(), targetPlayerId));
+            stats.getFlightSeconds(), targetPlayerId, false));
         entity.add(new MissileComponent(targetEntity));
         engine.addEntity(entity);
         body.setUserData(entity);

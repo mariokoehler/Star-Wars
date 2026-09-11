@@ -166,7 +166,7 @@ class MessageRegistryTest {
                     new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f, ShipState.NO_MISSILE_LOCK_TARGET, false, false, false, false)
             },
             new ProjectileState[]{
-                new ProjectileState(100, 1, 11f, 20f, 3f, 48f, 5)
+                new ProjectileState(100, 1, 11f, 20f, 3f, 48f, 5, true)
             },
             new AsteroidState[]{
                 new AsteroidState(9, AsteroidType.ASTEROID3, -40f, 15f, 0.7f, 1.5f, -2f, 0.05f)
@@ -205,6 +205,7 @@ class MessageRegistryTest {
         assertEquals(3f, copy.getProjectiles()[0].getVelocityX());
         assertEquals(48f, copy.getProjectiles()[0].getVelocityY());
         assertEquals(5, copy.getProjectiles()[0].getTrackedTargetPlayerId());
+        assertTrue(copy.getProjectiles()[0].isTurretShot());
         assertEquals(1, copy.getAsteroids().length);
         assertEquals(9, copy.getAsteroids()[0].getAsteroidId());
         assertEquals(AsteroidType.ASTEROID3, copy.getAsteroids()[0].getType());

@@ -280,8 +280,13 @@ public class Client implements Screen {
 
     /** How long the engine-loop sound's fade-in/fade-out takes (design.md — engine sound), user-specified. */
     private static final float ENGINE_SOUND_FADE_SECONDS = 0.25f;
-    /** Beyond this distance, another player's engine loop is fully inaudible (design.md — engine sound), user-specified. */
-    private static final float ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS = 40f;
+    /**
+     * Beyond this distance, another player's engine loop or one-shot combat
+     * sound (weapon fire, turret fire, missile launch) is fully inaudible
+     * (design.md — engine sound / weapon sound), user-specified — the same
+     * distance/falloff calculation is deliberately shared by both.
+     */
+    private static final float REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS = 40f;
 
     private static final PlayerScoreEntry[] NO_SCORES = new PlayerScoreEntry[0];
     /**
@@ -981,6 +986,12 @@ public class Client implements Screen {
         // ProjectileState note) - presence in this snapshot means alive, so anything not
         // present anymore gets pruned below.
         Set<Integer> presentIds = new HashSet<>();
+        // Deduped per owner, per snapshot (design.md — weapon sound): a ship with more than one
+        // PROJECTILE attachment point, or more than one turret mount, fires multiple projectiles
+        // in the same tick/snapshot - only one weapon/turret sound should be heard for that whole
+        // volley, not one per projectile.
+        Set<Integer> weaponSoundOwnersThisSnapshot = new HashSet<>();
+        Set<Integer> turretSoundOwnersThisSnapshot = new HashSet<>();
         for (ProjectileState state : snapshot.getProjectiles()) {
             presentIds.add(state.getProjectileId());
             float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
@@ -1030,6 +1041,22 @@ public class Client implements Screen {
                         float shooterVelocityX = shooter != null ? shooter.velocityX : 0f;
                         float shooterVelocityY = shooter != null ? shooter.velocityY : 0f;
                         obtainPooledMuzzleFlash().trigger(x, y, travelAngleDegrees, shooterVelocityX, shooterVelocityY);
+                        // Weapon sound (design.md — weapon sound): same "genuinely new and
+                        // unadopted" reasoning as the muzzle flash above covers every case that
+                        // reaches here - another player's main-gun shot, or any turret shot
+                        // (turret fire is never locally predicted, even the local player's own).
+                        if (state.isTurretShot()) {
+                            if (turretSoundOwnersThisSnapshot.add(state.getOwnerPlayerId())) {
+                                playPositionalSound(game.getAssets().get(GameAssets.TURRET_SOUND, Sound.class), x, y);
+                            }
+                        } else if (weaponSoundOwnersThisSnapshot.add(state.getOwnerPlayerId())) {
+                            playWeaponSound(state.getOwnerPlayerId(), x, y);
+                        }
+                    } else {
+                        // A missile launch (design.md — missiles' audio addendum) - never locally
+                        // predicted either, so this is the one place any missile's launch, including
+                        // the local player's own, is ever observed as "new."
+                        playPositionalSound(game.getAssets().get(GameAssets.MISSILE_LAUNCH_SOUND, Sound.class), x, y);
                     }
                 }
                 projectiles.put(state.getProjectileId(), projectile);
@@ -1511,6 +1538,12 @@ public class Client implements Screen {
         }
 
         myWeapon.consumeShot();
+        // Played once per firing volley here, not once per spawnPredictedProjectile call above -
+        // a multi-PROJECTILE-point ship (design.md — weapon sound) should only be heard firing
+        // once, the same "one sound per volley" rule GameNetworkServer.WeaponSystem's real
+        // capacitor draw already applies to the shot's energy cost.
+        playWeaponSound(myPlayerId, myBody.getPosition().x * PhysicsConstants.PIXELS_PER_METER,
+            myBody.getPosition().y * PhysicsConstants.PIXELS_PER_METER);
     }
 
     /**
@@ -1680,7 +1713,7 @@ public class Client implements Screen {
      * {@code ship.thrusting}'s implied 0/1 target, then scales it down by
      * distance from the local player's own ship (design.md — engine sound's
      * optional distance-falloff addendum: full volume up close, silent
-     * beyond {@link #ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS}). Deliberately
+     * beyond {@link #REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS}). Deliberately
      * called <em>after</em> {@link #drawLocalShip} in {@code render()} (not
      * alongside {@link #drawRemoteShips}, which runs first) so
      * {@link #myRenderScreenX}/{@link #myRenderScreenY} are this same
@@ -1693,14 +1726,100 @@ public class Client implements Screen {
             if (ship.engineSound == null) {
                 continue;
             }
-            float dxMeters = (ship.renderX - myRenderScreenX) / PhysicsConstants.PIXELS_PER_METER;
-            float dyMeters = (ship.renderY - myRenderScreenY) / PhysicsConstants.PIXELS_PER_METER;
-            float distanceMeters = (float) Math.sqrt(dxMeters * dxMeters + dyMeters * dyMeters);
+            float distanceMeters = distanceFromLocalShipMeters(ship.renderX, ship.renderY);
             ship.engineVolumeFraction = EngineAudioMath.approachFraction(ship.engineVolumeFraction,
                 ship.thrusting ? 1f : 0f, deltaTime, ENGINE_SOUND_FADE_SECONDS);
-            float distanceFraction = EngineAudioMath.distanceVolumeFraction(distanceMeters, ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS);
+            float distanceFraction = EngineAudioMath.distanceVolumeFraction(distanceMeters, REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS);
             ship.engineSound.setVolume(ship.engineSoundId, ship.engineVolumeFraction * distanceFraction);
         }
+    }
+
+    /**
+     * Returns the local player's own ship's distance from the given screen
+     * position, in meters — shared by {@link #updateRemoteEngineSounds} and
+     * every one-shot combat sound ({@link #playPositionalSound}), since both
+     * use the same "distance from the local ship" volume falloff (design.md
+     * — weapon sound). Uses {@link #myRenderScreenX}/{@link #myRenderScreenY}
+     * as they stand at the moment of the call — for the local player's own
+     * shots this is always effectively 0, so no separate "am I the shooter"
+     * case is needed anywhere that calls this.
+     *
+     * @param xPixels the position to measure from, in screen/world pixels
+     * @param yPixels the position to measure from, in screen/world pixels
+     * @return the distance, in meters
+     */
+    private float distanceFromLocalShipMeters(float xPixels, float yPixels) {
+        float dxMeters = (xPixels - myRenderScreenX) / PhysicsConstants.PIXELS_PER_METER;
+        float dyMeters = (yPixels - myRenderScreenY) / PhysicsConstants.PIXELS_PER_METER;
+        return (float) Math.sqrt(dxMeters * dxMeters + dyMeters * dyMeters);
+    }
+
+    /**
+     * Plays {@code sound} once, as a one-shot effect, at a volume determined
+     * by its distance from the local player's own ship (design.md — weapon
+     * sound: the same volume/distance calculation as
+     * {@link #updateRemoteEngineSounds}'s engine loops) — full volume up
+     * close (including, trivially, for the local player's own shots, whose
+     * position is always ~0m from {@link #myRenderScreenX}/{@link #myRenderScreenY}),
+     * silent beyond {@link #REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS}. Skips
+     * playing entirely once fully out of range, rather than starting an
+     * inaudible instance.
+     *
+     * @param sound   the sound to play, or {@code null} if not loaded (a no-op)
+     * @param xPixels where this sound's source is, in screen/world pixels
+     * @param yPixels where this sound's source is, in screen/world pixels
+     */
+    private void playPositionalSound(Sound sound, float xPixels, float yPixels) {
+        if (sound == null) {
+            return;
+        }
+        float distanceMeters = distanceFromLocalShipMeters(xPixels, yPixels);
+        float volume = EngineAudioMath.distanceVolumeFraction(distanceMeters, REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS);
+        if (volume > 0f) {
+            sound.play(volume);
+        }
+    }
+
+    /**
+     * Resolves {@code ownerPlayerId}'s ship type, for picking which one-shot
+     * combat sound clip to play (design.md — weapon sound) — the local
+     * player's own type for its own id (not present in {@link #ships}, which
+     * only ever holds other players), otherwise whichever {@link RemoteShip}
+     * currently detected for that id, or {@code null} if that shooter isn't
+     * currently a detected/rendered ship at all (as good as it gets without
+     * that ship's own data to draw on, same fallback shape as the muzzle
+     * flash's shooter-velocity lookup).
+     *
+     * @param ownerPlayerId the shooter's player id
+     * @return the shooter's ship type, or {@code null} if unknown
+     */
+    private ShipType resolveShipType(int ownerPlayerId) {
+        if (ownerPlayerId == myPlayerId) {
+            return myShipType;
+        }
+        RemoteShip ship = ships.get(ownerPlayerId);
+        return ship != null ? ship.shipType : null;
+    }
+
+    /**
+     * Plays {@code ownerPlayerId}'s ship type's own main-gun firing sound
+     * (design.md — weapon sound), if that ship type has one loaded and is
+     * currently resolvable ({@link #resolveShipType}).
+     *
+     * @param ownerPlayerId the shooter's player id
+     * @param xPixels       where the shot spawned, in screen/world pixels
+     * @param yPixels       where the shot spawned, in screen/world pixels
+     */
+    private void playWeaponSound(int ownerPlayerId, float xPixels, float yPixels) {
+        ShipType shooterType = resolveShipType(ownerPlayerId);
+        if (shooterType == null) {
+            return;
+        }
+        String path = GameAssets.weaponSoundPath(shooterType);
+        if (!game.getAssets().isLoaded(path, Sound.class)) {
+            return;
+        }
+        playPositionalSound(game.getAssets().get(path, Sound.class), xPixels, yPixels);
     }
 
     /**

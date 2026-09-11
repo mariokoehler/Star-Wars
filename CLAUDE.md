@@ -3755,6 +3755,81 @@ this one especially needs actual ears (does the fade feel like 250ms, is
 the 40m distance cutoff a sensible in-game range) rather than anything a
 screenshot or log could confirm.
 
+**Live-verified 2026-09-11: "i tested it and it works well."** Committed
+and pushed (`82eb79f`).
+
+**Weapon sound — implemented 2026-09-11, same day, right after the engine
+sound feedback landed.** See design.md 4.5's newest addendum for the full
+writeup. User provided one shooting clip per ship type
+(`assets-raw/sfx/weapons/`) plus a shared missile-launch clip and a
+placeholder shared turret clip, and explicitly said the working filenames
+could be renamed freely — including, unprompted, retroactively for the
+engine sound files from the previous entry too. Took the offer for both:
+every mismatched filename was renamed to match `ShipType.getResourceName()`
+before wiring anything up, which let `GameAssets.engineSoundPath`'s
+one-day-old switch-based lookup be deleted entirely in favor of the same
+one-line pattern `weaponSoundPath` now also uses. **One mismatch a rename
+alone couldn't fix:** `tie_shooting.mp3` was authored as a single clip
+meant for both TIE ship types — resolved by duplicating the file
+(`tiefighter_shooting.mp3`/`tieinterceptor_shooting.mp3`) rather than
+keeping a lookup exception for just that one case, judged simpler than
+carrying a special case forward.
+
+**These are true one-shot `Sound.play(volume)` calls, not loops** — no
+instance id kept around afterward, nothing to fade or explicitly stop
+later, unlike the engine sound's `loop()`/`setVolume`/`stop` triple. Same
+distance/volume falloff as the engine loop, reused directly rather than
+reimplemented: `Client.playPositionalSound(Sound, x, y)` calls the same
+`EngineAudioMath.distanceVolumeFraction` against the exact same 40m
+constant (renamed `ENGINE_SOUND_MAX_AUDIBLE_RANGE_METERS` →
+`REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS` now that two features share it).
+The local player's own shots route through this identical helper with no
+special-casing — their source position is always ~0m from the local
+ship's own tracked render position, so the shared distance math just
+naturally comes out near-max volume.
+
+**Real gap found and closed, not just a rendering wiring task: nothing on
+the wire told a turret shot apart from a main-gun shot.** `TurretSystem`
+fires through the exact same `ProjectileFactory.createProjectile`
+`WeaponSystem` does, with no distinguishing field — needed one to know
+which sound to play. New `ProjectileComponent`/`ProjectileState
+.isTurretShot()` (a real wire-shape change, `false` from `WeaponSystem`'s
+two call sites and `MissileFactory`'s own separate `ProjectileComponent`
+construction, `true` from `TurretSystem`'s one) — **rebuild and restart
+both ends together**, same standing rule as every other wire-shape change
+in this project. Checked first before missile launches, which still need
+no boolean of their own — their existing `trackedTargetPlayerId !=
+NO_TRACKED_TARGET` already fully distinguishes them from both.
+
+**One sound per firing volley, not per projectile — the actual point of
+the user's explicit ask, not an incidental detail.** A multi-`PROJECTILE`-
+point ship's main gun, or a Star Destroyer firing several turret mounts
+at once, must only be heard once per volley. Local main-gun fire:
+triggered exactly once per `predictLocalWeapon` call, after its per-
+attachment-point spawn loop, not inside it. Every other case (any other
+player's main-gun shot, any turret shot including the local player's own
+— turret fire is never locally predicted) goes through
+`onWorldSnapshot`'s existing "new, unadopted projectile" branch (already
+there for muzzle flash), deduped per shooter per snapshot via two small
+`Set<Integer>` cleared fresh each `onWorldSnapshot` call. Missile launch
+needed no dedup at all — a single "M" press can only ever fire one
+missile, so every new missile-tracking projectile in that same branch
+just plays the shared clip directly, no owner-tracking needed.
+
+**The turret sound is explicitly a placeholder, not a finished asset** —
+the user copied `snowspeeder_shooting.mp3` to `turret_shooting.mp3`
+specifically so turrets could be wired up now, with the real clip to
+follow later as a straight file swap, no code change expected when it
+arrives.
+
+**Verification status:** full `mvn clean install` (all 4 modules) and
+`mvn test` (166 tests, `MessageRegistryTest`'s `ProjectileState` round
+trip extended for the new field) green. **Not live-verified** — same
+standing pattern as every audio feature this project has shipped; this
+one specifically needs the user to fire from a multi-attachment-point
+ship (confirming one sound, not several) and to hear another player's
+shot/turret/missile fade correctly with distance.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

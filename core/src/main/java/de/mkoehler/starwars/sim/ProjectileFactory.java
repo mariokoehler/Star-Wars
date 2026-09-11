@@ -49,11 +49,13 @@ public final class ProjectileFactory {
      * @param shooterVelX   the firing ship's own velocity at the moment of firing, in meters/second
      * @param shooterVelY   the firing ship's own velocity at the moment of firing, in meters/second
      * @param stats         the weapon type's tuning values
+     * @param turretShot    whether this shot was fired by a turret mount rather than the ship's own
+     *                      main gun (design.md — weapon sound: which sound clip a client plays for it)
      * @return the created entity
      */
     public static Entity createProjectile(Engine engine, World world, int projectileId, int ownerPlayerId,
                                            float x, float y, float angle, float shooterVelX, float shooterVelY,
-                                           WeaponStats stats) {
+                                           WeaponStats stats, boolean turretShot) {
         BodyDef bodyDef = new BodyDef();
         bodyDef.type = BodyDef.BodyType.DynamicBody;
         bodyDef.position.set(x, y);
@@ -81,7 +83,7 @@ public final class ProjectileFactory {
         Entity entity = new Entity();
         entity.add(new PhysicsBodyComponent(body));
         entity.add(new ProjectileComponent(projectileId, ownerPlayerId, stats.getDamage(),
-            stats.getProjectileLifetimeSeconds(), ProjectileComponent.NO_TRACKED_TARGET));
+            stats.getProjectileLifetimeSeconds(), ProjectileComponent.NO_TRACKED_TARGET, turretShot));
         engine.addEntity(entity);
         body.setUserData(entity);
         return entity;
