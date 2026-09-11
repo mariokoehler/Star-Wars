@@ -51,6 +51,19 @@ public final class CollisionCategories {
      */
     public static final short ASTEROID = 0x0008;
 
+    /**
+     * Category for a power-up's <b>physical</b> fixture (design.md —
+     * power-ups) — masked into the arena boundary, asteroid, and projectile
+     * fixtures, but deliberately never into a ship's fixture: a power-up
+     * must stay physically inert to a ship touching it (very light bodies
+     * getting flung around by contact would make "touch to pick up" feel
+     * twitchy), so ship pickup detection instead goes through a separate,
+     * sensor fixture on the same body sharing this same category (see
+     * {@code PowerUpFactory}) — a sensor never produces collision response
+     * regardless of category/mask bits, only contact events.
+     */
+    public static final short POWERUP = 0x0010;
+
     private CollisionCategories() {
     }
 

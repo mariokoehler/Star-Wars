@@ -19,18 +19,25 @@ class CollisionCategoriesTest {
     // Mirrors ShipFactory.createBody's fixtureDef.filter exactly.
     private static final Filter SHIP = filter(CollisionCategories.SHIP,
         (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
-            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID));
+            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.POWERUP));
 
     // Mirrors ProjectileFactory/MissileFactory's fixtureDef.filter exactly.
     private static final Filter PROJECTILE = filter(CollisionCategories.PROJECTILE,
-        (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID));
+        (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID | CollisionCategories.POWERUP));
 
     // Mirrors ArenaBounds.createBoundary's fixtureDef.filter exactly.
-    private static final Filter ARENA_BOUNDARY = filter(CollisionCategories.ARENA_BOUNDARY, CollisionCategories.SHIP);
+    private static final Filter ARENA_BOUNDARY = filter(CollisionCategories.ARENA_BOUNDARY,
+        (short) (CollisionCategories.SHIP | CollisionCategories.POWERUP));
 
     // Mirrors AsteroidFactory.createAsteroid's fixtureDef.filter exactly.
     private static final Filter ASTEROID = filter(CollisionCategories.ASTEROID,
-        (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE));
+        (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE | CollisionCategories.POWERUP));
+
+    // Mirrors PowerUpFactory.createPowerUp's two fixtures exactly - the physical one (real mass,
+    // never masks in SHIP) and the sensor one (isSensor=true, masks in SHIP only).
+    private static final Filter POWERUP_PHYSICAL = filter(CollisionCategories.POWERUP,
+        (short) (CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.PROJECTILE));
+    private static final Filter POWERUP_SENSOR = filter(CollisionCategories.POWERUP, CollisionCategories.SHIP);
 
     @Test
     void shipsCollideWithEachOther() {
@@ -81,6 +88,33 @@ class CollisionCategoriesTest {
     void asteroidsDoNotCollideWithTheArenaBoundary() {
         assertFalse(CollisionCategories.shouldCollide(ASTEROID, ARENA_BOUNDARY));
         assertFalse(CollisionCategories.shouldCollide(ARENA_BOUNDARY, ASTEROID));
+    }
+
+    @Test
+    void powerUpPhysicalFixtureCollidesWithTheArenaBoundaryAsteroidsAndProjectiles() {
+        assertTrue(CollisionCategories.shouldCollide(POWERUP_PHYSICAL, ARENA_BOUNDARY));
+        assertTrue(CollisionCategories.shouldCollide(ARENA_BOUNDARY, POWERUP_PHYSICAL));
+        assertTrue(CollisionCategories.shouldCollide(POWERUP_PHYSICAL, ASTEROID));
+        assertTrue(CollisionCategories.shouldCollide(ASTEROID, POWERUP_PHYSICAL));
+        assertTrue(CollisionCategories.shouldCollide(POWERUP_PHYSICAL, PROJECTILE));
+        assertTrue(CollisionCategories.shouldCollide(PROJECTILE, POWERUP_PHYSICAL));
+    }
+
+    @Test
+    void powerUpPhysicalFixtureNeverCollidesWithAShip() {
+        // The whole point of the two-fixture design (design.md - power-ups): a ship touching a
+        // power-up must never get a real Box2D collision response, only the sensor below.
+        assertFalse(CollisionCategories.shouldCollide(POWERUP_PHYSICAL, SHIP));
+        assertFalse(CollisionCategories.shouldCollide(SHIP, POWERUP_PHYSICAL));
+    }
+
+    @Test
+    void powerUpSensorFixtureOnlyCollidesWithShips() {
+        assertTrue(CollisionCategories.shouldCollide(POWERUP_SENSOR, SHIP));
+        assertTrue(CollisionCategories.shouldCollide(SHIP, POWERUP_SENSOR));
+        assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, ARENA_BOUNDARY));
+        assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, ASTEROID));
+        assertFalse(CollisionCategories.shouldCollide(POWERUP_SENSOR, PROJECTILE));
     }
 
     @Test

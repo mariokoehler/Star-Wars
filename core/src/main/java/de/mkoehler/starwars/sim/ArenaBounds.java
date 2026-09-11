@@ -129,7 +129,11 @@ public final class ArenaBounds {
         fixtureDef.friction = WALL_FRICTION;
         fixtureDef.restitution = WALL_RESTITUTION;
         fixtureDef.filter.categoryBits = CollisionCategories.ARENA_BOUNDARY;
-        fixtureDef.filter.maskBits = CollisionCategories.SHIP;
+        // POWERUP added alongside SHIP (design.md - power-ups): a power-up bounces off the
+        // boundary too, same as a ship, just never damaged by it (GameNetworkServer's own
+        // registerPotentialWallHit guards on PlayerIdComponent before treating a contact as a
+        // damageable wall hit).
+        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.POWERUP);
         body.createFixture(fixtureDef);
 
         shape.dispose();

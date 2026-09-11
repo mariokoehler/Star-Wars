@@ -74,7 +74,11 @@ public final class MissileFactory {
         fixtureDef.friction = 0f;
         fixtureDef.restitution = 0f;
         fixtureDef.filter.categoryBits = CollisionCategories.PROJECTILE;
-        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID);
+        // POWERUP added alongside SHIP/ASTEROID (design.md - power-ups), same reasoning as
+        // ProjectileFactory's own mask - a missile hitting a power-up imparts a real (much larger,
+        // given its mass) impulse before being destroyed.
+        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.ASTEROID
+            | CollisionCategories.POWERUP);
         body.createFixture(fixtureDef);
         shape.dispose();
 

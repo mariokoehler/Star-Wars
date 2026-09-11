@@ -108,4 +108,12 @@ public class MissileLockComponent implements Component {
     public void consumeMissile() {
         missileCount--;
     }
+
+    /**
+     * Increases the missile count by one (design.md — power-ups' MISSILE
+     * effect) — uncapped, since no maximum missile count is specified.
+     */
+    public void addMissile() {
+        missileCount++;
+    }
 }

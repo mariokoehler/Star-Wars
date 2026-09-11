@@ -13,6 +13,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
@@ -31,6 +32,7 @@ import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.PowerSystem;
+import de.mkoehler.starwars.sim.PowerUpType;
 import de.mkoehler.starwars.sim.ShipType;
 import org.junit.jupiter.api.Test;
 
@@ -70,7 +72,8 @@ class MessageRegistryTest {
             PlayerScoreEntry.class, PlayerScoreEntry[].class, ScoreboardMessage.class,
             ShipType[].class, UnlockShipRequest.class, UnlockShipResponse.class, RadarPulseRequest.class,
             MissileFireRequest.class, ProjectileHitMessage.class,
-            AsteroidType.class, AsteroidState.class, AsteroidState[].class
+            AsteroidType.class, AsteroidState.class, AsteroidState[].class,
+            PowerUpType.class, PowerUpState.class, PowerUpState[].class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -161,15 +164,18 @@ class MessageRegistryTest {
         WorldSnapshotMessage original = new WorldSnapshotMessage(
             new ShipState[]{
                 new ShipState(1, 10f, 20f, 0.5f, 1f, 2f, 0.1f, 80f, 100f, 60f, 100f, ShipType.XWING, new float[0], 12f,
-                    5, true, true, false, true),
+                    5, true, true, false, true, 2f),
                 new ShipState(2, -5f, 3f, -1.2f, -1f, 0f, -0.3f, 100f, 100f, 100f, 100f, ShipType.STARDESTROYER,
-                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f, ShipState.NO_MISSILE_LOCK_TARGET, false, false, false, false)
+                    new float[]{0.4f, -1.1f, 2.9f, -2.9f}, 0f, ShipState.NO_MISSILE_LOCK_TARGET, false, false, false, false, 1f)
             },
             new ProjectileState[]{
                 new ProjectileState(100, 1, 11f, 20f, 3f, 48f, 5, true)
             },
             new AsteroidState[]{
                 new AsteroidState(9, AsteroidType.ASTEROID3, -40f, 15f, 0.7f, 1.5f, -2f, 0.05f)
+            },
+            new PowerUpState[]{
+                new PowerUpState(3, PowerUpType.BOOST, 12f, -8f, 0.9f, 2.5f, -1.5f, 0.2f)
             });
         WorldSnapshotMessage copy = roundTrip(original, WorldSnapshotMessage.class);
         assertEquals(2, copy.getShips().length);
@@ -188,7 +194,9 @@ class MessageRegistryTest {
         assertTrue(copy.getShips()[0].isTargetedByMissileLock());
         assertEquals(false, copy.getShips()[0].isTargetedByMissileLockAcquired());
         assertTrue(copy.getShips()[0].isThrusting());
+        assertEquals(2f, copy.getShips()[0].getPowerGenerationMultiplier());
         assertEquals(false, copy.getShips()[1].isThrusting());
+        assertEquals(1f, copy.getShips()[1].getPowerGenerationMultiplier());
         assertEquals(ShipState.NO_MISSILE_LOCK_TARGET, copy.getShips()[1].getMissileLockTargetPlayerId());
         assertEquals(false, copy.getShips()[1].isMissileLockAcquired());
         assertEquals(false, copy.getShips()[1].isTargetedByMissileLock());
@@ -215,6 +223,15 @@ class MessageRegistryTest {
         assertEquals(1.5f, copy.getAsteroids()[0].getVelocityX());
         assertEquals(-2f, copy.getAsteroids()[0].getVelocityY());
         assertEquals(0.05f, copy.getAsteroids()[0].getAngularVelocity());
+        assertEquals(1, copy.getPowerUps().length);
+        assertEquals(3, copy.getPowerUps()[0].getPowerUpId());
+        assertEquals(PowerUpType.BOOST, copy.getPowerUps()[0].getType());
+        assertEquals(12f, copy.getPowerUps()[0].getX());
+        assertEquals(-8f, copy.getPowerUps()[0].getY());
+        assertEquals(0.9f, copy.getPowerUps()[0].getAngle());
+        assertEquals(2.5f, copy.getPowerUps()[0].getVelocityX());
+        assertEquals(-1.5f, copy.getPowerUps()[0].getVelocityY());
+        assertEquals(0.2f, copy.getPowerUps()[0].getAngularVelocity());
     }
 
     @Test

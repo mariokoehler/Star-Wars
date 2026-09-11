@@ -17,6 +17,7 @@ import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.PowerBoostComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.RadarComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
@@ -73,6 +74,7 @@ public final class ShipFactory {
         entity.add(new ShieldComponent(stats.getShieldMaxCapacity(), stats.getShieldRechargePerSecond()));
         entity.add(new WeaponComponent(WeaponStats.BLASTER));
         entity.add(new PowerDistributionComponent());
+        entity.add(new PowerBoostComponent());
         entity.add(new CombatTimerComponent());
         entity.add(new RadarComponent());
         createTurretComponent(stats).ifPresent(entity::add);
@@ -147,8 +149,13 @@ public final class ShipFactory {
         fixtureDef.friction = 0f;
         fixtureDef.restitution = 0.2f;
         fixtureDef.filter.categoryBits = CollisionCategories.SHIP;
+        // POWERUP added so Box2D actually attempts (and CollisionCategories.shouldCollide
+        // confirms) a contact test against a power-up's fixtures - specifically its sensor
+        // fixture (design.md - power-ups), which is the only one that ever masks in SHIP. The
+        // power-up's own physical fixture never masks in SHIP, so this addition can't cause a
+        // real (non-sensor) ship-vs-power-up collision despite widening this mask.
         fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
-            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID);
+            | CollisionCategories.ARENA_BOUNDARY | CollisionCategories.ASTEROID | CollisionCategories.POWERUP);
         body.createFixture(fixtureDef);
 
         shape.dispose();

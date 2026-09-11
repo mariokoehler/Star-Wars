@@ -37,6 +37,7 @@ public final class GameAssets {
     public static final String SHIPS_ATLAS = "textures/ships.atlas";
     public static final String PROJECTILES_ATLAS = "textures/projectiles.atlas";
     public static final String ASTEROIDS_ATLAS = "textures/asteroids.atlas";
+    public static final String POWERUPS_ATLAS = "textures/powerups.atlas";
 
     public static final String LOGO = "textures/menu/logo.png";
     public static final String MENU_STARFIELD = "textures/backgrounds/menu_starfield.png";
@@ -113,6 +114,15 @@ public final class GameAssets {
      * position whenever it's destroyed (see {@code ShipDestroyedMessage}).
      */
     public static final String EXPLOSION_PARTICLE = particleEffectPath("explosion");
+
+    /**
+     * The power-up glow particle effect (design.md — power-ups) — one shared
+     * effect for every {@code PowerUpType}, same one-shared-template
+     * reasoning as {@link #LIGHT_RED_PARTICLE}/{@link #DAMAGE_SMOKE_PARTICLE}.
+     * Unlike those, it's continuous but not attached to a ship at all — a
+     * standalone world pickup.
+     */
+    public static final String POWERUP_PARTICLE = particleEffectPath("powerup");
 
     /**
      * The ship-destruction explosion sound (design.md — explosions' audio
@@ -243,6 +253,7 @@ public final class GameAssets {
         manager.load(SHIPS_ATLAS, TextureAtlas.class);
         manager.load(PROJECTILES_ATLAS, TextureAtlas.class);
         manager.load(ASTEROIDS_ATLAS, TextureAtlas.class);
+        manager.load(POWERUPS_ATLAS, TextureAtlas.class);
 
         manager.load(LOGO, Texture.class);
         manager.load(MENU_STARFIELD, Texture.class);
@@ -273,6 +284,7 @@ public final class GameAssets {
         manager.load(MUZZLE_FLASH_PARTICLE, ParticleEffect.class);
         manager.load(EXPLOSION_SMALL_PARTICLE, ParticleEffect.class);
         manager.load(EXPLOSION_PARTICLE, ParticleEffect.class);
+        manager.load(POWERUP_PARTICLE, ParticleEffect.class);
         manager.load(MISSILE_LAUNCH_SOUND, Sound.class);
         manager.load(TURRET_SOUND, Sound.class);
         manager.load(EXPLOSION_SOUND, Sound.class);

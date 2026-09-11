@@ -16,6 +16,7 @@ import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.PowerBoostComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ShipTypeComponent;
 import de.mkoehler.starwars.sim.components.WeaponComponent;
@@ -62,6 +63,7 @@ public class WeaponSystem extends IteratingSystem {
     private final ComponentMapper<PlayerIdComponent> playerIdMapper = ComponentMapper.getFor(PlayerIdComponent.class);
     private final ComponentMapper<ShipTypeComponent> shipTypeMapper = ComponentMapper.getFor(ShipTypeComponent.class);
     private final ComponentMapper<PowerDistributionComponent> powerMapper = ComponentMapper.getFor(PowerDistributionComponent.class);
+    private final ComponentMapper<PowerBoostComponent> boostMapper = ComponentMapper.getFor(PowerBoostComponent.class);
     private final ComponentMapper<CombatTimerComponent> combatTimerMapper = ComponentMapper.getFor(CombatTimerComponent.class);
 
     private final Engine engine;
@@ -80,7 +82,7 @@ public class WeaponSystem extends IteratingSystem {
     public WeaponSystem(Engine engine, World world, AtomicInteger nextProjectileId) {
         super(Family.all(PhysicsBodyComponent.class, WeaponComponent.class, NetworkInputComponent.class,
             PlayerIdComponent.class, ShipTypeComponent.class, PowerDistributionComponent.class,
-            CombatTimerComponent.class).get());
+            PowerBoostComponent.class, CombatTimerComponent.class).get());
         this.engine = engine;
         this.world = world;
         this.nextProjectileId = nextProjectileId;
@@ -90,7 +92,10 @@ public class WeaponSystem extends IteratingSystem {
     protected void processEntity(Entity entity, float deltaTime) {
         WeaponComponent weapon = weaponMapper.get(entity);
         weapon.tickCooldown(deltaTime);
-        float weaponsMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.WEAPONS);
+        // Design.md - power-ups' BOOST effect, same "multiply on top of the distribution's own
+        // multiplier" treatment as ShipControlSystem's engines multiplier.
+        float weaponsMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.WEAPONS)
+            * boostMapper.get(entity).getMultiplier();
         weapon.rechargeCapacitor(deltaTime, weaponsMultiplier);
 
         NetworkInputComponent input = inputMapper.get(entity);

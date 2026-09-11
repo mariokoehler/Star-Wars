@@ -66,6 +66,16 @@ import de.mkoehler.starwars.sim.ShipType;
  * every client can render the correct ship's engine glow, not just the
  * local player's own — same broadcast-for-every-ship convention as
  * hull/shield/turret aim above.
+ * <p>
+ * {@link #getPowerGenerationMultiplier()} (design.md — power-ups' BOOST
+ * effect) carries a ship's current {@code PowerBoostComponent} multiplier
+ * ({@code 1f} normally, {@code 2f} while boosted) — broadcast (not
+ * independently timed client-side, unlike {@code PowerDistribution}'s own
+ * keypress-driven mirror) purely so the owning client's local prediction of
+ * its own thrust/torque and weapon-capacitor recharge stays in sync with the
+ * server's authoritative multiplier for the boost's whole duration, the same
+ * "predicted and authoritative physics must apply identical rules" reasoning
+ * every other locally-mirrored multiplier in this project already follows.
  */
 public class ShipState {
 
@@ -94,6 +104,7 @@ public class ShipState {
     private boolean targetedByMissileLock;
     private boolean targetedByMissileLockAcquired;
     private boolean thrusting;
+    private float powerGenerationMultiplier;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -127,6 +138,8 @@ public class ShipState {
      *                                    lock target (acquiring or acquired)
      * @param targetedByMissileLockAcquired whether any such lock on this ship is fully acquired
      * @param thrusting                   whether this ship is currently holding its forward-thrust input
+     * @param powerGenerationMultiplier   this ship's current power-generation multiplier ({@code 1f}
+     *                                    normally, {@code 2f} while a BOOST power-up is active)
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
@@ -134,7 +147,7 @@ public class ShipState {
                       ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining,
                       int missileLockTargetPlayerId, boolean missileLockAcquired,
                       boolean targetedByMissileLock, boolean targetedByMissileLockAcquired,
-                      boolean thrusting) {
+                      boolean thrusting, float powerGenerationMultiplier) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -154,6 +167,7 @@ public class ShipState {
         this.targetedByMissileLock = targetedByMissileLock;
         this.targetedByMissileLockAcquired = targetedByMissileLockAcquired;
         this.thrusting = thrusting;
+        this.powerGenerationMultiplier = powerGenerationMultiplier;
     }
 
     /**
@@ -332,5 +346,14 @@ public class ShipState {
      */
     public boolean isThrusting() {
         return thrusting;
+    }
+
+    /**
+     * Returns this ship's current power-generation multiplier.
+     *
+     * @return the multiplier — {@code 1f} normally, {@code 2f} while a BOOST power-up is active
+     */
+    public float getPowerGenerationMultiplier() {
+        return powerGenerationMultiplier;
     }
 }

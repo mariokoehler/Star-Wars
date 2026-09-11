@@ -4152,6 +4152,93 @@ composite" convention needs the composite to actually call (or exactly
 mirror) the real method, not just reproduce what it's supposed to
 compute.
 
+**Power-ups — implemented 2026-09-11.** See design.md 2.18 for the full
+writeup (also resolves the corresponding §7 open question). Session
+started by pulling 7 upstream commits (audio system, keybind list
+scrolling, display-name labels) — untracked power-up art the user had
+just finished (`assets-raw/powerup/`, `assets-raw/particles/PowerUp.p`,
+`assets-raw/psd/powerup.psd`) survived the pull untouched, confirmed
+beforehand by diffing the incoming commits against those exact paths.
+Four world-pickup effects (REPAIR/BOOST/MISSILE real, BOMB an explicit
+dummy no-op per the user's own instruction), 4 always active, respawn
+elsewhere on pickup, very light + real bouncy + no drag, per the user's
+spec.
+
+**Consulted `advisor` with the full plan before writing any code** (same
+standing practice as the asteroids milestone) — caught three real issues
+before they became bugs: (1) only 2 of the 5 needed mask edits were in
+the original plan — `CollisionCategories.shouldCollide`'s check is a
+mutual AND, so `AsteroidFactory`/`ProjectileFactory`/`MissileFactory`
+each needed `POWERUP` added to their own masks too, or asteroid/
+projectile/missile↔power-up contact would have silently never fired;
+(2) a missile's much larger mass/speed relative to a blaster bolt, at
+the "very light" density the user asked for, works out to several
+hundred m/s of unclamped Δv — fixed with a 30 m/s per-tick speed clamp
+plus a second-line-of-defense out-of-bounds despawn/respawn (the arena
+boundary is a zero-thickness `ChainShape`); (3) `registerPotentialWallHit`
+had a real, pre-existing latent bug — it treated *any* non-null entity
+touching the boundary as a damageable ship, harmless until a power-up
+(a body with no `HullComponent`) started touching the boundary too,
+which would have NPE'd the server on the very first bounce. Fixed by
+guarding on `PlayerIdComponent` being present.
+
+**The ship-detection design (§7's old open question)** resolved via a
+**two-fixture Box2D body**: a real physical fixture (mass, bounces off
+the boundary/an asteroid/a projectile or missile, never masks in
+`SHIP`) plus a non-physical **sensor** fixture on the same body (masks
+`SHIP` only) — a sensor generates contact events without any collision
+response, which is exactly "detect a ship touching it without physically
+shoving a body this light around." Reuses the existing `ContactListener`/
+pending-list-resolved-after-physics-stepping machinery, no new
+cross-thread/timing pattern needed.
+
+**Real gotcha caught by re-checking assumptions, not by running
+anything:** `PowerBoostSystem` (ticks a ship's temporary 2× power-
+generation multiplier down every tick, from the BOOST effect) was added
+to the Ashley `engine` via `addSystem`, same as every other system here
+— but this codebase has *never* called `engine.update(deltaTime)`
+anywhere (each system's `.update()` is invoked manually from `tick()`,
+specifically so non-system code like camera-follow/asteroid maintenance
+can run interleaved between them — see this file's own much earlier
+"Implementation note" on why). `addSystem` alone would have compiled
+and run with zero errors while silently never ticking the boost down at
+all (permanent boost forever, not the intended 15s) — caught by
+checking for `engine.update(` calls in the file before assuming
+`addSystem` was sufficient, the same class of "added to the engine but
+never actually invoked" mistake this codebase's own manual-driving
+convention makes easy to fall into for a new system.
+
+**Verification:** full `mvn clean test` (173 core + 30 server, +4 new
+`PowerBoostComponentTest`, +11 new `CollisionCategoriesTest` cases for
+both power-up fixtures' real pairings, +1 extended `MessageRegistryTest`
+round trip) and `mvn clean install` (all 4 modules) green. Hit the
+now-familiar stray-`--mcp`-client-holding-the-jar-locked gotcha
+(CLAUDE.md's own turret-weapons/radar-session entries) during `mvn
+clean install` — checked full command lines via `Get-CimInstance
+Win32_Process` before killing it, confirmed by the `starwars-client` MCP
+server disconnecting right after. `AtlasPacker` re-run to generate the
+new `powerups.atlas`; the incidental `ships.atlas`/`ships.png` repack
+this always triggers (same gotcha noted in the asteroids-session entry)
+was reverted via `git checkout`, not committed. A real packaged client
+booted standalone (12s, zero exceptions — confirms `powerups.atlas`/
+`powerup.p`/the already-present `particle.png` all actually resolve) and
+a real packaged server booted standalone (10s, zero exceptions —
+exercises the new `ContactFilter`/`ContactListener` wiring and
+`tickPowerUps`/`trySpawnPowerUp` spawning real two-fixture bodies from
+tick 1, found via checking `Get-CimInstance` first that no server was
+already running — the user's libGDX particle editor was open in a
+separate process, left alone). **Not live-verified** — no multiplayer
+session was driven this time; the user's next play session needs to
+confirm actual pickup-on-touch feel, all three real effects, a shot's
+visible-but-not-absurd shove, the bounce, and the 4-active maintenance,
+plus feel-test the untuned 15s boost duration / 30 m/s speed clamp.
+
+**Noticed, not touched:** a new untracked `assets-raw/mine/` folder —
+almost certainly the user's own concurrent work toward the still-
+deferred BOMB effect. Left alone per this file's own standing
+"investigate, don't assume, don't touch" rule for exactly this
+situation.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

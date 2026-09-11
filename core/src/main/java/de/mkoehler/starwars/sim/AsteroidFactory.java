@@ -95,7 +95,10 @@ public final class AsteroidFactory {
         fixtureDef.friction = FRICTION;
         fixtureDef.restitution = RESTITUTION;
         fixtureDef.filter.categoryBits = CollisionCategories.ASTEROID;
-        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE);
+        // POWERUP added alongside SHIP/PROJECTILE (design.md - power-ups): an asteroid physically
+        // bounces a power-up drifting into it, same as any other dynamic obstacle here.
+        fixtureDef.filter.maskBits = (short) (CollisionCategories.SHIP | CollisionCategories.PROJECTILE
+            | CollisionCategories.POWERUP);
         body.createFixture(fixtureDef);
         shape.dispose();
 

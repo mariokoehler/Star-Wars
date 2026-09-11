@@ -34,6 +34,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
@@ -52,6 +53,7 @@ import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
 import de.mkoehler.starwars.render.MuzzleFlashEffect;
 import de.mkoehler.starwars.render.PowerDistributionHud;
+import de.mkoehler.starwars.render.PowerUpEffect;
 import de.mkoehler.starwars.render.RadarHud;
 import de.mkoehler.starwars.render.OneShotParticleEffect;
 import de.mkoehler.starwars.render.ScoreboardHud;
@@ -65,6 +67,7 @@ import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PhysicsConstants;
 import de.mkoehler.starwars.sim.PowerDistribution;
 import de.mkoehler.starwars.sim.PowerSystem;
+import de.mkoehler.starwars.sim.PowerUpType;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
 import de.mkoehler.starwars.sim.ShipType;
@@ -335,6 +338,8 @@ public class Client implements Screen {
     private TextureRegion missileLockReticleCenterRegion;
     private TextureAtlas asteroidsAtlas;
     private final Map<AsteroidType, TextureRegion> asteroidRegionsByType = new EnumMap<>(AsteroidType.class);
+    private TextureAtlas powerupsAtlas;
+    private final Map<PowerUpType, TextureRegion> powerUpRegionsByType = new EnumMap<>(PowerUpType.class);
     private ParallaxBackground background;
     private ArenaBoundaryRenderer arenaBoundaryRenderer;
     private ShipStatusHud statusHud;
@@ -351,6 +356,7 @@ public class Client implements Screen {
     private final Map<Integer, RemoteShip> ships = new HashMap<>();
     private final Map<Integer, RemoteProjectile> projectiles = new HashMap<>();
     private final Map<Integer, RemoteAsteroid> asteroids = new HashMap<>();
+    private final Map<Integer, RemotePowerUp> powerUps = new HashMap<>();
     /**
      * Client-side "puppet" Box2D bodies mirroring each currently-active
      * asteroid into {@link #localWorld} (design.md — asteroids' addendum) —
@@ -592,6 +598,17 @@ public class Client implements Screen {
     private final GlyphLayout displayNameLayout = new GlyphLayout();
     private PowerDistribution myPowerDistribution = PowerDistribution.even();
     /**
+     * Local mirror of this ship's server-broadcast {@code PowerBoostComponent}
+     * multiplier (design.md — power-ups' BOOST effect) — {@code 1f} normally,
+     * {@code 2f} while a boost is active, read directly from every snapshot's
+     * own {@code ShipState} entry (see {@link #onWorldSnapshot}) rather than
+     * independently timed, unlike {@link #myPowerDistribution}'s keypress-
+     * driven mirror. Multiplies the engines/weapons multipliers in
+     * {@link #predictLocalShip}/{@link #predictLocalWeapon} so local
+     * prediction stays in sync with the server's authoritative rate.
+     */
+    private float myPowerBoostMultiplier = 1f;
+    /**
      * A local mirror of the server's own {@code WeaponComponent} for this
      * ship (design.md 2.4's addendum) - reset alongside every spawn/respawn
      * ({@link #onShipSpawned}, same as {@link #myPowerDistribution}), ticked
@@ -667,6 +684,10 @@ public class Client implements Screen {
         asteroidsAtlas = game.getAssets().get(GameAssets.ASTEROIDS_ATLAS, TextureAtlas.class);
         for (AsteroidType type : AsteroidType.values()) {
             asteroidRegionsByType.put(type, asteroidsAtlas.findRegion(type.getResourceName()));
+        }
+        powerupsAtlas = game.getAssets().get(GameAssets.POWERUPS_ATLAS, TextureAtlas.class);
+        for (PowerUpType type : PowerUpType.values()) {
+            powerUpRegionsByType.put(type, powerupsAtlas.findRegion(type.getResourceName()));
         }
         // One shared effect regardless of ship type, unlike myThrusters/myLights/myDamageSmoke -
         // built once here rather than rebuilt per-spawn, since it depends on no ship-type-specific
@@ -828,6 +849,10 @@ public class Client implements Screen {
         // server too (ShipFactory.createShip), so resetting the local mirror here keeps the two in
         // sync trivially, same reasoning as the hull/shield reset above.
         myPowerDistribution = PowerDistribution.even();
+        // Same reasoning - a fresh ship also gets a fresh (inactive) PowerBoostComponent
+        // server-side (design.md - power-ups), so a stale multiplier from a previous life
+        // doesn't leak across a respawn until the first snapshot corrects it.
+        myPowerBoostMultiplier = 1f;
         shieldsHold.reset();
         weaponsHold.reset();
         enginesHold.reset();
@@ -990,6 +1015,11 @@ public class Client implements Screen {
                 updateMissileLockAudioState();
                 myTargetedByMissileLock = state.isTargetedByMissileLock();
                 myTargetedByMissileLockAcquired = state.isTargetedByMissileLockAcquired();
+                // Design.md - power-ups' BOOST effect: read directly from the snapshot (not
+                // independently timed client-side, unlike myPowerDistribution's keypress-driven
+                // mirror) purely so local thrust/torque/weapon-capacitor prediction stays in sync
+                // with the server's authoritative multiplier for the whole boost duration.
+                myPowerBoostMultiplier = state.getPowerGenerationMultiplier();
                 continue;
             }
             presentShipIds.add(state.getPlayerId());
@@ -1170,6 +1200,31 @@ public class Client implements Screen {
                 }
             }
         }
+
+        // Same presence-based prune as above - a power-up has no destroyed/despawned
+        // notification of its own either (design.md - power-ups), a client infers it's gone
+        // (picked up, or drifted out of the arena and respawned elsewhere) the same way. No local-
+        // prediction physics mirror needed here, unlike asteroids - a ship never physically
+        // collides with a power-up (design.md - power-ups' sensor-fixture pickup design), so
+        // there's nothing for the local prediction body to diverge from by not tracking one.
+        Set<Integer> presentPowerUpIds = new HashSet<>();
+        for (PowerUpState state : snapshot.getPowerUps()) {
+            presentPowerUpIds.add(state.getPowerUpId());
+            float x = state.getX() * PhysicsConstants.PIXELS_PER_METER;
+            float y = state.getY() * PhysicsConstants.PIXELS_PER_METER;
+            RemotePowerUp powerUp = powerUps.computeIfAbsent(state.getPowerUpId(),
+                id -> new RemotePowerUp(x, y, state.getAngle(), state.getType(), createPowerUpEffect()));
+            powerUp.updateFromSnapshot(x, y, state.getAngle(),
+                state.getVelocityX() * PhysicsConstants.PIXELS_PER_METER,
+                state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
+                state.getAngularVelocity());
+        }
+        powerUps.keySet().removeIf(id -> !presentPowerUpIds.contains(id));
+    }
+
+    private PowerUpEffect createPowerUpEffect() {
+        ParticleEffect template = game.getAssets().get(GameAssets.POWERUP_PARTICLE, ParticleEffect.class);
+        return new PowerUpEffect(template);
     }
 
     /**
@@ -1351,6 +1406,7 @@ public class Client implements Screen {
         extrapolateRemoteShips(deltaTime);
         extrapolateProjectiles(deltaTime);
         extrapolateAsteroids(deltaTime);
+        extrapolatePowerUps(deltaTime);
         updateCamera(deltaTime);
         missileReticleAnimationSeconds += deltaTime;
 
@@ -1359,6 +1415,7 @@ public class Client implements Screen {
         background.render(batch, camera);
         arenaBoundaryRenderer.render(batch);
         drawAsteroids();
+        drawPowerUps(deltaTime);
         // Missiles draw *before* ships, deliberately (design.md - missiles' addendum): they now
         // spawn at the firing ship's exact center, so drawing every ship on top of them is what
         // makes a fresh missile read as launched from underneath the ship and emerging as it
@@ -1512,7 +1569,10 @@ public class Client implements Screen {
 
     private void predictLocalShip(boolean thrustForward, boolean turnLeft, boolean turnRight, float deltaTime) {
         ShipStats myStats = ShipStats.forType(myShipType);
-        float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES);
+        // Design.md - power-ups' BOOST effect: multiplies on top of the distribution's own
+        // multiplier, same as ShipControlSystem's server-side math - must match exactly, or this
+        // prediction would constantly need correcting for reasons other than differing input.
+        float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES) * myPowerBoostMultiplier;
         // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
         // response curve (design.md 2.2's addendum) - must match ShipControlSystem's own server-side
         // math exactly, or local prediction would constantly need correcting for reasons other than
@@ -1564,7 +1624,9 @@ public class Client implements Screen {
             return;
         }
         myWeapon.tickCooldown(deltaTime);
-        float weaponsMultiplier = myPowerDistribution.multiplierFor(PowerSystem.WEAPONS);
+        // Design.md - power-ups' BOOST effect, same "multiply on top of the distribution's own
+        // multiplier" treatment as predictLocalShip's engines multiplier.
+        float weaponsMultiplier = myPowerDistribution.multiplierFor(PowerSystem.WEAPONS) * myPowerBoostMultiplier;
         myWeapon.rechargeCapacitor(deltaTime, weaponsMultiplier);
 
         if (!firing || !myWeapon.canFire()) {
@@ -1681,6 +1743,12 @@ public class Client implements Screen {
         }
     }
 
+    private void extrapolatePowerUps(float deltaTime) {
+        for (RemotePowerUp powerUp : powerUps.values()) {
+            powerUp.extrapolate(deltaTime);
+        }
+    }
+
     /**
      * Draws every currently-active asteroid (design.md — asteroids) — dead
      * reckoned the same way as {@link #drawRemoteShips}/{@link #drawBlasterProjectiles},
@@ -1699,6 +1767,37 @@ public class Client implements Screen {
                 widthPixels, heightPixels,
                 1f, 1f,
                 asteroid.renderAngle * MathUtils.radiansToDegrees);
+        }
+    }
+
+    /**
+     * Draws every currently-active power-up (design.md — power-ups) — dead
+     * reckoned the same way as {@link #drawAsteroids}. Per the user's own
+     * instruction, each power-up's particle glow is updated and drawn
+     * <em>before</em> its texture, both centered at the same
+     * ({@code renderX}, {@code renderY}) — {@link SpriteBatch} has no depth
+     * buffer, so draw order alone determines what layers on top of what.
+     * Every power-up type shares the same fixed 256×256 texture size at
+     * {@link PowerUpType#PIXELS_PER_METER}, unlike {@link #drawAsteroids}'s
+     * per-type scale.
+     *
+     * @param deltaTime time since the last frame, in seconds — advances each power-up's glow
+     */
+    private void drawPowerUps(float deltaTime) {
+        float screenScale = PhysicsConstants.PIXELS_PER_METER / PowerUpType.PIXELS_PER_METER;
+        for (RemotePowerUp powerUp : powerUps.values()) {
+            powerUp.effect.update(powerUp.renderX, powerUp.renderY, deltaTime);
+            powerUp.effect.draw(batch);
+
+            TextureRegion region = powerUpRegionsByType.get(powerUp.type);
+            float widthPixels = region.getRegionWidth() * screenScale;
+            float heightPixels = region.getRegionHeight() * screenScale;
+            batch.draw(region,
+                powerUp.renderX - widthPixels / 2f, powerUp.renderY - heightPixels / 2f,
+                widthPixels / 2f, heightPixels / 2f,
+                widthPixels, heightPixels,
+                1f, 1f,
+                powerUp.renderAngle * MathUtils.radiansToDegrees);
         }
     }
 
@@ -2710,7 +2809,7 @@ public class Client implements Screen {
             ship.stopEngineSound();
         }
         batch.dispose();
-        // shipsAtlas/projectilesAtlas/asteroidsAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
+        // shipsAtlas/projectilesAtlas/asteroidsAtlas/powerupsAtlas/warningBannerTexture, and statusHud/powerHud's textures, are
         // owned by StarWarsGame#getAssets() (design.md - asset loading), not this screen -
         // disposed once, at app shutdown, not here. background.dispose() below still frees the
         // procedurally-generated starfield layer, which this screen alone owns (see #show()).
@@ -2870,6 +2969,56 @@ public class Client implements Screen {
 
         RemoteAsteroid(float x, float y, float angle, AsteroidType type) {
             this.type = type;
+            baseX = renderX = x;
+            baseY = renderY = y;
+            baseAngle = renderAngle = angle;
+        }
+
+        void updateFromSnapshot(float x, float y, float angle, float velocityX, float velocityY, float angularVelocity) {
+            baseX = x;
+            baseY = y;
+            baseAngle = angle;
+            this.velocityX = velocityX;
+            this.velocityY = velocityY;
+            this.angularVelocity = angularVelocity;
+            elapsedSinceUpdate = 0f;
+        }
+
+        void extrapolate(float deltaTime) {
+            elapsedSinceUpdate += deltaTime;
+            renderX = baseX + velocityX * elapsedSinceUpdate;
+            renderY = baseY + velocityY * elapsedSinceUpdate;
+            renderAngle = baseAngle + angularVelocity * elapsedSinceUpdate;
+        }
+    }
+
+    /**
+     * A power-up (design.md — power-ups). Rendered by dead reckoning, same
+     * shape as {@link RemoteAsteroid} — extrapolated using its own reported
+     * velocity/angular velocity, held constant between snapshots since a
+     * power-up never accelerates or experiences drag once in motion, same
+     * as an asteroid. Also carries its own private {@link PowerUpEffect}
+     * instance (created once, the first time this power-up's id is seen —
+     * see {@link #createPowerUpEffect}), unlike {@link RemoteAsteroid},
+     * which has no particle glow to track.
+     */
+    private static final class RemotePowerUp {
+        final PowerUpType type;
+        final PowerUpEffect effect;
+        float baseX;
+        float baseY;
+        float baseAngle;
+        float velocityX;
+        float velocityY;
+        float angularVelocity;
+        float elapsedSinceUpdate;
+        float renderX;
+        float renderY;
+        float renderAngle;
+
+        RemotePowerUp(float x, float y, float angle, PowerUpType type, PowerUpEffect effect) {
+            this.type = type;
+            this.effect = effect;
             baseX = renderX = x;
             baseY = renderY = y;
             baseAngle = renderAngle = angle;

@@ -3,17 +3,19 @@ package de.mkoehler.starwars.net.messages;
 /**
  * Broadcast by the server on every simulation tick: the position/orientation
  * of every currently-connected player's ship, every currently-alive
- * projectile, and every currently-active asteroid (design.md — asteroids).
- * Other players' ships and every projectile/asteroid (including the local
- * player's own shots) are rendered purely from these snapshots, with no
- * client-side prediction (design.md 3.5) — the local player's own ship is
- * the sole exception, predicted locally and reconciled against this.
+ * projectile, every currently-active asteroid (design.md — asteroids), and
+ * every currently-active power-up (design.md — power-ups). Other players'
+ * ships and every projectile/asteroid/power-up (including the local player's
+ * own shots) are rendered purely from these snapshots, with no client-side
+ * prediction (design.md 3.5) — the local player's own ship is the sole
+ * exception, predicted locally and reconciled against this.
  */
 public class WorldSnapshotMessage {
 
     private ShipState[] ships;
     private ProjectileState[] projectiles;
     private AsteroidState[] asteroids;
+    private PowerUpState[] powerUps;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -27,11 +29,14 @@ public class WorldSnapshotMessage {
      * @param ships       every currently-connected player's ship state
      * @param projectiles every currently-alive projectile's state
      * @param asteroids   every currently-active asteroid's state
+     * @param powerUps    every currently-active power-up's state
      */
-    public WorldSnapshotMessage(ShipState[] ships, ProjectileState[] projectiles, AsteroidState[] asteroids) {
+    public WorldSnapshotMessage(ShipState[] ships, ProjectileState[] projectiles, AsteroidState[] asteroids,
+                                 PowerUpState[] powerUps) {
         this.ships = ships;
         this.projectiles = projectiles;
         this.asteroids = asteroids;
+        this.powerUps = powerUps;
     }
 
     /**
@@ -59,5 +64,14 @@ public class WorldSnapshotMessage {
      */
     public AsteroidState[] getAsteroids() {
         return asteroids;
+    }
+
+    /**
+     * Returns every currently-active power-up's state.
+     *
+     * @return the power-up states in this snapshot
+     */
+    public PowerUpState[] getPowerUps() {
+        return powerUps;
     }
 }

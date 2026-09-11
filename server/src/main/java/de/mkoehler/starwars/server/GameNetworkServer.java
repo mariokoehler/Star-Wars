@@ -26,6 +26,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
@@ -50,6 +51,8 @@ import de.mkoehler.starwars.sim.KillXp;
 import de.mkoehler.starwars.sim.MissileFactory;
 import de.mkoehler.starwars.sim.MissileStats;
 import de.mkoehler.starwars.sim.PowerSystem;
+import de.mkoehler.starwars.sim.PowerUpFactory;
+import de.mkoehler.starwars.sim.PowerUpType;
 import de.mkoehler.starwars.sim.ShipDamage;
 import de.mkoehler.starwars.sim.ShipFactory;
 import de.mkoehler.starwars.sim.ShipStats;
@@ -64,7 +67,9 @@ import de.mkoehler.starwars.sim.components.MissileLockComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
+import de.mkoehler.starwars.sim.components.PowerBoostComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
+import de.mkoehler.starwars.sim.components.PowerUpComponent;
 import de.mkoehler.starwars.sim.components.ProjectileComponent;
 import de.mkoehler.starwars.sim.components.RadarComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
@@ -74,6 +79,7 @@ import de.mkoehler.starwars.sim.systems.CombatTimerSystem;
 import de.mkoehler.starwars.sim.systems.MissileGuidanceSystem;
 import de.mkoehler.starwars.sim.systems.MissileLockSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
+import de.mkoehler.starwars.sim.systems.PowerBoostSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
 import de.mkoehler.starwars.sim.systems.RadarSystem;
 import de.mkoehler.starwars.sim.systems.ShieldRegenSystem;
@@ -134,6 +140,33 @@ public class GameNetworkServer extends NetworkServer {
      */
     private static final float TICK_STALL_WARN_SECONDS = 0.5f;
 
+    /** How many power-ups should be active in the arena at once (design.md — power-ups: the user's own spec). */
+    private static final int POWERUP_ACTIVE_COUNT = 4;
+    /** Duration of the BOOST power-up's effect (design.md — power-ups: the user's own spec). */
+    private static final float POWERUP_BOOST_DURATION_SECONDS = 15f;
+    /**
+     * Fraction of a ship's max hull the REPAIR power-up restores (design.md
+     * — power-ups: "up to 50% of the players hull") — read as "heals 50% of
+     * max hull, capped at full" (the plain reading of "up to"), not "brings
+     * current hull up to a 50% floor." Flagged assumption, not confirmed
+     * with the user.
+     */
+    private static final float POWERUP_REPAIR_FRACTION = 0.5f;
+    /**
+     * Caps a power-up's speed every tick (design.md — power-ups' addendum) —
+     * a projectile/missile hit imparts a real Box2D impulse proportional to
+     * its own mass/velocity divided by the power-up's deliberately tiny
+     * mass, which for a missile (far heavier and faster than a blaster
+     * bolt) works out to several hundred m/s of Δv unclamped. This keeps a
+     * "shot sends it drifting dramatically" effect from becoming "a shot
+     * turns it into a second projectile," and is a second line of defense
+     * (alongside {@link #tickPowerUps()}'s own out-of-bounds despawn) against
+     * ever losing one outside the arena. Untuned starting point.
+     */
+    private static final float POWERUP_MAX_SPEED_METERS_PER_SECOND = 30f;
+    /** A power-up's initial rotation speed range (design.md — power-ups: "stationary but with a slight rotation"). */
+    private static final float POWERUP_MAX_ANGULAR_VELOCITY_RADIANS_PER_SECOND = 0.5f;
+
     private final World world = new World(new Vector2(0, 0), true);
     // Kept for identity comparison in the ContactListener below - a ship-vs-boundary contact is
     // recognized by "the other body is this exact reference", not by re-checking filter bits.
@@ -155,6 +188,7 @@ public class GameNetworkServer extends NetworkServer {
     private final RadarSystem radarSystem = new RadarSystem(engine);
     private final MissileLockSystem missileLockSystem = new MissileLockSystem(engine);
     private final MissileGuidanceSystem missileGuidanceSystem = new MissileGuidanceSystem(engine);
+    private final PowerBoostSystem powerBoostSystem = new PowerBoostSystem();
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
@@ -189,6 +223,19 @@ public class GameNetworkServer extends NetworkServer {
     // dedicated Ashley System.
     private final Map<Integer, Entity> asteroidsById = new HashMap<>();
     private final AtomicInteger nextAsteroidId = new AtomicInteger();
+    // The arena's power-up field (design.md - power-ups), maintained at POWERUP_ACTIVE_COUNT by
+    // tickPowerUps() - same "not Ashley-family-driven, needs GameNetworkServer's own context"
+    // reasoning as asteroidsById above.
+    private final Map<Integer, Entity> powerUpsById = new HashMap<>();
+    private final AtomicInteger nextPowerUpId = new AtomicInteger();
+    // Collected during beginContact (a ship's sensor fixture overlapping a power-up), resolved
+    // after physicsSystem.update() returns - same "don't act mid-callback" shape as pendingHits.
+    private final List<PowerUpPickupEvent> pendingPowerUpPickups = new ArrayList<>();
+    // A projectile/missile hitting a power-up's physical fixture (design.md - power-ups) -
+    // resolved the same way as pendingAsteroidProjectileHits, sharing that same dedupe guard
+    // (projectilesDestroyedThisTick) rather than a second one, since a single shot can register a
+    // contact against a ship AND a power-up in the same tick.
+    private final Set<Entity> pendingPowerUpProjectileHits = new HashSet<>();
     // Resolved via Gdx.files.local (relative to wherever the server process is launched from,
     // design.md 3.6) rather than hardcoded, but AccountStore itself has no libGDX dependency -
     // it's directly unit-tested against a plain java.nio.file.Path.
@@ -210,6 +257,7 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(radarSystem);
         engine.addSystem(missileLockSystem);
         engine.addSystem(missileGuidanceSystem);
+        engine.addSystem(powerBoostSystem);
 
         // Without the isOwnShip exclusion below, a freshly-fired projectile would generate a real
         // Box2D collision against its own shooter's ship the instant it spawns (previously spawned
@@ -258,6 +306,8 @@ public class GameNetworkServer extends NetworkServer {
                 registerPotentialWallHit(bodyB, bodyA);
                 registerPotentialAsteroidHit(a, b);
                 registerPotentialAsteroidHit(b, a);
+                registerPotentialPowerUpContact(a, b);
+                registerPotentialPowerUpContact(b, a);
             }
 
             @Override
@@ -282,14 +332,16 @@ public class GameNetworkServer extends NetworkServer {
      * (design.md — turret weapons, sharing each ship's weapon capacitor with
      * its main gun), resolves any hits (splitting damage between shield and
      * hull, see {@link ShipDamage}) — both projectile hits (including a
-     * projectile/missile hitting an asteroid, which destroys the projectile
-     * but never damages the indestructible asteroid, design.md — asteroids)
-     * and a ship faceplanting into the arena boundary or an asteroid at
-     * speed (design.md — arena bounds' addendum / asteroids) — regenerates
-     * shields, advances every ship's combat-lock timers (design.md 2.3),
+     * projectile/missile hitting an asteroid or a power-up, which destroys
+     * the projectile but never damages either indestructible obstacle,
+     * design.md — asteroids/power-ups) and a ship faceplanting into the
+     * arena boundary or an asteroid at speed (design.md — arena bounds'
+     * addendum / asteroids) — resolves power-up pickups (design.md —
+     * power-ups), regenerates shields, ticks down every ship's active power
+     * boost, advances every ship's combat-lock timers (design.md 2.3),
      * expires old projectiles, advances respawn timers, maintains the
-     * arena's asteroid field (design.md — asteroids), broadcasts the
-     * resulting world state to every connected client, and - on its own,
+     * arena's asteroid and power-up fields (design.md — asteroids/power-ups),
+     * broadcasts the resulting world state to every connected client, and - on its own,
      * much slower cadence, see
      * {@link #broadcastScoreboard()} - the scoreboard overlay's data
      * (design.md 2.11).
@@ -342,8 +394,14 @@ public class GameNetworkServer extends NetworkServer {
 
         resolvePendingHits();
         resolvePendingEnvironmentalHits();
-        resolvePendingAsteroidProjectileHits();
+        resolveIndestructibleObstacleProjectileHits(pendingAsteroidProjectileHits);
+        resolveIndestructibleObstacleProjectileHits(pendingPowerUpProjectileHits);
+        // After every above resolution that can destroy a ship this tick (a projectile hit, a
+        // wall/asteroid impact), not before - resolvePendingPowerUpPickups' own hull.isDestroyed()
+        // guard (design.md - power-ups) needs to see a same-tick death from any of those causes.
+        resolvePendingPowerUpPickups();
         shieldRegenSystem.update(deltaTime);
+        powerBoostSystem.update(deltaTime);
         combatTimerSystem.update(deltaTime);
         projectileLifetimeSystem.update(deltaTime);
         tickRespawns(deltaTime);
@@ -351,6 +409,8 @@ public class GameNetworkServer extends NetworkServer {
         // for the same reason - a newly-spawned asteroid isn't swept forward by this tick's own
         // physics steps before its first broadcast (design.md - asteroids).
         tickAsteroids();
+        // Same placement/reasoning as tickAsteroids() above (design.md - power-ups).
+        tickPowerUps();
 
         // Recomputed against this tick's freshest (post-physics-step) positions, immediately
         // before broadcastSnapshot() reads it to decide what each player actually sees.
@@ -418,13 +478,21 @@ public class GameNetworkServer extends NetworkServer {
      * {@code beginContact} — Box2D's collision detection runs before that
      * step's velocity solver, so this is still the ship's <i>approaching</i>
      * speed, not whatever the bounce reflects it to afterward.
+     * <p>
+     * Guards on {@code maybeShipBody}'s entity actually being a ship (having
+     * a {@link PlayerIdComponent}), not just non-null — a power-up now also
+     * physically bounces off the boundary (design.md — power-ups), and
+     * without this guard, its entity would flow into
+     * {@link #pendingEnvironmentalHits} and NPE in
+     * {@link #resolvePendingEnvironmentalHits} the first time it reads a
+     * {@link HullComponent} that a power-up entity doesn't have.
      */
     private void registerPotentialWallHit(Body maybeShipBody, Body other) {
         if (other != arenaBoundaryBody) {
             return;
         }
         Entity ship = asEntity(maybeShipBody);
-        if (ship == null) {
+        if (ship == null || ship.getComponent(PlayerIdComponent.class) == null) {
             return;
         }
         float damage = ArenaBounds.wallImpactDamage(maybeShipBody.getLinearVelocity().len());
@@ -475,6 +543,42 @@ public class GameNetworkServer extends NetworkServer {
     }
 
     /**
+     * Registers a potential ship-pickup or projectile-vs-power-up contact
+     * (design.md — power-ups) — {@code maybePowerUp} must belong to a real
+     * power-up, or this is a no-op. A projectile/missile impact is queued
+     * into {@link #pendingPowerUpProjectileHits}, resolved the same
+     * "indestructible obstacle" way as {@link #pendingAsteroidProjectileHits}
+     * (see {@link #resolveIndestructibleObstacleProjectileHits}) — a
+     * power-up has no health either. A ship contact is queued into
+     * {@link #pendingPowerUpPickups} instead — unlike an asteroid, a ship
+     * touching a power-up is meaningful (it's the pickup itself), resolved
+     * by {@link #resolvePendingPowerUpPickups}.
+     * <p>
+     * Only ever fires for the ship case via the power-up's sensor fixture
+     * (see {@code PowerUpFactory}) — its physical fixture's own mask never
+     * includes {@link CollisionCategories#SHIP}, so Box2D never even
+     * attempts that pairing for the non-sensor fixture.
+     *
+     * @param maybeShipOrProjectile the other body in the contact
+     * @param maybePowerUp          the body to test for being a power-up
+     */
+    private void registerPotentialPowerUpContact(Entity maybeShipOrProjectile, Entity maybePowerUp) {
+        if (maybeShipOrProjectile == null || maybePowerUp == null) {
+            return;
+        }
+        if (maybePowerUp.getComponent(PowerUpComponent.class) == null) {
+            return;
+        }
+        if (maybeShipOrProjectile.getComponent(ProjectileComponent.class) != null) {
+            pendingPowerUpProjectileHits.add(maybeShipOrProjectile);
+            return;
+        }
+        if (maybeShipOrProjectile.getComponent(PlayerIdComponent.class) != null) {
+            pendingPowerUpPickups.add(new PowerUpPickupEvent(maybeShipOrProjectile, maybePowerUp));
+        }
+    }
+
+    /**
      * Resolves every non-combat ship impact registered this tick — a wall
      * ({@link #registerPotentialWallHit}) or an asteroid
      * ({@link #registerPotentialAsteroidHit}) — applies damage
@@ -511,20 +615,26 @@ public class GameNetworkServer extends NetworkServer {
     }
 
     /**
-     * Resolves every projectile/missile-vs-asteroid contact registered this
-     * tick ({@link #registerPotentialAsteroidHit}): destroys the projectile
-     * with the same impact-explosion VFX a ship hit gets
-     * ({@link ProjectileHitMessage}), but deals no damage to the asteroid
-     * (indestructible, design.md — asteroids) and credits no kill. Skips
-     * any projectile {@link #resolvePendingHits} already destroyed this
-     * same tick (a projectile that hit a ship first) — Box2D bodies can't
-     * be destroyed twice.
+     * Resolves every projectile/missile hit registered this tick against an
+     * indestructible obstacle — an asteroid ({@link #pendingAsteroidProjectileHits})
+     * or a power-up ({@link #pendingPowerUpProjectileHits}): destroys the
+     * projectile with the same impact-explosion VFX a ship hit gets
+     * ({@link ProjectileHitMessage}), but deals no damage to the obstacle
+     * (neither has a {@link HullComponent}) and credits no kill. Shared by
+     * both callers rather than duplicated, since the two are otherwise
+     * identical. Skips any projectile already destroyed this same tick (by
+     * {@link #resolvePendingHits} hitting a ship first, or the other
+     * obstacle type in the same tick) via the single shared
+     * {@link #projectilesDestroyedThisTick} guard — Box2D bodies can't be
+     * destroyed twice.
+     *
+     * @param pending the pending set to resolve and clear
      */
-    private void resolvePendingAsteroidProjectileHits() {
-        if (pendingAsteroidProjectileHits.isEmpty()) {
+    private void resolveIndestructibleObstacleProjectileHits(Set<Entity> pending) {
+        if (pending.isEmpty()) {
             return;
         }
-        for (Entity projectile : pendingAsteroidProjectileHits) {
+        for (Entity projectile : pending) {
             if (!projectilesDestroyedThisTick.add(projectile)) {
                 continue;
             }
@@ -533,7 +643,72 @@ public class GameNetworkServer extends NetworkServer {
             world.destroyBody(body);
             engine.removeEntity(projectile);
         }
-        pendingAsteroidProjectileHits.clear();
+        pending.clear();
+    }
+
+    /**
+     * Resolves every power-up pickup registered this tick
+     * ({@link #registerPotentialPowerUpContact}): applies the power-up's
+     * effect ({@link #applyPowerUpEffect}) to whichever ship touched it
+     * first, then destroys the power-up (freeing a slot {@link #tickPowerUps()}
+     * tops back up to {@value #POWERUP_ACTIVE_COUNT} next). Deduped by
+     * power-up entity, not by ship — the same power-up could in principle
+     * register a contact with more than one ship's sensor fixture in a
+     * single tick (two ships overlapping it at once); only the first
+     * registered event wins. Skips a ship already destroyed earlier this
+     * same tick (by a hit/wall/asteroid impact resolved above) — same guard
+     * {@link #resolvePendingEnvironmentalHits} already uses.
+     */
+    private void resolvePendingPowerUpPickups() {
+        if (pendingPowerUpPickups.isEmpty()) {
+            return;
+        }
+        Set<Entity> alreadyPickedUp = new HashSet<>();
+        for (PowerUpPickupEvent event : pendingPowerUpPickups) {
+            if (!alreadyPickedUp.add(event.powerUp())) {
+                continue;
+            }
+            HullComponent hull = event.ship().getComponent(HullComponent.class);
+            if (hull == null || hull.isDestroyed()) {
+                continue;
+            }
+            PowerUpComponent powerUp = event.powerUp().getComponent(PowerUpComponent.class);
+            applyPowerUpEffect(event.ship(), powerUp.getType());
+
+            Body body = event.powerUp().getComponent(PhysicsBodyComponent.class).getBody();
+            world.destroyBody(body);
+            engine.removeEntity(event.powerUp());
+            powerUpsById.remove(powerUp.getPowerUpId());
+        }
+        pendingPowerUpPickups.clear();
+    }
+
+    /**
+     * Applies one power-up's effect to the ship that just picked it up
+     * (design.md — power-ups).
+     *
+     * @param ship the picking-up ship's entity
+     * @param type the power-up's effect type
+     */
+    private void applyPowerUpEffect(Entity ship, PowerUpType type) {
+        switch (type) {
+            case REPAIR -> {
+                HullComponent hull = ship.getComponent(HullComponent.class);
+                hull.repair(hull.getMax() * POWERUP_REPAIR_FRACTION);
+            }
+            case BOOST -> ship.getComponent(PowerBoostComponent.class).activate(POWERUP_BOOST_DURATION_SECONDS);
+            case MISSILE -> {
+                MissileLockComponent lock = ship.getComponent(MissileLockComponent.class);
+                if (lock != null) {
+                    lock.addMissile();
+                } // else: no missile capability on this ship type - the user's own spec, a no-op
+            }
+            case BOMB -> {
+                // Deliberately a no-op placeholder (design.md — power-ups): the user explicitly
+                // asked for an empty dummy implementation here until the mine/bomb feature itself
+                // is designed and built in a later milestone.
+            }
+        }
     }
 
     private void resolvePendingHits() {
@@ -858,6 +1033,82 @@ public class GameNetworkServer extends NetworkServer {
         Entity asteroid = AsteroidFactory.createAsteroid(engine, world, nextAsteroidId.getAndIncrement(), type,
             point.x, point.y, angle, velocity.x, velocity.y, angularVelocity);
         asteroidsById.put(asteroid.getComponent(AsteroidComponent.class).getAsteroidId(), asteroid);
+    }
+
+    /**
+     * Maintains the arena's power-up field at exactly
+     * {@value #POWERUP_ACTIVE_COUNT} (design.md — power-ups): clamps every
+     * currently-active power-up's speed ({@link #POWERUP_MAX_SPEED_METERS_PER_SECOND},
+     * a safety valve against a missile hit's much larger impulse — see that
+     * constant's own Javadoc), despawns any that's still somehow drifted
+     * outside the arena despite that clamp and the boundary's own bounce
+     * (same out-of-bounds check {@link #tickAsteroids} uses, here a second
+     * line of defense rather than the primary despawn mechanism — a
+     * power-up is otherwise expected to just keep bouncing off the boundary
+     * forever, unlike an asteroid), then tops back up to the target count,
+     * one attempt per tick (see {@link #trySpawnPowerUp}).
+     */
+    private void tickPowerUps() {
+        Iterator<Map.Entry<Integer, Entity>> iterator = powerUpsById.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Entity powerUp = iterator.next().getValue();
+            Body body = powerUp.getComponent(PhysicsBodyComponent.class).getBody();
+            clampPowerUpSpeed(body);
+            Vector2 position = body.getPosition();
+            if (Math.abs(position.x) > ArenaBounds.HALF_SIZE_METERS || Math.abs(position.y) > ArenaBounds.HALF_SIZE_METERS) {
+                world.destroyBody(body);
+                engine.removeEntity(powerUp);
+                iterator.remove();
+            }
+        }
+        if (powerUpsById.size() < POWERUP_ACTIVE_COUNT) {
+            trySpawnPowerUp();
+        }
+    }
+
+    /**
+     * Caps a power-up body's speed at {@link #POWERUP_MAX_SPEED_METERS_PER_SECOND},
+     * leaving its direction unchanged, if it currently exceeds that limit.
+     *
+     * @param body the power-up's body
+     */
+    private static void clampPowerUpSpeed(Body body) {
+        Vector2 velocity = body.getLinearVelocity();
+        float maxSpeedSquared = POWERUP_MAX_SPEED_METERS_PER_SECOND * POWERUP_MAX_SPEED_METERS_PER_SECOND;
+        if (velocity.len2() > maxSpeedSquared) {
+            velocity.nor().scl(POWERUP_MAX_SPEED_METERS_PER_SECOND);
+            body.setLinearVelocity(velocity);
+        }
+    }
+
+    /**
+     * Attempts to spawn one new power-up at a random point at least
+     * {@link SpawnPointFinder#MIN_ENEMY_DISTANCE_METERS} from every
+     * currently-alive ship — same "a player never sees one popping into
+     * existence, retry next tick if the arena's too crowded right now"
+     * reasoning as {@link #trySpawnAsteroid}. Effect type is picked
+     * uniformly at random among every {@link PowerUpType} — unlike
+     * {@link AsteroidSpawner#pickType}, there's no "avoid repeating an
+     * already-active type" preference here, since the user's spec never
+     * asked for visual variety among the 4 active power-ups the way it did
+     * for asteroids.
+     */
+    private void trySpawnPowerUp() {
+        List<Vector2> playerPositions = allShipPositions();
+        Vector2 point = SpawnPointFinder.findSpawnPoint(ArenaBounds.HALF_SIZE_METERS, SpawnPointFinder.BOUNDARY_MARGIN_METERS,
+            SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, playerPositions, spawnRandom);
+        if (!SpawnPointFinder.isFarEnoughFromEnemies(point, SpawnPointFinder.MIN_ENEMY_DISTANCE_METERS, playerPositions)) {
+            return;
+        }
+
+        PowerUpType[] types = PowerUpType.values();
+        PowerUpType type = types[spawnRandom.nextInt(types.length)];
+        float angularVelocity = (spawnRandom.nextFloat() * 2f - 1f) * POWERUP_MAX_ANGULAR_VELOCITY_RADIANS_PER_SECOND;
+        float angle = spawnRandom.nextFloat() * MathUtils.PI2;
+
+        Entity powerUp = PowerUpFactory.createPowerUp(engine, world, nextPowerUpId.getAndIncrement(), type,
+            point.x, point.y, angle, angularVelocity);
+        powerUpsById.put(powerUp.getComponent(PowerUpComponent.class).getPowerUpId(), powerUp);
     }
 
     /**
@@ -1209,13 +1460,14 @@ public class GameNetworkServer extends NetworkServer {
             boolean targetedByMissileLock = targetedByAcquiredMissileLock.containsKey(ship);
             boolean targetedByMissileLockAcquired = targetedByAcquiredMissileLock.getOrDefault(ship, false);
             boolean thrusting = ship.getComponent(NetworkInputComponent.class).isThrustForward();
+            float powerGenerationMultiplier = ship.getComponent(PowerBoostComponent.class).getMultiplier();
             shipStatesByPlayerId.put(entry.getKey(), new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
                 hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType,
                 turretAimAngles(ship), radar.getPulseCooldownRemaining(),
                 missileLockTargetPlayerId, missileLockAcquired,
-                targetedByMissileLock, targetedByMissileLockAcquired, thrusting));
+                targetedByMissileLock, targetedByMissileLockAcquired, thrusting, powerGenerationMultiplier));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(
@@ -1243,6 +1495,18 @@ public class GameNetworkServer extends NetworkServer {
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity());
         }
 
+        // Power-ups, like asteroids/projectiles (design.md 2.14's own scope boundary), are
+        // broadcast unfiltered to everyone - not radar-gated.
+        PowerUpState[] powerUpStates = new PowerUpState[powerUpsById.size()];
+        int p = 0;
+        for (Entity powerUp : powerUpsById.values()) {
+            PowerUpComponent powerUpComponent = powerUp.getComponent(PowerUpComponent.class);
+            Body body = powerUp.getComponent(PhysicsBodyComponent.class).getBody();
+            powerUpStates[p++] = new PowerUpState(powerUpComponent.getPowerUpId(), powerUpComponent.getType(),
+                body.getPosition().x, body.getPosition().y, body.getAngle(),
+                body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity());
+        }
+
         for (Map.Entry<Integer, Entity> entry : shipsByPlayerId.entrySet()) {
             int playerId = entry.getKey();
             Connection connection = connectionsByPlayerId.get(playerId);
@@ -1258,7 +1522,8 @@ public class GameNetworkServer extends NetworkServer {
                     visibleShips.add(detected);
                 }
             }
-            connection.sendUDP(new WorldSnapshotMessage(visibleShips.toArray(new ShipState[0]), projectileStates, asteroidStates));
+            connection.sendUDP(new WorldSnapshotMessage(visibleShips.toArray(new ShipState[0]), projectileStates,
+                asteroidStates, powerUpStates));
         }
     }
 
@@ -1327,5 +1592,13 @@ public class GameNetworkServer extends NetworkServer {
      * asteroid impact) at the moment contact began.
      */
     private record EnvironmentalHitEvent(Entity ship, float damage) {
+    }
+
+    /**
+     * One detected, not-yet-resolved ship-vs-power-up sensor contact
+     * (design.md — power-ups) — {@code ship} touched {@code powerUp} via its
+     * sensor fixture, resolved by {@link #resolvePendingPowerUpPickups}.
+     */
+    private record PowerUpPickupEvent(Entity ship, Entity powerUp) {
     }
 }

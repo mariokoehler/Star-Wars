@@ -65,4 +65,14 @@ public class HullComponent implements Component {
     public boolean isDestroyed() {
         return current <= 0f;
     }
+
+    /**
+     * Increases current hull health by the given amount, not above
+     * {@link #getMax()} (design.md — power-ups' REPAIR effect).
+     *
+     * @param amount the amount to repair
+     */
+    public void repair(float amount) {
+        current = Math.min(max, current + amount);
+    }
 }

@@ -36,6 +36,7 @@ public final class AtlasPacker {
         pack("projectiles", "projectiles");
         pack("menu", "menu");
         pack("asteroids", "asteroids");
+        pack("powerup", "powerups");
         // Death Screen art (design.md 5.1) is deliberately NOT packed here - it's 23 quote
         // variants only ever shown one at a time, never batched together in the same draw call,
         // so atlas-packing them would only force all 23 into GPU memory (~4 full 2048x2048 pages)

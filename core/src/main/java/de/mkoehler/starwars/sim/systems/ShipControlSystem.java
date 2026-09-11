@@ -11,6 +11,7 @@ import de.mkoehler.starwars.sim.TurnResponseCurve;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerControlledComponent;
+import de.mkoehler.starwars.sim.components.PowerBoostComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 
 /**
@@ -40,13 +41,14 @@ public class ShipControlSystem extends IteratingSystem {
     private final ComponentMapper<PlayerControlledComponent> controlMapper = ComponentMapper.getFor(PlayerControlledComponent.class);
     private final ComponentMapper<NetworkInputComponent> inputMapper = ComponentMapper.getFor(NetworkInputComponent.class);
     private final ComponentMapper<PowerDistributionComponent> powerMapper = ComponentMapper.getFor(PowerDistributionComponent.class);
+    private final ComponentMapper<PowerBoostComponent> boostMapper = ComponentMapper.getFor(PowerBoostComponent.class);
 
     /**
      * Creates the ship control system.
      */
     public ShipControlSystem() {
         super(Family.all(PhysicsBodyComponent.class, PlayerControlledComponent.class,
-            NetworkInputComponent.class, PowerDistributionComponent.class).get());
+            NetworkInputComponent.class, PowerDistributionComponent.class, PowerBoostComponent.class).get());
     }
 
     @Override
@@ -54,7 +56,10 @@ public class ShipControlSystem extends IteratingSystem {
         Body body = bodyMapper.get(entity).getBody();
         PlayerControlledComponent control = controlMapper.get(entity);
         NetworkInputComponent input = inputMapper.get(entity);
-        float enginesMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.ENGINES);
+        // Design.md - power-ups' BOOST effect: doubles total power generation on top of however
+        // the distribution is currently split, rather than changing the split itself.
+        float enginesMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.ENGINES)
+            * boostMapper.get(entity).getMultiplier();
         // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
         // response curve (design.md 2.2's addendum) - see TurnResponseCurve's own Javadoc for why.
         float turnMultiplier = TurnResponseCurve.apply(enginesMultiplier, control.getEngineTurnResponseExponent());

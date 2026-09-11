@@ -11,6 +11,7 @@ import de.mkoehler.starwars.net.messages.PlayerInputMessage;
 import de.mkoehler.starwars.net.messages.PlayerLeftMessage;
 import de.mkoehler.starwars.net.messages.PlayerScoreEntry;
 import de.mkoehler.starwars.net.messages.PowerAdjustMessage;
+import de.mkoehler.starwars.net.messages.PowerUpState;
 import de.mkoehler.starwars.net.messages.ProjectileHitMessage;
 import de.mkoehler.starwars.net.messages.ProjectileState;
 import de.mkoehler.starwars.net.messages.RadarPulseRequest;
@@ -29,6 +30,7 @@ import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.PowerSystem;
+import de.mkoehler.starwars.sim.PowerUpType;
 import de.mkoehler.starwars.sim.ShipType;
 
 /**
@@ -92,5 +94,8 @@ public final class MessageRegistry {
         kryo.register(AsteroidType.class);
         kryo.register(AsteroidState.class);
         kryo.register(AsteroidState[].class);
+        kryo.register(PowerUpType.class);
+        kryo.register(PowerUpState.class);
+        kryo.register(PowerUpState[].class);
     }
 }

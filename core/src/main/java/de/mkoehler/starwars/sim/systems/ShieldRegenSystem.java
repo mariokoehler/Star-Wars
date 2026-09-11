@@ -5,6 +5,7 @@ import com.badlogic.ashley.core.Entity;
 import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.systems.IteratingSystem;
 import de.mkoehler.starwars.sim.PowerSystem;
+import de.mkoehler.starwars.sim.components.PowerBoostComponent;
 import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
 import de.mkoehler.starwars.sim.components.ShieldComponent;
 
@@ -20,17 +21,21 @@ public class ShieldRegenSystem extends IteratingSystem {
 
     private final ComponentMapper<ShieldComponent> shieldMapper = ComponentMapper.getFor(ShieldComponent.class);
     private final ComponentMapper<PowerDistributionComponent> powerMapper = ComponentMapper.getFor(PowerDistributionComponent.class);
+    private final ComponentMapper<PowerBoostComponent> boostMapper = ComponentMapper.getFor(PowerBoostComponent.class);
 
     /**
      * Creates the shield regen system.
      */
     public ShieldRegenSystem() {
-        super(Family.all(ShieldComponent.class, PowerDistributionComponent.class).get());
+        super(Family.all(ShieldComponent.class, PowerDistributionComponent.class, PowerBoostComponent.class).get());
     }
 
     @Override
     protected void processEntity(Entity entity, float deltaTime) {
-        float multiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.SHIELDS);
+        // Design.md - power-ups' BOOST effect, same "multiply on top of the distribution's own
+        // multiplier" treatment as ShipControlSystem's engines multiplier.
+        float multiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.SHIELDS)
+            * boostMapper.get(entity).getMultiplier();
         shieldMapper.get(entity).regenerate(deltaTime, multiplier);
     }
 }

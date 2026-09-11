@@ -3066,6 +3066,178 @@ the user to fly near an asteroid and confirm the blue blip shows up on
 the scope, and to accelerate to speed and confirm the zoom-out is
 noticeable without feeling jarring.
 
+### 2.18 Power-ups (2026-09-11)
+
+Resolves the "power-ups" open question flagged 2026-09-11 (§7's old entry,
+now removed) once the user finished the art: `assets-raw/powerup/` (4
+256×256 textures, 64px/m) and `assets-raw/particles/PowerUp.p` (a
+continuous glow, reusing the already-present `particle.png`). User spec:
+4 power-ups always active in the arena; touching one applies its effect
+and it respawns randomly elsewhere; a power-up is very light (a stray or
+deliberate shot visibly shoves it), collides with the arena boundary/
+asteroids/projectiles/missiles but **not** ships (touch-to-pick-up would
+otherwise feel twitchy if a light body got flung on contact), is real
+bouncy, and — unlike an asteroid — has no drag and never despawns on its
+own initiative.
+
+**Four effects:** REPAIR (heals 50% of max hull, capped at full — read as
+"the repair amount is capped at 50% of max," not "brings current hull up
+to a 50% floor"; a flagged assumption, not confirmed with the user), BOOST
+(doubles power generation for 15s — see below), MISSILE (+1 missile,
+no-op on a non-missile-capable ship type), BOMB (explicit dummy no-op
+this session — the actual mine/bomb spawn is a later milestone, per the
+user's own instruction; picking one up still consumes the power-up and
+triggers a respawn elsewhere, same as the other three).
+
+**Physical design — the ship-detection problem, resolved:** §7's old
+entry had left open whether ship↔power-up contact should be fully
+physical or filtered. Resolved with **two Box2D fixtures on one body**
+(`PowerUpFactory`): a real, non-sensor **physical** fixture (mass,
+restitution, collides with the boundary/an asteroid/a projectile or
+missile, `CollisionCategories.POWERUP`, mask excludes `SHIP` entirely)
+plus a **sensor** fixture on the same body (`isSensor = true`, `density =
+0`, mask is exactly `SHIP`) used only for pickup detection. A sensor
+fixture generates `beginContact`/`endContact` events but Box2D never
+applies collision response for a sensor pair regardless of restitution/
+mask — exactly the "detect without physically shoving" mechanism the old
+open question was looking for, reusing the project's existing
+`ContactListener`/pending-list-resolved-after-physics-stepping machinery
+rather than inventing a parallel one. `ShipFactory.createBody`'s own
+fixture mask gained `POWERUP` too (needed for Box2D to even attempt the
+contact test at all — the physical fixture's own mask still excludes
+`SHIP`, so this can't cause a real ship↔power-up collision despite the
+wider mask, per `CollisionCategories.shouldCollide`'s mutual AND).
+
+Every other body a power-up needs to physically interact with
+(`ArenaBounds`, `AsteroidFactory`, `ProjectileFactory`, `MissileFactory`)
+had `POWERUP` added to its own mask too — `shouldCollide`'s check is a
+mutual AND, so a one-sided mask addition silently does nothing (caught
+before writing any code, via `advisor` review, along with two other real
+issues below).
+
+**Mass/physics tuning:** hitbox is a plain circle, radius `59px / 64px-
+per-meter` (the user's own "118×118px, measured from center" spec).
+Density `0.05` (`PowerUpFactory.DENSITY`) — deliberately far lighter than
+even an asteroid's own already-light density — and restitution `0.85`
+(bouncier than the arena wall's own `0.6`, per the user's "make them real
+bouncy" spec; Box2D mixes two fixtures' restitution via `max(...)`, so
+this one value alone governs every power-up collision regardless of what
+the other body's restitution happens to be). At this mass, a blaster bolt
+already imparts roughly 1 m/s of Δv — the "meaningful momentum" the user
+asked for — but a missile (far heavier/faster) works out to several
+hundred m/s unclamped, which would turn "drifts dramatically" into
+"becomes a second projectile" and risk tunneling past the boundary.
+Caught by `advisor` review before it ever ran: `GameNetworkServer` now
+clamps every power-up's speed to 30 m/s every tick
+(`clampPowerUpSpeed`), and — a second, independent line of defense, since
+this project's arena boundary is a zero-thickness `ChainShape` — despawns
+and respawns any power-up somehow still found outside the arena, the
+exact same out-of-bounds check `tickAsteroids` already uses (unlike an
+asteroid, a power-up isn't *expected* to ever need this; it's a
+safety net, not the primary despawn path — a power-up otherwise just
+keeps bouncing off the boundary forever).
+
+**Server-side (`GameNetworkServer`), same shape as the asteroid field:**
+`powerUpsById`/`nextPowerUpId`, `tickPowerUps()`/`trySpawnPowerUp()`
+(reuses `SpawnPointFinder` unchanged — same ≥20m-from-boundary/≥100m-
+from-any-player spawn rule as asteroids/ship spawns) maintain exactly 4
+active, one spawn attempt per tick while short. `registerPotentialPowerUpContact`
+(called from the existing `ContactListener.beginContact`) branches on
+whether the other body is a projectile (→ `pendingPowerUpProjectileHits`,
+resolved by a new shared `resolveIndestructibleObstacleProjectileHits`
+helper — refactored out of what used to be asteroid-only code, now used
+by both asteroid and power-up projectile hits, since they were otherwise
+identical) or a ship (→ `pendingPowerUpPickups`, resolved by
+`resolvePendingPowerUpPickups` → `applyPowerUpEffect`). A real,
+pre-existing bug was found and fixed as part of this work, not
+introduced by it: `registerPotentialWallHit` treated *any* non-null
+entity touching the boundary as a damageable ship, unconditionally — harmless
+until now, since only ships ever touched the boundary before. A
+power-up bouncing off the wall would have flowed into
+`pendingEnvironmentalHits` and NPE'd the instant `resolvePendingEnvironmentalHits`
+tried to read a `HullComponent` a power-up entity doesn't have. Fixed by
+guarding on `PlayerIdComponent` being present, not just non-null.
+
+**BOOST, mechanically:** new `PowerBoostComponent` (every ship,
+unconditionally, inactive by default) — `activate(15f)` on pickup,
+refreshing (not stacking) if picked up again while already active; a new
+`PowerBoostSystem` ticks it down every server tick (added to the engine
+*and* explicitly invoked from `tick()`, same "must be added to the
+engine for entity-family tracking, but this codebase never calls
+`engine.update()`, so every system's `.update()` is still called
+manually" pattern every other system here already follows — caught
+before it became a real "boost never decays" bug, by checking this
+before assuming `engine.addSystem` alone was enough). "Doubles power
+generation" is read as a flat ×2 multiplier stacked on top of whatever
+`PowerDistribution.multiplierFor(...)` already computes for a system,
+not a change to the 3-way split itself — `ShipControlSystem`/
+`ShieldRegenSystem`/`WeaponSystem` (main-gun capacitor recharge; turrets
+never recharge it, so no double-boost risk there) each multiply by both.
+The new multiplier is broadcast per-ship (`ShipState.getPowerGenerationMultiplier()`,
+`1f`/`2f`) and read directly (not independently timed) by the owning
+client's own `predictLocalShip`/`predictLocalWeapon` — unlike
+`PowerDistribution`'s own keypress-driven client mirror, this one is
+server-decided, so the client just trusts the latest snapshot's value,
+same "broadcast, don't re-derive" treatment as hull/shield. Reset to
+`1f` on every spawn/respawn alongside `myPowerDistribution`, so a stale
+`2f` can't leak across a death into the next life before the first
+snapshot corrects it.
+
+**Client rendering:** no local-prediction Box2D mirror needed at all,
+unlike asteroids — a ship never physically collides with a power-up, so
+there's nothing for a locally-predicted ship body to diverge from by not
+tracking one. `RemotePowerUp` is otherwise the exact same dead-reckoning
+shape as `RemoteAsteroid` (extrapolated by its own reported velocity/
+angular velocity), plus one addition: a private, per-instance
+`PowerUpEffect` (new, mirrors `ShipLightEffect`'s "continuous, position-
+only, never toggled" shape exactly) created the first time each power-up
+id is seen. Per the user's explicit instruction, the glow is updated and
+drawn **before** the icon texture, both centered at the same point —
+`SpriteBatch` has no depth buffer, draw order alone decides layering.
+New `textures/powerups.atlas` (`AtlasPacker.pack("powerup", "powerups")`,
+a flat source folder so region names are the bare filenames, matching
+`PowerUpType.getResourceName()` exactly) and `textures/particles/powerup.p`
+(copied straight from the user's `.p` file, referencing the already-
+present `particle.png`, no new image needed).
+
+**Verified:** `advisor` consulted twice — once with the full plan before
+writing any code (caught the missing mask edits, the missile-speed/
+tunneling risk, the `registerPotentialWallHit` bug, the restitution-
+mixing subtlety, and the dedupe-set reuse), and this write-up itself
+folds in what that review changed rather than describing a
+since-corrected first draft. Full `mvn clean test` green (173 core tests
+— +4 new `PowerBoostComponentTest`, +11 new `CollisionCategoriesTest`
+cases covering both power-up fixtures' real pairings, +1 extended
+`MessageRegistryTest` round trip — + 30 server) and a full `mvn clean
+install` (all 4 modules) green. `AtlasPacker` re-run, all 4
+`powerup_<name>` regions confirmed present at their expected size. A
+real packaged client booted standalone (12s, zero exceptions — confirms
+`powerups.atlas`/`powerup.p`/`particle.png` all actually resolve, the
+one thing a boot check is there to catch for a missing-asset regression)
+and a real packaged server booted standalone (10s, zero exceptions —
+confirms the new `ContactFilter`/`ContactListener` wiring, `PowerBoostSystem`,
+and `tickPowerUps`/`trySpawnPowerUp` all run cleanly, spawning real
+two-fixture Box2D bodies from tick 1). **Not live-verified** — no
+multiplayer session was driven this time (this session's earlier MCP
+remote-control connection to a running client had already been closed);
+the user's own next play session needs to confirm: pickup actually
+triggers on touch (not on the physical bounce), the four effects apply
+correctly (REPAIR/BOOST/MISSILE; BOMB is an intentional no-op), a shot
+visibly shoves a power-up "meaningfully" without it flying off
+absurdly, the bounce off the boundary/an asteroid feels bouncy rather
+than damped, and the field maintains itself at 4 active. Also worth
+confirming live, not just from code review: the 15s BOOST duration and
+30 m/s speed clamp are both untuned starting points, same as every
+other physics number in this project.
+
+**Noticed, not touched, while working in `assets-raw/`:** a new
+untracked `assets-raw/mine/` folder — almost certainly the user's own
+concurrent work toward the still-deferred BOMB/mine effect, given the
+libGDX particle editor was found open in a separate process during this
+session's own verification. Left completely alone, same "investigate,
+don't assume, don't touch" rule this file has flagged before for
+exactly this situation.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -6601,22 +6773,10 @@ the relevant section above once decided.
 - **Tick rate / snapshot rate** for the netcode.
 - **Lag compensation** for hit detection (rewind-time hit registration vs.
   simple current-state checks) — matters more as ping increases.
-- **Power-ups (2026-09-11, not started — user is still working on the art):**
-  a world pickup a ship collects on contact. Confirmed feasible ahead of
-  time: since projectiles already have real, non-sensor Box2D mass
-  (design.md 2.4/2.15 — a blaster bolt is density `0.01`, a missile
-  density `1.0`, neither a sensor), a light enough power-up body would
-  already get a real physical impulse from a stray or deliberate shot,
-  making it drift across the arena, with zero new physics code — a
-  natural side effect of collision resolution already running before a
-  hit is resolved, not something that needs to be built. **One real
-  decision for whenever this is actually implemented:** whether a *ship*
-  touching a power-up should also physically shove it (simplest, but a
-  light body would fling away fast on contact, making "touch to pick up"
-  feel twitchy) or whether ship↔power-up contact should be filtered to
-  detection-only via `CollisionCategories`/the custom `ContactFilter`
-  (same per-category-pair filtering machinery already used for ship-vs-
-  own-shooter and every other exclusion in this project), leaving
-  projectile/missile↔power-up contact fully physical so only a shot
-  actually moves it. Leaning toward the filtered approach for pickup
-  feel, but not decided.
+- **~~Power-ups~~ — built, see 2.18.** (Was: a world pickup a ship
+  collects on contact, not started, the open decision being whether
+  ship↔power-up contact should be fully physical or filtered to
+  detection-only. Now real: a two-fixture Box2D body per power-up — one
+  physical, one a sensor masked to `SHIP` only — resolves that decision;
+  REPAIR/BOOST/MISSILE are fully implemented, BOMB is a deliberate dummy
+  no-op pending a later mine/bomb milestone.)
