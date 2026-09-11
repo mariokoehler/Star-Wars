@@ -88,6 +88,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * asset just for this one button wasn't worth it — {@link KeybindScreen}
  * needs the same kind of button many times over anyway (its own class
  * Javadoc explains why it's built that way).
+ * <p>
+ * <b>Audio Settings (design.md — audio settings):</b> an "AUDIO" button,
+ * right next to "KEYBINDS" in the same row/style, or the <b>F11</b> key,
+ * opens {@link AudioSettingsScreen} — same entry-point pattern as Keybind
+ * Settings, same {@link FlatButton} styling.
  */
 public class ShipSelectionScreen implements Screen {
 
@@ -137,6 +142,10 @@ public class ShipSelectionScreen implements Screen {
     private static final Color KEYBINDS_BUTTON_HOVER_COLOR = new Color(25 / 255f, 60 / 255f, 110 / 255f, 0.9f);
     private static final Color KEYBINDS_BUTTON_TEXT_COLOR = new Color(0.94f, 0.87f, 0.66f, 1f);
 
+    /** Same style as the "KEYBINDS" button - sits directly to its right, separated by {@link #AUDIO_BUTTON_GAP}. */
+    private static final float AUDIO_BUTTON_WIDTH = 200f;
+    private static final float AUDIO_BUTTON_GAP = 16f;
+
     /** Fraction of the screen-top-to-dialog-top gap the logo's height fills - untuned placeholder. */
     private static final float LOGO_HEIGHT_FRACTION_OF_GAP = 0.7f;
 
@@ -166,6 +175,7 @@ public class ShipSelectionScreen implements Screen {
     private TextureRegion padlockTierTooHighRegion;
     private Tooltip tooltip;
     private FlatButton keybindsButton;
+    private FlatButton audioButton;
 
     private static final int TOOLTIP_FONT_SIZE_PX = 16;
     /** Offset from the mouse cursor so the tooltip doesn't sit directly under it. */
@@ -233,6 +243,7 @@ public class ShipSelectionScreen implements Screen {
         padlockTierTooHighRegion = menuAtlas.findRegion("Padlock_White_TierTooHigh");
         tooltip = new Tooltip(TOOLTIP_FONT_SIZE_PX);
         keybindsButton = new FlatButton(KEYBINDS_BUTTON_FONT_SIZE_PX);
+        audioButton = new FlatButton(KEYBINDS_BUTTON_FONT_SIZE_PX);
 
         // Ship hull sprites are also in this atlas, but only the portrait regions are used here.
         shipsAtlas = game.getAssets().get(GameAssets.SHIPS_ATLAS, TextureAtlas.class);
@@ -332,12 +343,18 @@ public class ShipSelectionScreen implements Screen {
         boolean hoveringKeybindsButton = FlatButton.contains(keybindsButtonX, keybindsButtonY,
             KEYBINDS_BUTTON_WIDTH, KEYBINDS_BUTTON_HEIGHT, mouseX, mouseY);
 
+        // Same band as "KEYBINDS", directly to its right (design.md — audio settings).
+        float audioButtonX = keybindsButtonX + KEYBINDS_BUTTON_WIDTH + AUDIO_BUTTON_GAP;
+        float audioButtonY = keybindsButtonY;
+        boolean hoveringAudioButton = FlatButton.contains(audioButtonX, audioButtonY,
+            AUDIO_BUTTON_WIDTH, KEYBINDS_BUTTON_HEIGHT, mouseX, mouseY);
+
         float portraitBoxScreenX = DialogLayout.toScreenX(dialogScreenX, PORTRAIT_AREA_TOP_DOWN_X);
         float portraitBoxScreenY = DialogLayout.toScreenY(dialogScreenY, DIALOG_HEIGHT, PORTRAIT_AREA_TOP_DOWN_Y, PORTRAIT_AREA_SIZE);
         boolean hoveringPortrait = contains(portraitBoxScreenX, portraitBoxScreenY, PORTRAIT_AREA_SIZE, PORTRAIT_AREA_SIZE, mouseX, mouseY);
         String tooltipText = hoveringPortrait ? tooltipTextFor(SHIP_TYPES[selectedIndex]) : null;
 
-        if (handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton, hoveringKeybindsButton)) {
+        if (handleInput(hoveringLeftArrow, hoveringRightArrow, hoveringStartButton, hoveringKeybindsButton, hoveringAudioButton)) {
             // startMatch() just disposed this screen's own textures/batch (switching to Client) -
             // drawing anything else this frame would use them after disposal and crash (a GL
             // "No buffer allocated!" error, found exactly this way): stop immediately instead of
@@ -361,6 +378,9 @@ public class ShipSelectionScreen implements Screen {
         keybindsButton.draw(batch, "KEYBINDS (F12)", keybindsButtonX, keybindsButtonY,
             KEYBINDS_BUTTON_WIDTH, KEYBINDS_BUTTON_HEIGHT,
             hoveringKeybindsButton ? KEYBINDS_BUTTON_HOVER_COLOR : KEYBINDS_BUTTON_IDLE_COLOR, KEYBINDS_BUTTON_TEXT_COLOR);
+        audioButton.draw(batch, "AUDIO (F11)", audioButtonX, audioButtonY,
+            AUDIO_BUTTON_WIDTH, KEYBINDS_BUTTON_HEIGHT,
+            hoveringAudioButton ? KEYBINDS_BUTTON_HOVER_COLOR : KEYBINDS_BUTTON_IDLE_COLOR, KEYBINDS_BUTTON_TEXT_COLOR);
 
         if (tooltipText != null) {
             tooltip.render(batch, tooltipText, mouseX + TOOLTIP_OFFSET_X, mouseY + TOOLTIP_OFFSET_Y, screenWidth, screenHeight);
@@ -374,7 +394,7 @@ public class ShipSelectionScreen implements Screen {
      * touch this screen's (now-disposed) batch/textures again this frame
      */
     private boolean handleInput(boolean hoveringLeftArrow, boolean hoveringRightArrow, boolean hoveringStartButton,
-                                 boolean hoveringKeybindsButton) {
+                                 boolean hoveringKeybindsButton, boolean hoveringAudioButton) {
         if (firstFrame) {
             firstFrame = false;
             return false;
@@ -383,6 +403,12 @@ public class ShipSelectionScreen implements Screen {
         boolean keybindsClicked = hoveringKeybindsButton && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
         if (keybindsClicked || Gdx.input.isKeyJustPressed(Input.Keys.F12)) {
             openKeybindScreen();
+            return true;
+        }
+
+        boolean audioClicked = hoveringAudioButton && Gdx.input.isButtonJustPressed(Input.Buttons.LEFT);
+        if (audioClicked || Gdx.input.isKeyJustPressed(Input.Keys.F11)) {
+            openAudioSettingsScreen();
             return true;
         }
 
@@ -431,6 +457,16 @@ public class ShipSelectionScreen implements Screen {
      */
     private void openKeybindScreen() {
         game.setScreen(new KeybindScreen(game, connectionInfo));
+        dispose();
+    }
+
+    /**
+     * Opens {@link AudioSettingsScreen} (design.md — audio settings) — the
+     * only entry point to it in this project, via the "AUDIO" button or
+     * F11, same pattern as {@link #openKeybindScreen()}.
+     */
+    private void openAudioSettingsScreen() {
+        game.setScreen(new AudioSettingsScreen(game, connectionInfo));
         dispose();
     }
 
@@ -596,6 +632,7 @@ public class ShipSelectionScreen implements Screen {
         // (design.md - asset loading), not this screen - disposed once, at app shutdown, not here.
         tooltip.dispose();
         keybindsButton.dispose();
+        audioButton.dispose();
 
         Gdx.app.log(TAG, "dispose() took " + (System.currentTimeMillis() - disposeStartMillis) + "ms total");
     }

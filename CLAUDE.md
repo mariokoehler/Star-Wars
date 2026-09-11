@@ -3830,6 +3830,72 @@ one specifically needs the user to fire from a multi-attachment-point
 ship (confirming one sound, not several) and to hear another player's
 shot/turret/missile fade correctly with distance.
 
+**Live-verified 2026-09-11: "awesome! it makes such a big difference for
+how the game feels."** Committed and pushed (`2b7c682`).
+
+**Audio Settings screen — implemented 2026-09-11, same day.** See
+design.md 3.16/5.3 for the full writeup. User's ask: a settings screen
+reachable from Ship Selection (same style as the Keybind screen, F11
+this time) with four sliders (0-100%) — Master Volume, Weapons, Engines,
+Sound Effects (an explicit placeholder — no sound wired to it yet) — the
+actual volume passed to any sound always being
+`categoryVolume × masterVolume`.
+
+New `core.audio.AudioSettings`/`AudioSettingsStore` — same shape as
+`ConnectionConfig`/`ConnectionConfigStore` (one flat Jackson bean serves
+as both the persisted JSON shape and the live runtime object, no
+separate "config" class needed the way `KeyBindings`/`KeyBindingsConfig`
+split for their per-key map), persisted to a new `audio-settings.json`,
+owned for the app's run by `StarWarsGame.getAudioSettings()`. Every
+field defaults to `1f` (100%) so a first launch (or an older save file
+missing a newly-added category) behaves exactly like this feature didn't
+exist yet — no silent volume regression for existing players.
+
+**New `render.Slider` widget** — rail/fill/handle/percentage-readout, all
+live-drawn with the same 1×1-tinted-pixel technique `FlatButton`/`Tooltip`
+already use (the fill position changes continuously while dragging, so
+there's nothing a baked asset could represent). Clicking anywhere on a
+row's track jumps the slider there and starts a drag; the live value
+updates every frame while dragging (so it takes effect immediately for
+whatever's currently playing, though nothing plays sound on this
+particular screen today) but is only **persisted to disk once, on mouse-
+release** — writing the JSON file on every one of a drag's ~60 per-second
+updates would have been needless disk I/O for no benefit.
+
+**New `AudioSettingsScreen`**, same entry-point/style convention as
+`KeybindScreen`: reachable only from `ShipSelectionScreen`, via a new
+"AUDIO" button (same row as "KEYBINDS", directly to its right, same
+`FlatButton` styling) or **F11**. Generated its own background panel art
+(`hud_audio_settings_background.png`, Python/Pillow + "SF Distant
+Galaxy", colors sampled directly from `hud_keybinds_background.png` to
+match exactly — panel fill, header fill, and gold border/corner-bracket
+accents) sized for four slider rows instead of Keybind Settings' twelve
+compact rows, rather than reusing that panel as-is. Composited a mockup
+of the sliders/buttons onto the real generated background before writing
+any Java (this project's own established "always judge overlay art
+against the real background, never a blank canvas" rule from the radar
+HUD sessions) to validate the row spacing/layout numbers first.
+
+**Every existing sound call site in `Client` updated to read the new
+settings** — `updateLocalEngineSound`/`updateRemoteEngineSounds` multiply
+by `getEffectiveEnginesVolume()`, every one-shot weapon/turret/missile
+sound (`playPositionalSound`, which gained a `categoryVolume` parameter)
+multiplies by `getEffectiveWeaponsVolume()`. `ConnectScreen`'s music
+volume is set to `getMasterVolume()` at `play()` time, and
+`StarWarsGame`'s fade-out tick was fixed to fade *from* that same master
+volume down to 0 rather than a hardcoded `1f` — otherwise a lowered
+master volume would have audibly jumped back up to full for the
+duration of every fade. No other plumbing was needed anywhere — every
+one of these call sites already runs every frame or at the moment of
+playing, so reading the current `AudioSettings` value there means a
+slider change takes effect on the very next sound played, nothing to
+invalidate or recompute ahead of time.
+
+**Verification status:** full `mvn clean install`/`mvn test` (166 tests,
+unaffected) green. **Not yet live-verified** — needs the user to
+actually drag each slider and confirm it controls the right sounds, that
+dragging feels smooth, and that both F11 and the AUDIO button open it.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

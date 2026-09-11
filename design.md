@@ -4609,6 +4609,47 @@ both screen-transition pauses are actually gone next time they play;
 now completes in single-digit milliseconds regardless of how long the
 now-backgrounded `stop()` takes.
 
+### 3.16 Client local config (audio settings, 2026-09-11)
+
+A master volume plus three per-category volumes (Weapons, Engines, Sound
+Effects), each `[0, 1]`, persisted to `audio-settings.json` — same shape/
+conventions as `connection-config.json` (3.7)/`keybindings.json` (3.8): a
+client-local JSON file, a plain mutable Jackson bean
+(`core.audio.AudioSettings`) as both the persisted shape and the live
+runtime object (no separate "config" class needed, unlike keybinds, since
+there's no per-key map requiring translation here), a `Store` class
+(`AudioSettingsStore`) doing the actual load/save, owned for the app's
+whole run by `StarWarsGame` (`getAudioSettings()`) and shared by every
+screen/system that plays a sound. Every field defaults to `1f` (100%,
+full volume) — both for a brand-new settings object and, since Jackson
+only calls a setter for a key actually present in the JSON, for any
+category a future version adds that an older saved file doesn't have yet.
+
+**The volume actually passed to any sound is always `masterVolume ×`
+the relevant category's own volume** — `AudioSettings.getEffectiveWeaponsVolume()`/
+`getEffectiveEnginesVolume()`/`getEffectiveSoundEffectsVolume()`.
+`getMasterVolume()` alone (no category multiplied in) is also used
+directly wherever there's no category concept — currently only the
+Connect Screen's background music. "Sound Effects" has no sound wired up
+to it yet (explosions, asteroid/wall collisions) — the slider and its
+persisted value exist as a placeholder for whenever that changes, per
+the user's own framing of the request.
+
+**Every existing sound-playing call site in `Client` was updated to
+multiply by its own category's effective volume** at the exact point it
+calls `Sound.setVolume`/`Sound.play` — the local and remote engine loops
+(`updateLocalEngineSound`/`updateRemoteEngineSounds`, "engine sound" 4.5)
+by `getEffectiveEnginesVolume()`, and every one-shot weapon/turret/missile
+sound (`playPositionalSound`, "weapon sound" 4.5's addendum) by
+`getEffectiveWeaponsVolume()` — `playPositionalSound` gained a
+`categoryVolume` parameter for this, multiplied in alongside the existing
+distance falloff, and skips playing entirely if either factor is 0. No
+other plumbing was needed since every one of these call sites already ran
+every frame (loops) or at the moment of firing (one-shots) — reading the
+current `AudioSettings` value there means a slider change takes effect
+immediately for whatever's playing next, with nothing to invalidate or
+recompute ahead of time.
+
 ## 4. Rendering & presentation
 
 ### 4.1 Camera
@@ -5665,6 +5706,11 @@ fade or stop later) computed at the moment of firing.
 
 ## 5. UX flow
 
+**Note (2026-09-11):** inserting 5.3 (Audio Settings screen) bumped the
+old 5.3 (Controls) to 5.4 — if an older cross-reference to "design.md
+5.3" elsewhere (e.g. CLAUDE.md's session history) means Controls, that's
+why, same as the earlier §4-insertion note above.
+
 ### 5.1 Screen flow
 
 ```
@@ -6064,7 +6110,51 @@ this up specifically by reproducing with real (non-scripted) keyboard
 input first, to rule out anything SendKeys-specific before assuming the
 scripted-input reproduction here generalizes.
 
-### 5.3 Controls (v1, defaults)
+### 5.3 Audio Settings screen (implemented 2026-09-11)
+
+Same entry-point/style pattern as 5.2's Keybind Setup screen, right down
+to reusing the exact wording of the user's own request: a new
+`AudioSettingsScreen`, reachable **only** from `ShipSelectionScreen`, via
+a new "AUDIO" button (same row/style as "KEYBINDS", directly to its
+right) or the **F11** key. Four sliders, each `[0%, 100%]`: **Master
+Volume** (multiplies every other volume, including the Connect Screen's
+music), **Weapons** (main gun/turret/missile sounds, 4.5's addendum),
+**Engines** (the engine loop, 4.5), and **Sound Effects** (currently a
+placeholder — explosions/collisions have no audio wired up yet). See
+3.16 for the full data-model/persistence writeup
+(`core.audio.AudioSettings`/`AudioSettingsStore`).
+
+**New `render.Slider` widget** — a live-drawn rail/fill/handle/percentage-
+readout, same 1×1-white-`Texture`-stretched-and-tinted technique
+`FlatButton`/`Tooltip` already use rather than pre-made art, since the
+fill/handle position changes continuously while dragging. Clicking
+anywhere along a row's track (not just the handle) jumps the slider
+there and starts a drag; dragging updates `AudioSettings` — and
+therefore any currently-playing sound reading it — every frame, but only
+**persists** to `audio-settings.json` once, when the mouse is released,
+rather than writing the file on every one of a drag's many per-frame
+updates. "RESET TO DEFAULTS" sets all four to 100% and saves immediately,
+same as the Keybind screen's own button; "BACK" (or ESC, when not
+mid-drag) returns to Ship Selection.
+
+**Art:** a new generated background panel
+(`assets/textures/hud/hud_audio_settings_background.png` — same Python/
+Pillow + "SF Distant Galaxy" technique as `hud_keybinds_background.png`,
+sampled colors matched exactly: panel fill `#102D5C`, header fill
+`#0A1A37`, gold `#DDBE7C`), sized/laid out for four slider rows instead
+of Keybind Settings' twelve compact list rows rather than reusing that
+panel as-is — title, subtitle, and the corner/border chrome are baked
+in; every row label, slider, and footer button on top is live-drawn,
+same "content changes at runtime, so don't bake it" reasoning as 5.2.
+
+**Verification status:** full `mvn clean install`/`mvn test` (166 tests,
+unaffected — this is UI wiring plus a plain data-model bean, no new
+pure-logic-worth-testing code) green. **Not yet live-verified** — needs
+the user to actually drag each slider and confirm it affects the right
+sounds, that dragging feels smooth, and that F11/the AUDIO button both
+open it correctly.
+
+### 5.4 Controls (v1, defaults)
 
 Keyboard only for now; more keybinds will follow as further features are
 added. All of the below are just the **defaults** — every action is

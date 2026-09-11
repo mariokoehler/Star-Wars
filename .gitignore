@@ -57,6 +57,7 @@ Thumbs.db
 data/accounts.json
 connection-config.json
 keybindings.json
+audio-settings.json
 
 ## Old Gradle setup, kept around only until the Maven migration is confirmed working:
 /_gradle-legacy-backup/

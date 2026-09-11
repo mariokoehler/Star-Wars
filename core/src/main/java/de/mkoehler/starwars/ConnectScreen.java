@@ -181,6 +181,7 @@ public class ConnectScreen implements Screen, RemoteControllable {
         // see attemptConnect()/StarWarsGame#fadeOutAndDisposeMusic.
         music = Gdx.audio.newMusic(Gdx.files.internal("audio/StarWarsTheme.mp3"));
         music.setLooping(false);
+        music.setVolume(game.getAudioSettings().getMasterVolume());
         music.play();
 
         if (!VisUI.isLoaded()) {

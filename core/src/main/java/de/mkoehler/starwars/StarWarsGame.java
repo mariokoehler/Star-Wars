@@ -4,6 +4,8 @@ import com.badlogic.gdx.Game;
 import com.badlogic.gdx.Gdx;
 import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.audio.Music;
+import de.mkoehler.starwars.audio.AudioSettings;
+import de.mkoehler.starwars.audio.AudioSettingsStore;
 import de.mkoehler.starwars.input.KeyBindings;
 import de.mkoehler.starwars.remote.RemoteControlQueue;
 import de.mkoehler.starwars.render.GameAssets;
@@ -46,7 +48,11 @@ import java.util.Random;
  * same story again: loaded once here from the local keybinds file, then
  * shared by every screen that reads or edits a binding — {@link Client}
  * reads it every frame for gameplay input, {@link KeybindScreen} mutates it
- * (and re-saves immediately) when the player rebinds an action. Every other screen only ever needs a
+ * (and re-saves immediately) when the player rebinds an action. {@link #audioSettings}
+ * (design.md — audio settings) follows the identical pattern once more:
+ * loaded once here from the local audio-settings file, shared by every
+ * screen/system that plays a sound, mutated (and re-saved) by
+ * {@link AudioSettingsScreen}. Every other screen only ever needs a
  * {@link Game} reference to switch away from itself, but constructors are
  * typed to this concrete class instead so they can reach
  * {@link #getQuoteDeck()}/{@link #getAssets()}/{@link #fadeOutAndDisposeMusic}
@@ -69,6 +75,8 @@ public class StarWarsGame extends Game {
      * every other {@code Gdx.files}-touching code in this project already waits for.
      */
     private KeyBindings keyBindings;
+    /** Same "load in create(), not a field initializer" reasoning as {@link #keyBindings} - {@link AudioSettingsStore#load()} also touches {@code Gdx.files}. */
+    private AudioSettings audioSettings;
 
     private Music fadingMusic;
     private float fadingMusicElapsedSeconds;
@@ -76,6 +84,7 @@ public class StarWarsGame extends Game {
     @Override
     public void create() {
         keyBindings = KeyBindings.load();
+        audioSettings = AudioSettingsStore.load().orElseGet(AudioSettings::new);
         setScreen(new SplashScreen(this));
     }
 
@@ -98,7 +107,10 @@ public class StarWarsGame extends Game {
         super.render();
         if (fadingMusic != null) {
             fadingMusicElapsedSeconds += Gdx.graphics.getDeltaTime();
-            float volume = 1f - fadingMusicElapsedSeconds / MUSIC_FADE_OUT_SECONDS;
+            // Fades from the master volume it was actually playing at (ConnectScreen sets this at
+            // play() time) down to 0, not from a hardcoded 1f - otherwise a lowered master volume
+            // would audibly jump back up to full for the duration of the fade.
+            float volume = audioSettings.getMasterVolume() * (1f - fadingMusicElapsedSeconds / MUSIC_FADE_OUT_SECONDS);
             if (volume <= 0f) {
                 fadingMusic.stop();
                 fadingMusic.dispose();
@@ -141,6 +153,19 @@ public class StarWarsGame extends Game {
      */
     public KeyBindings getKeyBindings() {
         return keyBindings;
+    }
+
+    /**
+     * Returns the player's live, shared audio volume settings (design.md —
+     * audio settings) — loaded once from the local audio-settings file in
+     * {@link #create()}; every screen/system that plays a sound reads
+     * volumes from this exact instance rather than loading its own copy,
+     * and {@link AudioSettingsScreen} mutates (and re-saves) it directly.
+     *
+     * @return the shared audio settings
+     */
+    public AudioSettings getAudioSettings() {
+        return audioSettings;
     }
 
     /**

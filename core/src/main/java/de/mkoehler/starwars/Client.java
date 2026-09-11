@@ -1047,7 +1047,8 @@ public class Client implements Screen {
                         // (turret fire is never locally predicted, even the local player's own).
                         if (state.isTurretShot()) {
                             if (turretSoundOwnersThisSnapshot.add(state.getOwnerPlayerId())) {
-                                playPositionalSound(game.getAssets().get(GameAssets.TURRET_SOUND, Sound.class), x, y);
+                                playPositionalSound(game.getAssets().get(GameAssets.TURRET_SOUND, Sound.class), x, y,
+                                    game.getAudioSettings().getEffectiveWeaponsVolume());
                             }
                         } else if (weaponSoundOwnersThisSnapshot.add(state.getOwnerPlayerId())) {
                             playWeaponSound(state.getOwnerPlayerId(), x, y);
@@ -1056,7 +1057,8 @@ public class Client implements Screen {
                         // A missile launch (design.md — missiles' audio addendum) - never locally
                         // predicted either, so this is the one place any missile's launch, including
                         // the local player's own, is ever observed as "new."
-                        playPositionalSound(game.getAssets().get(GameAssets.MISSILE_LAUNCH_SOUND, Sound.class), x, y);
+                        playPositionalSound(game.getAssets().get(GameAssets.MISSILE_LAUNCH_SOUND, Sound.class), x, y,
+                            game.getAudioSettings().getEffectiveWeaponsVolume());
                     }
                 }
                 projectiles.put(state.getProjectileId(), projectile);
@@ -1730,7 +1732,8 @@ public class Client implements Screen {
             ship.engineVolumeFraction = EngineAudioMath.approachFraction(ship.engineVolumeFraction,
                 ship.thrusting ? 1f : 0f, deltaTime, ENGINE_SOUND_FADE_SECONDS);
             float distanceFraction = EngineAudioMath.distanceVolumeFraction(distanceMeters, REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS);
-            ship.engineSound.setVolume(ship.engineSoundId, ship.engineVolumeFraction * distanceFraction);
+            ship.engineSound.setVolume(ship.engineSoundId,
+                ship.engineVolumeFraction * distanceFraction * game.getAudioSettings().getEffectiveEnginesVolume());
         }
     }
 
@@ -1758,23 +1761,28 @@ public class Client implements Screen {
      * Plays {@code sound} once, as a one-shot effect, at a volume determined
      * by its distance from the local player's own ship (design.md — weapon
      * sound: the same volume/distance calculation as
-     * {@link #updateRemoteEngineSounds}'s engine loops) — full volume up
-     * close (including, trivially, for the local player's own shots, whose
-     * position is always ~0m from {@link #myRenderScreenX}/{@link #myRenderScreenY}),
-     * silent beyond {@link #REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS}. Skips
-     * playing entirely once fully out of range, rather than starting an
-     * inaudible instance.
+     * {@link #updateRemoteEngineSounds}'s engine loops) scaled by
+     * {@code categoryVolume} (design.md — audio settings: the player's own
+     * master × category volume slider) — full volume up close (including,
+     * trivially, for the local player's own shots, whose position is always
+     * ~0m from {@link #myRenderScreenX}/{@link #myRenderScreenY}), silent
+     * beyond {@link #REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS} or once
+     * {@code categoryVolume} itself is 0. Skips playing entirely once the
+     * resulting volume is 0, rather than starting an inaudible instance.
      *
-     * @param sound   the sound to play, or {@code null} if not loaded (a no-op)
-     * @param xPixels where this sound's source is, in screen/world pixels
-     * @param yPixels where this sound's source is, in screen/world pixels
+     * @param sound          the sound to play, or {@code null} if not loaded (a no-op)
+     * @param xPixels        where this sound's source is, in screen/world pixels
+     * @param yPixels        where this sound's source is, in screen/world pixels
+     * @param categoryVolume the effective category volume to scale by, in {@code [0, 1]}
+     *                       (e.g. {@link de.mkoehler.starwars.audio.AudioSettings#getEffectiveWeaponsVolume()})
      */
-    private void playPositionalSound(Sound sound, float xPixels, float yPixels) {
-        if (sound == null) {
+    private void playPositionalSound(Sound sound, float xPixels, float yPixels, float categoryVolume) {
+        if (sound == null || categoryVolume <= 0f) {
             return;
         }
         float distanceMeters = distanceFromLocalShipMeters(xPixels, yPixels);
-        float volume = EngineAudioMath.distanceVolumeFraction(distanceMeters, REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS);
+        float distanceFraction = EngineAudioMath.distanceVolumeFraction(distanceMeters, REMOTE_SOUND_MAX_AUDIBLE_RANGE_METERS);
+        float volume = distanceFraction * categoryVolume;
         if (volume > 0f) {
             sound.play(volume);
         }
@@ -1819,7 +1827,8 @@ public class Client implements Screen {
         if (!game.getAssets().isLoaded(path, Sound.class)) {
             return;
         }
-        playPositionalSound(game.getAssets().get(path, Sound.class), xPixels, yPixels);
+        playPositionalSound(game.getAssets().get(path, Sound.class), xPixels, yPixels,
+            game.getAudioSettings().getEffectiveWeaponsVolume());
     }
 
     /**
@@ -2045,7 +2054,7 @@ public class Client implements Screen {
         }
         myEngineVolumeFraction = EngineAudioMath.approachFraction(myEngineVolumeFraction,
             thrustForwardHeld ? 1f : 0f, deltaTime, ENGINE_SOUND_FADE_SECONDS);
-        myEngineSound.setVolume(myEngineSoundId, myEngineVolumeFraction);
+        myEngineSound.setVolume(myEngineSoundId, myEngineVolumeFraction * game.getAudioSettings().getEffectiveEnginesVolume());
     }
 
     /**
