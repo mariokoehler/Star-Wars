@@ -5704,6 +5704,75 @@ fade or stop later) computed at the moment of firing.
   (a straight asset swap at `assets/audio/weapons/turret_shooting.mp3`,
   no code change expected).
 
+**Explosion sound — implemented 2026-09-11.** One shared clip
+(`assets-raw/sfx/other/explosion.mp3`, copied to
+`assets/audio/effects/explosion.mp3` — a new `audio/effects/` folder,
+distinct from `audio/weapons/`, since this falls under the "Sound
+Effects" volume category (design.md — audio settings), not "Weapons")
+played once whenever any `ShipDestroyedMessage` arrives — the same
+one-shot `playPositionalSound` helper the weapon sounds use, same
+distance/volume falloff, just scaled by `getEffectiveSoundEffectsVolume()`
+instead of `getEffectiveWeaponsVolume()`.
+
+- **Unlike the explosion *particle* effect, the local player hears their
+  own destruction.** `onShipDestroyed`'s local branch was already
+  documented as deliberately skipping the particle (this `Client`
+  instance disposes and transitions to Death Screen/Ship Selection a few
+  lines later, so a triggered particle would never actually render) —
+  but a `Sound.play()` call has no such problem, since the played
+  instance is owned by the shared `AssetManager`, not this screen, and
+  keeps playing across the transition regardless. Played at
+  `myRenderScreenX`/`myRenderScreenY` (trivially ~0m from itself, so
+  always full volume) rather than skipped, matching the ordinary
+  expectation of actually hearing your own ship blow up.
+- **Fires for a voluntary ESC leave too, same as the particle effect
+  already does for observers** — a granted leave and a combat death
+  share the exact same `ShipDestroyedMessage` (design.md 2.3), and
+  nothing about this sound is conditioned on `leavingMatch` any more
+  than the existing particle trigger is, so the two stay "audibly
+  indistinguishable" the same way they're already documented as
+  "visually indistinguishable."
+
+**Missile lock sound — implemented 2026-09-11.** Two looping clips
+(`assets-raw/sfx/other/missile_lock_trying.mp3`/`missile_lock_acquired.mp3`,
+copied to `assets/audio/weapons/` — "Weapons" category, per the user's
+own description of that slider covering "weapon and missile sounds"),
+mutually exclusive: "trying" plays for as long as the local player's own
+missile lock is inside its 5-second acquisition window but not yet
+locked, replaced outright (not layered) by "acquired" the instant it
+succeeds, silent again the instant either the lock is lost or the
+missile is actually fired. Local-player-only, attacker-side only — no
+equivalent for the victim-side reticle (`myTargetedByMissileLock`),
+matching the user's own framing of the request; not a positionally-faded
+sound either (no distance falloff, `Sound.loop(volume)` at a flat
+`getEffectiveWeaponsVolume()`) — it's the local player's own targeting-
+computer feedback, not a real-world sound source.
+
+**Both "instantly start/stop" requirements fall out for free from a
+plain state-transition diff, no special-casing needed for either
+trigger:** a new `Client.MissileLockAudioState` enum (`NONE`/`TRYING`/
+`ACQUIRED`) is derived from `myMissileLockTargetPlayerId`/
+`myMissileLockAcquired` every time `onWorldSnapshot` updates them;
+`updateMissileLockAudioState` stops whatever's currently playing and
+starts whatever the new state calls for, only when the state actually
+changed. Firing a missile and losing an in-progress/acquired lock both
+already reset `MissileLockComponent`/broadcast
+`NO_MISSILE_LOCK_TARGET` server-side (`MissileLockSystem`/
+`GameNetworkServer.processMissileFireRequests`) for reasons that predate
+this feature (driving the visual reticle) — this method just reads that
+same existing signal, so "stops when fired" and "stops when lock is
+lost" are the same code path, not two.
+
+**New per-ship-lifecycle cleanup, same pattern as the engine sound's own
+lifecycle rules:** `onShipSpawned` stops any leftover lock sound on
+every spawn/respawn (a fresh ship gets a fresh, un-locked
+`MissileLockComponent` server-side, mirrored here the same way
+`myMissileLockTargetPlayerId`/`myMissileLockAcquired` already were);
+`Client.dispose()` stops it too, for the same "a shared,
+`AssetManager`-owned `Sound` must not keep looping in the background
+after this screen is gone" reason the engine loop's own `dispose()`
+cleanup exists for.
+
 ## 5. UX flow
 
 **Note (2026-09-11):** inserting 5.3 (Audio Settings screen) bumped the

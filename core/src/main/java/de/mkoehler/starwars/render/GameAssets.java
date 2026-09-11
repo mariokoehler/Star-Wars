@@ -114,6 +114,16 @@ public final class GameAssets {
      */
     public static final String EXPLOSION_PARTICLE = particleEffectPath("explosion");
 
+    /**
+     * The ship-destruction explosion sound (design.md — explosions' audio
+     * addendum) — one shared clip played whenever any ship is destroyed
+     * (see {@code ShipDestroyedMessage}), same one-shared-clip-for-every-
+     * ship-type reasoning as {@link #TURRET_SOUND}/{@link #MISSILE_LAUNCH_SOUND}.
+     * Falls under the "Sound Effects" volume category (design.md — audio
+     * settings), not "Weapons" — an explosion isn't a weapon firing.
+     */
+    public static final String EXPLOSION_SOUND = "audio/effects/explosion.mp3";
+
     /** How many {@code textures/after_death/Quote_<n>.png} images exist (design.md — authored by the user). */
     public static final int AFTER_DEATH_QUOTE_COUNT = 23;
 
@@ -148,6 +158,21 @@ public final class GameAssets {
      * distinct from each ship's own main-gun {@link #weaponSoundPath}.
      */
     public static final String TURRET_SOUND = "audio/weapons/turret_shooting.mp3";
+    /**
+     * The looping missile-lock-acquisition sound (design.md — missiles'
+     * audio addendum) — played for as long as the local player's own
+     * missile lock is actively trying to acquire a target (within the 5s
+     * acquisition window, not yet locked), replaced by
+     * {@link #MISSILE_LOCK_ACQUIRED_SOUND} the instant it succeeds.
+     */
+    public static final String MISSILE_LOCK_TRYING_SOUND = "audio/weapons/missile_lock_trying.mp3";
+    /**
+     * The looping missile-lock-acquired sound (design.md — missiles' audio
+     * addendum) — played for as long as the local player's own missile
+     * lock is fully acquired and ready to fire, replacing
+     * {@link #MISSILE_LOCK_TRYING_SOUND} rather than layering on top of it.
+     */
+    public static final String MISSILE_LOCK_ACQUIRED_SOUND = "audio/weapons/missile_lock_acquired.mp3";
 
     /**
      * Returns the classpath path of {@code type}'s continuous engine-loop
@@ -250,6 +275,9 @@ public final class GameAssets {
         manager.load(EXPLOSION_PARTICLE, ParticleEffect.class);
         manager.load(MISSILE_LAUNCH_SOUND, Sound.class);
         manager.load(TURRET_SOUND, Sound.class);
+        manager.load(EXPLOSION_SOUND, Sound.class);
+        manager.load(MISSILE_LOCK_TRYING_SOUND, Sound.class);
+        manager.load(MISSILE_LOCK_ACQUIRED_SOUND, Sound.class);
 
         for (ShipType type : ShipType.values()) {
             String path = shipHullTexturePath(type);

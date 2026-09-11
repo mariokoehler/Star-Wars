@@ -3896,6 +3896,97 @@ unaffected) green. **Not yet live-verified** — needs the user to
 actually drag each slider and confirm it controls the right sounds, that
 dragging feels smooth, and that both F11 and the AUDIO button open it.
 
+**Live-verified 2026-09-11: "everything looks good and seems to be
+working."** Committed and pushed (`fc0725b`). Also caught, same commit:
+a runtime-generated `audio-settings.json` had landed at the repo root
+from the user's own local test run (same "wherever the working directory
+happened to be when it was run" gotcha `data/accounts.json`/
+`connection-config.json`/`keybindings.json` already have) — added it to
+`.gitignore` alongside those three rather than committing a local save
+file.
+
+**Explosion sound — implemented 2026-09-11, same day.** See design.md
+4.5's newest addendum for the full writeup. User's ask: play the
+explosion clip whenever a ship gets destroyed, same distance/volume
+mechanic as the other sounds. One shared clip (`assets-raw/sfx/other/
+explosion.mp3`, copied to `assets/audio/effects/explosion.mp3` — a new
+`audio/effects/` folder, since this is the first sound to fall under the
+"Sound Effects" category rather than "Weapons") wired into both branches
+of `Client.onShipDestroyed` via the same `playPositionalSound` helper
+the weapon sounds already use, scaled by `getEffectiveSoundEffectsVolume()`
+this time — first real consumer of that category/slider, which had been
+sitting as a placeholder since the Audio Settings screen shipped.
+
+**One real judgment call, not just a mechanical wire-up: the local
+player now hears their own destruction, unlike the explosion *particle*.**
+That particle is deliberately skipped for a local death (`onShipDestroyed`'s
+own existing comment: this `Client` instance disposes and transitions to
+Death Screen/Ship Selection a few lines later, so a triggered particle
+would never actually render — dead code). A `Sound.play()` call doesn't
+have that problem at all — the played instance belongs to the shared
+`AssetManager`, not this screen, so it keeps playing right through the
+screen transition. Played at `myRenderScreenX`/`myRenderScreenY`
+(trivially ~0m from itself via the existing distance helper, so always
+full volume) rather than skipped by analogy with the particle case —
+matches the ordinary expectation of actually hearing your own ship blow
+up, which the particle's own limitation was an accident of screen
+lifecycle, not a deliberate "the player shouldn't hear/see this" design
+choice worth preserving for audio too.
+
+**Verification status:** full `mvn clean install`/`mvn test` (166 tests,
+unaffected — pure wiring onto an already-tested helper) green. **Not yet
+live-verified** — needs the user to actually destroy a ship (their own
+and someone else's) and confirm the explosion is audible and fades
+correctly with distance for a remote death.
+
+**Missile lock sound — implemented 2026-09-11, same day.** See design.md
+2.15's newest addendum for the full writeup. User's ask: two looping
+clips - "trying" for the 5-second acquisition window, "acquired"
+replacing it (not layering) once locked - both starting/stopping
+instantly, no fade. Copied both into `assets/audio/weapons/` (Weapons
+category - the user's own description of that slider explicitly
+mentions "weapon and missile sounds"), no filename renames needed.
+Deliberately **not** distance-faded like every other sound this
+project's audio work has built so far - this is the local player's own
+targeting-computer feedback, not a real-world sound source, so it's a
+flat `Sound.loop(getEffectiveWeaponsVolume())` with no positional
+falloff. Also deliberately **local-player, attacker-side only** - no
+equivalent for the victim-side lock reticle, matching the user's request
+as given rather than extending scope to something not asked for.
+
+**Both "instantly start/stop" requirements turned out to already be
+implied by existing server behavior, needing no special-casing at all:**
+a new `Client.MissileLockAudioState` enum (`NONE`/`TRYING`/`ACQUIRED`) is
+derived fresh from `myMissileLockTargetPlayerId`/`myMissileLockAcquired`
+every time `onWorldSnapshot` updates them; `updateMissileLockAudioState`
+stops whatever's playing and starts whatever the new state calls for,
+only on an actual change. Firing a missile and losing an in-progress or
+acquired lock both already reset the lock (broadcasting
+`NO_MISSILE_LOCK_TARGET`) server-side for a completely unrelated reason
+predating this feature - driving the existing visual reticle
+(`MissileLockSystem`/`GameNetworkServer.processMissileFireRequests`,
+both already calling `resetLock()`). This audio code just reads that
+same signal, so "stops on fire" and "stops on lost lock" fall out as the
+exact same code path rather than two things to implement separately -
+found by checking the existing reset logic before writing anything, not
+assumed.
+
+**Cleanup follows the exact same lifecycle rules the engine sound
+already established:** `onShipSpawned` stops any leftover lock sound on
+every spawn/respawn (mirroring the fresh, un-locked
+`MissileLockComponent` a new ship gets server-side, same reasoning
+`myMissileLockTargetPlayerId`/`myMissileLockAcquired`'s own reset there
+already had); `Client.dispose()` stops it too - same "a shared,
+`AssetManager`-owned `Sound` must not keep looping in the background
+after this screen is gone" rule from every other loop this project has
+shipped (engine sound, and now this).
+
+**Verification status:** full `mvn clean install`/`mvn test` (166 tests,
+unaffected) green. **Not yet live-verified** — needs the user to
+actually attempt a missile lock and confirm "trying" plays immediately
+on cone entry, switches cleanly to "acquired" with no overlap, and cuts
+off instantly on firing or losing the target.
+
 ## Build system
 
 Maven, multi-module (migrated from the original gdx-liftoff Gradle setup on

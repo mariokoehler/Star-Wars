@@ -525,6 +525,18 @@ public class Client implements Screen {
     /** Whether {@link #myMissileLockTargetPlayerId}'s lock is fully acquired (vs. still acquiring). */
     private boolean myMissileLockAcquired;
     /**
+     * Which of the two looping missile-lock sounds (design.md — missiles'
+     * audio addendum), if any, is currently playing for the local player's
+     * own lock attempt — kept as explicit state (rather than re-derived
+     * every frame) so {@link #updateMissileLockAudioState} only needs to
+     * act on an actual transition, not repeat an already-correct start/stop
+     * every time it's called.
+     */
+    private enum MissileLockAudioState { NONE, TRYING, ACQUIRED }
+    private MissileLockAudioState myMissileLockAudioState = MissileLockAudioState.NONE;
+    /** The currently-playing {@link #myMissileLockAudioState} loop's instance id, or {@code -1} if {@link #myMissileLockAudioState} is {@code NONE}. */
+    private long myMissileLockSoundId = -1;
+    /**
      * Whether any enemy currently has *this* ship as their own missile lock
      * target (design.md — missiles' addendum) — the victim's side of the
      * same reticle, read from the local player's own {@code ShipState} each
@@ -771,6 +783,7 @@ public class Client implements Screen {
         // death/respawn.
         myMissileLockTargetPlayerId = ShipState.NO_MISSILE_LOCK_TARGET;
         myMissileLockAcquired = false;
+        stopMissileLockSound();
         myTargetedByMissileLock = false;
         myTargetedByMissileLockAcquired = false;
 
@@ -804,12 +817,17 @@ public class Client implements Screen {
 
     private void onShipDestroyed(ShipDestroyedMessage destroyed) {
         if (destroyed.getPlayerId() == myPlayerId) {
-            // Deliberately no explosion triggered here (design.md — explosions): this same method
-            // disposes this whole screen a few lines below (returnToShipSelection/goToDeathScreen),
-            // so this Client instance never renders another frame afterward - triggering one would
-            // be dead code, never actually seen. Every other player's destruction (the branch
-            // below) doesn't have this problem, since observing someone else's death doesn't
-            // transition this client anywhere.
+            // Deliberately no explosion *particle* triggered here (design.md — explosions): this
+            // same method disposes this whole screen a few lines below (returnToShipSelection/
+            // goToDeathScreen), so this Client instance never renders another frame afterward -
+            // triggering one would be dead code, never actually seen. The explosion *sound*
+            // doesn't have that problem - a Sound.play() call is owned by AssetManager, not this
+            // screen, so it keeps playing across the transition to Death Screen/Ship Selection
+            // regardless. Played at myRenderScreenX/Y (trivially ~0m from itself, so always full
+            // volume) rather than skipped, matching the ordinary expectation of hearing your own
+            // ship's own destruction.
+            playPositionalSound(game.getAssets().get(GameAssets.EXPLOSION_SOUND, Sound.class),
+                myRenderScreenX, myRenderScreenY, game.getAudioSettings().getEffectiveSoundEffectsVolume());
             if (myBody != null) {
                 localWorld.destroyBody(myBody);
                 myBody = null;
@@ -831,6 +849,8 @@ public class Client implements Screen {
             if (ship != null) {
                 ship.stopEngineSound();
                 triggerPooledExplosion(shipExplosionPool, GameAssets.EXPLOSION_PARTICLE, ship.renderX, ship.renderY);
+                playPositionalSound(game.getAssets().get(GameAssets.EXPLOSION_SOUND, Sound.class),
+                    ship.renderX, ship.renderY, game.getAudioSettings().getEffectiveSoundEffectsVolume());
             }
         }
     }
@@ -930,6 +950,7 @@ public class Client implements Screen {
                 myRadarPulseCooldownRemaining = newRadarPulseCooldown;
                 myMissileLockTargetPlayerId = state.getMissileLockTargetPlayerId();
                 myMissileLockAcquired = state.isMissileLockAcquired();
+                updateMissileLockAudioState();
                 myTargetedByMissileLock = state.isTargetedByMissileLock();
                 myTargetedByMissileLockAcquired = state.isTargetedByMissileLockAcquired();
                 continue;
@@ -2037,6 +2058,70 @@ public class Client implements Screen {
     }
 
     /**
+     * Starts/stops the local player's own missile-lock loop sounds (design.md
+     * — missiles' audio addendum) to match {@link #myMissileLockTargetPlayerId}/
+     * {@link #myMissileLockAcquired}'s current state — called every time
+     * {@link #onWorldSnapshot} updates either of them. The two clips are
+     * mutually exclusive (acquired <em>replaces</em> trying, never layers on
+     * top of it), so both "instantly start/stop" per the user's own spec
+     * fall out for free from a plain state-transition diff: firing a missile
+     * or losing the lock both reset {@link #myMissileLockTargetPlayerId} to
+     * {@link ShipState#NO_MISSILE_LOCK_TARGET} server-side
+     * ({@code MissileLockSystem}/{@code GameNetworkServer.processMissileFireRequests}),
+     * which this method sees as an ordinary transition to {@link MissileLockAudioState#NONE},
+     * no special-casing needed for either event specifically.
+     */
+    private void updateMissileLockAudioState() {
+        MissileLockAudioState desired;
+        if (myMissileLockTargetPlayerId == ShipState.NO_MISSILE_LOCK_TARGET) {
+            desired = MissileLockAudioState.NONE;
+        } else {
+            desired = myMissileLockAcquired ? MissileLockAudioState.ACQUIRED : MissileLockAudioState.TRYING;
+        }
+        if (desired == myMissileLockAudioState) {
+            return;
+        }
+        stopMissileLockSound();
+        myMissileLockAudioState = desired;
+        if (desired == MissileLockAudioState.NONE) {
+            return;
+        }
+        String path = missileLockSoundPath(desired);
+        if (game.getAssets().isLoaded(path, Sound.class)) {
+            myMissileLockSoundId = game.getAssets().get(path, Sound.class)
+                .loop(game.getAudioSettings().getEffectiveWeaponsVolume());
+        }
+    }
+
+    /**
+     * Stops whichever missile-lock loop {@link #myMissileLockAudioState}
+     * currently says is playing, if any - called both from
+     * {@link #updateMissileLockAudioState} (right before switching to a
+     * different state) and from {@link #dispose()}, so a shared,
+     * {@code AssetManager}-owned {@link Sound} never keeps looping in the
+     * background after this screen is gone.
+     */
+    private void stopMissileLockSound() {
+        if (myMissileLockAudioState == MissileLockAudioState.NONE) {
+            return;
+        }
+        String path = missileLockSoundPath(myMissileLockAudioState);
+        if (game.getAssets().isLoaded(path, Sound.class)) {
+            game.getAssets().get(path, Sound.class).stop(myMissileLockSoundId);
+        }
+        myMissileLockAudioState = MissileLockAudioState.NONE;
+        myMissileLockSoundId = -1;
+    }
+
+    private String missileLockSoundPath(MissileLockAudioState state) {
+        return switch (state) {
+            case TRYING -> GameAssets.MISSILE_LOCK_TRYING_SOUND;
+            case ACQUIRED -> GameAssets.MISSILE_LOCK_ACQUIRED_SOUND;
+            case NONE -> throw new IllegalArgumentException("NONE has no sound to look up");
+        };
+    }
+
+    /**
      * Fades the local player's own engine loop's volume toward 1 while
      * {@code thrustForwardHeld}, toward 0 otherwise (design.md — engine
      * sound: "the thrust button simply controlling the volume"), over
@@ -2533,6 +2618,7 @@ public class Client implements Screen {
         // screen) - without explicitly stopping each loop() instance here, it would otherwise
         // keep looping in the background forever after this screen is gone (design.md — engine sound).
         stopLocalEngineSound();
+        stopMissileLockSound();
         for (RemoteShip ship : ships.values()) {
             ship.stopEngineSound();
         }
