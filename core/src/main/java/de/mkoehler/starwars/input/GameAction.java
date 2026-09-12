@@ -17,6 +17,14 @@ import com.badlogic.gdx.Input;
  * navigation/confirm keys on other screens (Ship Selection, Connect,
  * Death Screen) that this enum has no relationship to at all.
  * <p>
+ * <b>The zoom defaults are the numpad's own {@code +}/{@code -} keys</b>,
+ * deliberately: they are the only keys physically labeled "+" and "-" on
+ * both a US and a German layout (the main-row "+"/"-" sit on entirely
+ * different physical keys per layout, and {@link Input.Keys#PLUS} itself is
+ * a keycode the lwjgl3 backend never actually emits — see
+ * {@code DefaultLwjgl3Input.getGdxKeyCode}). A player without a numpad
+ * rebinds them like any other action.
+ * <p>
  * Ordering here is purely presentational — {@link KeybindScreen} (via
  * {@link #values()}) lists actions in this declared order, grouped
  * loosely by theme (movement, combat, systems, UI) for readability.
@@ -38,7 +46,10 @@ public enum GameAction {
     POWER_RESET("Power: Reset Distribution", Input.Keys.K),
 
     SHOW_SCOREBOARD("Show Scoreboard", Input.Keys.TAB),
-    SHOW_DISPLAY_NAMES("Show Player Names", Input.Keys.N);
+    SHOW_DISPLAY_NAMES("Show Player Names", Input.Keys.N),
+
+    ZOOM_IN("Zoom In", Input.Keys.NUMPAD_ADD),
+    ZOOM_OUT("Zoom Out", Input.Keys.NUMPAD_SUBTRACT);
 
     private final String displayName;
     private final int defaultKeycode;

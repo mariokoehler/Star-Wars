@@ -51,6 +51,8 @@ import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
 import de.mkoehler.starwars.render.ArenaBoundaryRenderer;
+import de.mkoehler.starwars.render.CameraFocus;
+import de.mkoehler.starwars.render.CameraSettings;
 import de.mkoehler.starwars.render.DamageSmokeEffect;
 import de.mkoehler.starwars.render.EngineAudioMath;
 import de.mkoehler.starwars.render.GameAssets;
@@ -201,6 +203,48 @@ public class Client implements Screen {
     /** How far out the camera zooms at/above {@link #SPEED_ZOOM_REFERENCE_METERS_PER_SECOND} — the user's own spec. */
     private static final float SPEED_ZOOM_MAX_INCREASE = 0.25f;
     /**
+     * Distance out to which another ship counts at <i>full</i> weight
+     * toward the "battlefield camera" focus point (design.md 4.1) — inside
+     * it the focus is the exact centroid of the local ship plus every
+     * contact, the plain "halfway between us" behavior the feature is
+     * specified as. See {@link CameraFocus}. Untuned starting point.
+     */
+    private static final float CAMERA_FOCUS_FULL_WEIGHT_METERS = 45f;
+    /**
+     * Distance at which another ship stops influencing the "battlefield
+     * camera" focus point (design.md 4.1) at all, its weight having faded
+     * from full at {@link #CAMERA_FOCUS_FULL_WEIGHT_METERS} to zero here —
+     * see {@link CameraFocus}. Deliberately the base radar's own 60m range:
+     * that is the only always-on, omnidirectional detector, so a contact
+     * reaching the edge of this band is one that may also be about to
+     * disappear from {@link #ships} entirely, and it is already
+     * contributing almost nothing by then — no jump when it does. A
+     * contact detected further out than this (cone or pulse) is real and
+     * shown on the radar HUD, it just doesn't drag the camera toward
+     * something far off screen. Untuned starting point.
+     */
+    private static final float CAMERA_FOCUS_FALLOFF_METERS = 60f;
+    /**
+     * How far the battlefield-camera focus point may sit from the local
+     * ship at most, as a fraction of the <i>currently visible</i>
+     * half-extent (shorter screen axis) — i.e. the local ship never leaves
+     * the middle half of its own screen. Not a fixed distance,
+     * deliberately, so that same "the player still sits comfortably inside
+     * their own view" guarantee holds at every zoom level, manual
+     * ({@link CameraSettings}) or speed-driven.
+     * <p>
+     * This is normally the <i>binding</i> constraint in an actual fight,
+     * not the weighted centroid: at 1920×1080 and default zoom it allows a
+     * lean of ~8.4m, while the true centroid for a duel at 30m separation
+     * sits 15m away. That is intended — the centroid picks the direction
+     * and the full-weight band decides who counts, while this decides how
+     * far the camera is allowed to act on it. Untuned starting point, and
+     * the first constant to try changing if the effect reads as too
+     * weak/too strong.
+     */
+    private static final float CAMERA_FOCUS_MAX_OFFSET_FRACTION = 0.5f;
+
+    /**
      * How quickly the camera's zoom eases toward its speed-driven target —
      * independent of, and deliberately slower than, {@link #CAMERA_FOLLOW_SPEED}'s
      * position tracking, so a brief thrust burst doesn't visibly "pulse"
@@ -339,6 +383,25 @@ public class Client implements Screen {
      * {@link GameAction}'s Javadoc for why.
      */
     private KeyBindings keyBindings;
+    /**
+     * The player's own chosen zoom level (design.md 4.1), shared with (and
+     * owned by) {@link StarWarsGame} so it survives this screen being
+     * disposed between matches — mutated, and immediately re-saved, by the
+     * Zoom In/Zoom Out keybinds in {@link #render}.
+     */
+    private CameraSettings cameraSettings;
+
+    /** Scratch vector for {@link #updateCamera}'s focus-point math - avoids an allocation per frame. */
+    private final Vector2 cameraFocus = new Vector2();
+    /**
+     * Every visible other ship's render position, refilled each frame for
+     * {@link #updateCamera} - holds references into
+     * {@link #cameraFocusContactPool} rather than fresh vectors, so the
+     * per-frame camera math allocates nothing.
+     */
+    private final List<Vector2> cameraFocusContacts = new ArrayList<>();
+    /** Backing store for {@link #cameraFocusContacts} - grows to the largest ship count seen so far and is then reused forever. */
+    private final List<Vector2> cameraFocusContactPool = new ArrayList<>();
 
     private SpriteBatch batch;
     private TextureAtlas shipsAtlas;
@@ -704,6 +767,7 @@ public class Client implements Screen {
         long box2dInitMillis = System.currentTimeMillis();
 
         keyBindings = game.getKeyBindings();
+        cameraSettings = game.getCameraSettings();
 
         batch = new SpriteBatch();
         shipsAtlas = game.getAssets().get(GameAssets.SHIPS_ATLAS, TextureAtlas.class);
@@ -880,8 +944,11 @@ public class Client implements Screen {
         myPreviousAngle = myBody.getAngle();
         // A fresh spawn/respawn starts at rest - reset the speed-linked zoom (design.md 4.1)
         // back to its resting value immediately rather than easing down from whatever it was at
-        // the moment of death/leaving.
-        camera.zoom = 1f;
+        // the moment of death/leaving. That resting value is the player's own chosen zoom, not
+        // a flat 1f: speedFraction is 0 at spawn, so this is exactly what updateCamera would
+        // ease to anyway, and anyone who changed the setting would otherwise see the camera
+        // lurch back to it on every single respawn.
+        camera.zoom = cameraSettings.getZoom();
         // A fresh body means no meaningful "elapsed since last reconciled snapshot" yet either -
         // avoids extrapolating the very first post-spawn snapshot using a stale accumulated value.
         mySnapshotElapsedSeconds = 0f;
@@ -1522,6 +1589,20 @@ public class Client implements Screen {
             }
         }
 
+        // Manual zoom (design.md 4.1) - deliberately outside the `myBody != null` block above:
+        // unlike every action in there, this sends nothing to the server and changes nothing
+        // about the ship, so it stays usable while dead/waiting to respawn too. Saved on every
+        // press, same "no separate Save button" convention as keybinds/audio settings - a
+        // keypress is cheap and the file is tiny.
+        if (keyBindings.isJustPressed(GameAction.ZOOM_IN)) {
+            cameraSettings.zoomIn();
+            cameraSettings.save();
+        }
+        if (keyBindings.isJustPressed(GameAction.ZOOM_OUT)) {
+            cameraSettings.zoomOut();
+            cameraSettings.save();
+        }
+
         extrapolateRemoteShips(deltaTime);
         extrapolateProjectiles(deltaTime);
         extrapolateAsteroids(deltaTime);
@@ -1944,13 +2025,31 @@ public class Client implements Screen {
     }
 
     /**
-     * Eases the camera toward the local ship's position (design.md 4.1's
-     * "camera inertia") and its zoom toward a speed-driven target
-     * (design.md 4.1's "speed-linked zoom", implemented 2026-09-09) — the
-     * faster the ship is currently flying, the further out the camera
-     * pulls back, trading detail for the forward visibility a player needs
-     * to react to an obstacle (an asteroid, another ship, the arena
-     * boundary) in time at speed.
+     * Eases the camera toward its focus point (design.md 4.1's "camera
+     * inertia") and its zoom toward a speed-driven target (design.md 4.1's
+     * "speed-linked zoom", implemented 2026-09-09) — the faster the ship is
+     * currently flying, the further out the camera pulls back, trading
+     * detail for the forward visibility a player needs to react to an
+     * obstacle (an asteroid, another ship, the arena boundary) in time at
+     * speed.
+     * <p>
+     * The focus point is the local ship's own position while nothing else
+     * is in sight, and a weighted centroid of the local ship plus every
+     * visible other ship once anything is (design.md 4.1's "battlefield
+     * camera") — see {@link CameraFocus}, which owns that math. Everything
+     * in {@link #ships} is exactly what this player's radar currently
+     * detects (design.md 2.14 — the server only ever sends detected
+     * contacts), so no client-side visibility filtering is needed here,
+     * same as {@link #drawHud}'s radar contacts.
+     * <p>
+     * The maximum focus offset is derived from the camera's <i>current</i>
+     * visible extent rather than being a fixed distance, so the manual zoom
+     * ({@link CameraSettings}) and the speed-linked zoom both keep the
+     * player comfortably framed automatically. Both easings deliberately
+     * stay the single smoothing stage: {@link CameraFocus}' own distance
+     * falloff already smooths a contact drifting out of relevance, and
+     * stacking a second smoothed focus point on top of the position easing
+     * would only double the camera's lag.
      *
      * @param deltaTime time since the last frame, in seconds
      */
@@ -1959,16 +2058,32 @@ public class Client implements Screen {
             return;
         }
         float alpha = localPhysicsSystem.getAlpha();
-        float targetX = MathUtils.lerp(myPreviousX, myBody.getPosition().x, alpha) * PhysicsConstants.PIXELS_PER_METER;
-        float targetY = MathUtils.lerp(myPreviousY, myBody.getPosition().y, alpha) * PhysicsConstants.PIXELS_PER_METER;
+        float myX = MathUtils.lerp(myPreviousX, myBody.getPosition().x, alpha) * PhysicsConstants.PIXELS_PER_METER;
+        float myY = MathUtils.lerp(myPreviousY, myBody.getPosition().y, alpha) * PhysicsConstants.PIXELS_PER_METER;
+
+        cameraFocusContacts.clear();
+        for (RemoteShip ship : ships.values()) {
+            if (cameraFocusContacts.size() == cameraFocusContactPool.size()) {
+                cameraFocusContactPool.add(new Vector2());
+            }
+            cameraFocusContacts.add(
+                cameraFocusContactPool.get(cameraFocusContacts.size()).set(ship.renderX, ship.renderY));
+        }
+        float maxOffsetPixels = CAMERA_FOCUS_MAX_OFFSET_FRACTION
+            * Math.min(camera.viewportWidth, camera.viewportHeight) * camera.zoom / 2f;
+        CameraFocus.computeFocus(myX, myY, cameraFocusContacts,
+            CAMERA_FOCUS_FULL_WEIGHT_METERS * PhysicsConstants.PIXELS_PER_METER,
+            CAMERA_FOCUS_FALLOFF_METERS * PhysicsConstants.PIXELS_PER_METER, maxOffsetPixels, cameraFocus);
 
         float lerp = MathUtils.clamp(CAMERA_FOLLOW_SPEED * deltaTime, 0f, 1f);
-        camera.position.x += (targetX - camera.position.x) * lerp;
-        camera.position.y += (targetY - camera.position.y) * lerp;
+        camera.position.x += (cameraFocus.x - camera.position.x) * lerp;
+        camera.position.y += (cameraFocus.y - camera.position.y) * lerp;
 
         float speedFraction = MathUtils.clamp(
             myBody.getLinearVelocity().len() / SPEED_ZOOM_REFERENCE_METERS_PER_SECOND, 0f, 1f);
-        float targetZoom = 1f + speedFraction * SPEED_ZOOM_MAX_INCREASE;
+        // The player's own chosen zoom is a multiplier, not an offset - the speed-linked
+        // pull-back is always applied on top of it, unchanged, at every zoom level.
+        float targetZoom = cameraSettings.getZoom() * (1f + speedFraction * SPEED_ZOOM_MAX_INCREASE);
         float zoomLerp = MathUtils.clamp(CAMERA_ZOOM_FOLLOW_SPEED * deltaTime, 0f, 1f);
         camera.zoom += (targetZoom - camera.zoom) * zoomLerp;
 

@@ -6,6 +6,8 @@ import com.badlogic.gdx.assets.AssetManager;
 import com.badlogic.gdx.audio.Music;
 import de.mkoehler.starwars.audio.AudioSettings;
 import de.mkoehler.starwars.audio.AudioSettingsStore;
+import de.mkoehler.starwars.render.CameraSettings;
+import de.mkoehler.starwars.render.CameraSettingsStore;
 import de.mkoehler.starwars.input.KeyBindings;
 import de.mkoehler.starwars.remote.RemoteControlQueue;
 import de.mkoehler.starwars.render.GameAssets;
@@ -52,7 +54,10 @@ import java.util.Random;
  * (design.md — audio settings) follows the identical pattern once more:
  * loaded once here from the local audio-settings file, shared by every
  * screen/system that plays a sound, mutated (and re-saved) by
- * {@link AudioSettingsScreen}. {@link #hangarAmbience} (design.md — hangar
+ * {@link AudioSettingsScreen}. {@link #cameraSettings} (design.md 4.1)
+ * is the same pattern a third time, just mutated from {@link Client}
+ * itself (the Zoom In/Zoom Out keybinds) rather than from a settings
+ * screen. {@link #hangarAmbience} (design.md — hangar
  * ambience) is the same "must outlive any single screen instance" story
  * again, but for a track meant to keep playing, uninterrupted, across
  * {@link ShipSelectionScreen}/{@link KeybindScreen}/{@link AudioSettingsScreen}/
@@ -85,6 +90,8 @@ public class StarWarsGame extends Game {
     private KeyBindings keyBindings;
     /** Same "load in create(), not a field initializer" reasoning as {@link #keyBindings} - {@link AudioSettingsStore#load()} also touches {@code Gdx.files}. */
     private AudioSettings audioSettings;
+    /** Same "load in create(), not a field initializer" reasoning as {@link #keyBindings} - {@link CameraSettingsStore#load()} also touches {@code Gdx.files}. */
+    private CameraSettings cameraSettings;
 
     private Music fadingMusic;
     private float fadingMusicElapsedSeconds;
@@ -101,6 +108,7 @@ public class StarWarsGame extends Game {
     public void create() {
         keyBindings = KeyBindings.load();
         audioSettings = AudioSettingsStore.load().orElseGet(AudioSettings::new);
+        cameraSettings = CameraSettingsStore.load().orElseGet(CameraSettings::new);
         hangarAmbience = Gdx.audio.newMusic(Gdx.files.internal("audio/ambience_hangar.mp3"));
         hangarAmbience.setLooping(true);
         setScreen(new SplashScreen(this));
@@ -200,6 +208,21 @@ public class StarWarsGame extends Game {
      */
     public AudioSettings getAudioSettings() {
         return audioSettings;
+    }
+
+    /**
+     * Returns the player's live, shared camera preferences (design.md 4.1)
+     * — loaded once from the local camera-settings file in
+     * {@link #create()}. Held here rather than in {@link Client} for the
+     * same reason as the keybinds: a {@link Client} is built fresh for
+     * every match, and the player's chosen zoom level has to survive
+     * leaving one match and starting the next (it is mutated - and
+     * re-saved - in-match by the Zoom In/Zoom Out keybinds).
+     *
+     * @return the shared camera settings
+     */
+    public CameraSettings getCameraSettings() {
+        return cameraSettings;
     }
 
     /**
