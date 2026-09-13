@@ -34,6 +34,7 @@ import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.net.messages.XpGainedMessage;
 import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.PowerUpType;
@@ -79,7 +80,7 @@ class MessageRegistryTest {
             AsteroidType.class, AsteroidState.class, AsteroidState[].class,
             PowerUpType.class, PowerUpState.class, PowerUpState[].class,
             MineState.class, MineState[].class, MineDetonatedMessage.class,
-            ShipImpactMessage.class, PowerUpPickedUpMessage.class
+            ShipImpactMessage.class, PowerUpPickedUpMessage.class, XpGainedMessage.class
         };
 
         for (Class<?> messageClass : messageClasses) {
@@ -380,6 +381,14 @@ class MessageRegistryTest {
         PowerUpPickedUpMessage copy = roundTrip(original, PowerUpPickedUpMessage.class);
         assertEquals(22f, copy.getX());
         assertEquals(-6.5f, copy.getY());
+    }
+
+    @Test
+    void xpGainedMessageSurvivesRoundTrip() {
+        XpGainedMessage original = new XpGainedMessage(4, 160);
+        XpGainedMessage copy = roundTrip(original, XpGainedMessage.class);
+        assertEquals(4, copy.getPlayerId());
+        assertEquals(160, copy.getAmount());
     }
 
     private static <T> T roundTrip(T original, Class<T> type) {

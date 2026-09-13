@@ -32,6 +32,7 @@ import de.mkoehler.starwars.net.messages.UdpPongMessage;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.net.messages.XpGainedMessage;
 import de.mkoehler.starwars.sim.AsteroidType;
 import de.mkoehler.starwars.sim.PowerSystem;
 import de.mkoehler.starwars.sim.PowerUpType;
@@ -106,5 +107,6 @@ public final class MessageRegistry {
         kryo.register(MineDetonatedMessage.class);
         kryo.register(ShipImpactMessage.class);
         kryo.register(PowerUpPickedUpMessage.class);
+        kryo.register(XpGainedMessage.class);
     }
 }

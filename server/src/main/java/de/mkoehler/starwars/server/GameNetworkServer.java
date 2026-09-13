@@ -43,6 +43,7 @@ import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.UnlockShipRequest;
 import de.mkoehler.starwars.net.messages.UnlockShipResponse;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.net.messages.XpGainedMessage;
 import de.mkoehler.starwars.server.accounts.AccountStore;
 import de.mkoehler.starwars.server.accounts.AuthResult;
 import de.mkoehler.starwars.server.accounts.PlayerAccount;
@@ -1095,12 +1096,12 @@ public class GameNetworkServer extends NetworkServer {
     /**
      * Awards {@link KillXp} to the killer's account (design.md - kill XP),
      * if the kill is attributable to a specific player and both ships'
-     * types and the killer's login are still known - not expected to ever
-     * be missing in practice (a ship can only be destroyed by a hit, and
-     * both players are still fully tracked mid-tick even if one of them
-     * disconnects, since disconnects are themselves queued through
-     * {@link #pendingActions}), but this fails soft rather than crashing
-     * the tick loop if one of them somehow is.
+     * types are still known - not expected to ever be missing in practice
+     * (a ship can only be destroyed by a hit, and both players are still
+     * fully tracked mid-tick even if one of them disconnects, since
+     * disconnects are themselves queued through {@link #pendingActions}),
+     * but this fails soft rather than crashing the tick loop if one of
+     * them somehow is.
      *
      * @param victimPlayerId the destroyed ship's owning player id
      * @param killerPlayerId the id of whoever landed the fatal hit, or
@@ -1112,11 +1113,35 @@ public class GameNetworkServer extends NetworkServer {
         }
         ShipType victimShipType = shipTypeByPlayerId.get(victimPlayerId);
         ShipType killerShipType = shipTypeByPlayerId.get(killerPlayerId);
-        String killerLogin = loginByPlayerId.get(killerPlayerId);
-        if (victimShipType == null || killerShipType == null || killerLogin == null) {
+        if (victimShipType == null || killerShipType == null) {
             return;
         }
-        accountStore.addXp(killerLogin, KillXp.calculate(victimShipType, killerShipType));
+        awardXp(killerPlayerId, KillXp.calculate(victimShipType, killerShipType));
+    }
+
+    /**
+     * Credits {@code amount} XP to {@code playerId}'s account, if their
+     * login is still known, and - if they're still connected - notifies
+     * their own client via {@link XpGainedMessage} so it can show the
+     * generic floating "+N XP" text above their ship (design.md — floating
+     * XP text). The single funnel every XP-awarding event should go
+     * through, kill XP ({@link #awardKillXp}) included - any future XP
+     * source gets this same client-side feedback for free, with no further
+     * wire changes needed.
+     *
+     * @param playerId the player id to credit
+     * @param amount   the XP amount to award
+     */
+    private void awardXp(int playerId, int amount) {
+        String login = loginByPlayerId.get(playerId);
+        if (login == null) {
+            return;
+        }
+        accountStore.addXp(login, amount);
+        Connection connection = connectionsByPlayerId.get(playerId);
+        if (connection != null) {
+            connection.sendTCP(new XpGainedMessage(playerId, amount));
+        }
     }
 
     /**

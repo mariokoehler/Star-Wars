@@ -237,6 +237,13 @@ multiple hits land the same tick. A self-destruct leave (2.3) or an
 environmental death (wall/asteroid/mine) awards nothing to anyone.
 `core.sim.KillXp`, pure/tested.
 
+Every XP award (kill XP today; any future source later) goes through one
+server-side funnel, `GameNetworkServer.awardXp(playerId, amount)`: credits
+the account, then unicasts an `XpGainedMessage` (TCP, reliable) to just the
+earning player's own connection, which drives the floating "+N XP" text
+above their ship (4.3) — a new XP source only needs to call `awardXp`,
+nothing else to wire up client-side.
+
 ### 2.11 Scoreboard overlay
 
 Holding **TAB** shows every currently-connected player (not just those with
@@ -944,6 +951,20 @@ lighter/more legible for a small floating label, and the first text in
 this project needing neither baked art nor a `gdx-freetype` file. Reuses
 the existing `ScoreboardMessage`/`PlayerScoreEntry` broadcast for the name
 lookup — no new wire field.
+
+**Floating XP text** rises from the local player's own ship whenever they
+gain XP (2.10's addendum), reading e.g. "+ 160 XP" — same libGDX built-in
+default font as display names, deliberately, per the same "plainer/more
+legible for small floating text" reasoning, reused directly
+(`Client.displayNameFont`), just a different (gold) color. Triggered by
+`XpGainedMessage`, unicast to the earning player only — an unconfirmed
+default: shown only to whoever earned it, anchored above their own ship,
+never broadcast to other clients. `render.FloatingTextEffect` is generic on
+text/color/position, pooled the same way as the explosion effects just
+above, so any future one-off floating feedback (not just XP) can reuse it
+via `Client.spawnFloatingText` directly. Rises at a constant rate and fades
+out over its own fixed lifetime, detached from the ship the moment it
+spawns — untuned placeholders for both.
 
 **Texture atlas pipeline:** see CLAUDE.md's "Asset pipeline" section for
 the mechanics/gotchas. Packed atlases: `ships`, `projectiles`, `menu`,

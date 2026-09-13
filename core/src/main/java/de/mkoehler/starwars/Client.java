@@ -50,11 +50,13 @@ import de.mkoehler.starwars.net.messages.ShipState;
 import de.mkoehler.starwars.net.messages.SpawnRequest;
 import de.mkoehler.starwars.net.messages.TurretToggleMessage;
 import de.mkoehler.starwars.net.messages.WorldSnapshotMessage;
+import de.mkoehler.starwars.net.messages.XpGainedMessage;
 import de.mkoehler.starwars.render.ArenaBoundaryRenderer;
 import de.mkoehler.starwars.render.CameraFocus;
 import de.mkoehler.starwars.render.CameraSettings;
 import de.mkoehler.starwars.render.DamageSmokeEffect;
 import de.mkoehler.starwars.render.EngineAudioMath;
+import de.mkoehler.starwars.render.FloatingTextEffect;
 import de.mkoehler.starwars.render.GameAssets;
 import de.mkoehler.starwars.render.ParallaxBackground;
 import de.mkoehler.starwars.render.PlaceholderStarfield;
@@ -265,6 +267,13 @@ public class Client implements Screen {
     private static final float DISPLAY_NAME_VERTICAL_MARGIN_PIXELS = 12f;
     /** libGDX's built-in default font is fairly small (~15px cap height) - scaled up a bit for legibility at typical zoom, untuned. */
     private static final float DISPLAY_NAME_FONT_SCALE = 1.15f;
+
+    /**
+     * Floating "+N XP" text color (design.md — floating XP text) - a warm
+     * gold, the common "you gained something" convention, distinct from
+     * {@link #DISPLAY_NAME_COLOR}'s neutral white/gray - untuned.
+     */
+    private static final Color XP_GAINED_TEXT_COLOR = new Color(1f, 0.82f, 0.25f, 1f);
 
     /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
     private static final Vector2 TURRET_OFFSET = new Vector2();
@@ -596,6 +605,14 @@ public class Client implements Screen {
      * {@link #shipExplosionPool}.
      */
     private final List<PositionedOneShotEffect> mineExplosionPool = new ArrayList<>();
+    /**
+     * A small, self-growing pool of floating text effects (design.md —
+     * floating XP text), currently only ever triggered by
+     * {@link #onXpGained} - shared by any future one-off floating-text
+     * feedback via the generic {@link #spawnFloatingText} rather than tied
+     * to XP specifically.
+     */
+    private final List<FloatingTextEffect> floatingTextPool = new ArrayList<>();
 
     private World localWorld;
     private PhysicsSystem localPhysicsSystem;
@@ -889,6 +906,8 @@ public class Client implements Screen {
                     pendingUpdates.add(() -> onShipImpact(impact));
                 } else if (object instanceof PowerUpPickedUpMessage pickedUp) {
                     pendingUpdates.add(() -> onPowerUpPickedUp(pickedUp));
+                } else if (object instanceof XpGainedMessage gained) {
+                    pendingUpdates.add(() -> onXpGained(gained));
                 } else if (object instanceof LeaveMatchDeniedMessage) {
                     pendingUpdates.add(Client.this::onLeaveMatchDenied);
                 } else if (object instanceof ScoreboardMessage scoreboard) {
@@ -1100,6 +1119,81 @@ public class Client implements Screen {
         playPositionalSound(game.getAssets().get(GameAssets.POWERUP_PICKUP_SOUND, Sound.class),
             pickedUp.getX() * PhysicsConstants.PIXELS_PER_METER, pickedUp.getY() * PhysicsConstants.PIXELS_PER_METER,
             game.getAudioSettings().getEffectiveSoundEffectsVolume());
+    }
+
+    /**
+     * Handles an {@link XpGainedMessage} (design.md — floating XP text) by
+     * spawning a generic floating "+N XP" text just above the local
+     * player's own ship - the server only ever unicasts this message to
+     * the account that actually earned the XP (see
+     * {@code GameNetworkServer.awardXp}), so it's always about "me" here,
+     * never another visible ship.
+     *
+     * @param gained the XP-gained message
+     */
+    private void onXpGained(XpGainedMessage gained) {
+        float labelBottomY = myRenderScreenY + shipHeightPixels(myShipType) / 2f + DISPLAY_NAME_VERTICAL_MARGIN_PIXELS;
+        spawnFloatingText("+ " + gained.getAmount() + " XP", myRenderScreenX, labelBottomY, XP_GAINED_TEXT_COLOR);
+    }
+
+    /**
+     * Returns {@code type}'s current on-screen sprite height, in pixels -
+     * the same calculation {@link #drawLocalShip}/{@link #drawRemoteShips}
+     * each already do inline for their own width/height, factored out here
+     * since {@link #onXpGained} needs just the height, with no ship
+     * currently being drawn to piggyback the value off of.
+     *
+     * @param type the ship type
+     * @return that type's rendered sprite height, in pixels
+     */
+    private float shipHeightPixels(ShipType type) {
+        ShipStats stats = ShipStats.forType(type);
+        TextureRegion region = shipRegionsByType.get(type);
+        float screenScale = PhysicsConstants.PIXELS_PER_METER / stats.getPixelsPerMeter();
+        return region.getRegionHeight() * screenScale;
+    }
+
+    /**
+     * Triggers a floating text effect at a fixed world position (design.md
+     * — floating XP text), reusing a currently-idle {@link FloatingTextEffect}
+     * from {@link #floatingTextPool} or growing it by one if every existing
+     * entry is still mid-playback - same pooling pattern as
+     * {@link #triggerPooledExplosion}. Deliberately generic, not tied to XP
+     * at all, so any future one-off floating feedback can call this directly.
+     *
+     * @param text    the text to display
+     * @param xPixels the spawn position, in pixels
+     * @param yPixels the spawn position, in pixels
+     * @param color   the text's color
+     */
+    private void spawnFloatingText(String text, float xPixels, float yPixels, Color color) {
+        for (FloatingTextEffect entry : floatingTextPool) {
+            if (!entry.isPlaying()) {
+                entry.trigger(text, xPixels, yPixels, color);
+                return;
+            }
+        }
+        FloatingTextEffect entry = new FloatingTextEffect();
+        entry.trigger(text, xPixels, yPixels, color);
+        floatingTextPool.add(entry);
+    }
+
+    /**
+     * Updates and draws every {@link #floatingTextPool} entry (design.md —
+     * floating XP text) - called once per frame, same reasoning as
+     * {@link #updateAndDrawExplosions}. Reuses {@link #displayNameFont}/
+     * {@link #displayNameLayout} rather than a separate font instance - the
+     * user's own explicit ask ("the same more readable font" as display
+     * names), and harmless to share since draw calls happen sequentially,
+     * each setting its own color right before drawing.
+     *
+     * @param deltaTime time since the last frame, in seconds
+     */
+    private void updateAndDrawFloatingTexts(float deltaTime) {
+        for (FloatingTextEffect entry : floatingTextPool) {
+            entry.update(deltaTime);
+            entry.draw(batch, displayNameFont, displayNameLayout);
+        }
     }
 
     private void onLeaveMatchDenied() {
@@ -1633,6 +1727,7 @@ public class Client implements Screen {
         updateAndDrawExplosions(shipExplosionPool, deltaTime);
         updateAndDrawExplosions(mineExplosionPool, deltaTime);
         drawMissileLockReticle();
+        updateAndDrawFloatingTexts(deltaTime);
         batch.end();
 
         // Separate begin/end pair with the HUD's own screen-space camera - SpriteBatch doesn't
