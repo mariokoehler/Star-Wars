@@ -4,7 +4,9 @@ import com.badlogic.ashley.core.Component;
 
 /**
  * Associates a server-side ship entity with the id of the player it belongs
- * to (the owning KryoNet {@code Connection}'s id — see design.md 3.5).
+ * to — the owning KryoNet {@code Connection}'s id for a real player (see
+ * design.md 3.5), or a synthetic negative id for an NPC ship (design.md —
+ * NPC ships), which has no connection at all.
  */
 public class PlayerIdComponent implements Component {
 

@@ -9,6 +9,7 @@ import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.physics.box2d.Body;
 import de.mkoehler.starwars.sim.RadarDetection;
 import de.mkoehler.starwars.sim.ShipStats;
+import de.mkoehler.starwars.sim.TargetFinder;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.MissileLockComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
@@ -111,37 +112,30 @@ public class MissileLockSystem extends IteratingSystem {
 
     private boolean isWithinConeAndAlive(Entity target, float ownX, float ownY, float ownAngle,
                                           float coneRangeMeters, float coneHalfAngleDegrees) {
-        if (!liveShips.contains(target, true)) {
-            return false;
-        }
-        Body targetBody = bodyMapper.get(target).getBody();
-        return RadarDetection.isWithinCone(ownX, ownY, ownAngle,
-            targetBody.getPosition().x, targetBody.getPosition().y, coneRangeMeters, coneHalfAngleDegrees);
+        return TargetFinder.isStillValid(target, liveShips, this::candidateX, this::candidateY,
+            coneFilter(ownX, ownY, ownAngle, coneRangeMeters, coneHalfAngleDegrees));
     }
 
     private Entity findClosestInCone(int ownerPlayerId, float ownX, float ownY, float ownAngle,
                                       float coneRangeMeters, float coneHalfAngleDegrees) {
-        Entity closest = null;
-        float closestDistanceSq = Float.MAX_VALUE;
-        for (Entity candidate : liveShips) {
-            if (playerIdMapper.get(candidate).getPlayerId() == ownerPlayerId) {
-                continue; // never lock your own ship
-            }
-            Body candidateBody = bodyMapper.get(candidate).getBody();
-            float candidateX = candidateBody.getPosition().x;
-            float candidateY = candidateBody.getPosition().y;
-            if (!RadarDetection.isWithinCone(ownX, ownY, ownAngle, candidateX, candidateY,
-                coneRangeMeters, coneHalfAngleDegrees)) {
-                continue;
-            }
-            float dx = candidateX - ownX;
-            float dy = candidateY - ownY;
-            float distanceSq = dx * dx + dy * dy;
-            if (distanceSq < closestDistanceSq) {
-                closest = candidate;
-                closestDistanceSq = distanceSq;
-            }
-        }
-        return closest;
+        return TargetFinder.findClosest(liveShips, this::candidateOwnerPlayerId, this::candidateX, this::candidateY,
+            ownerPlayerId, ownX, ownY, coneFilter(ownX, ownY, ownAngle, coneRangeMeters, coneHalfAngleDegrees));
+    }
+
+    private static TargetFinder.SpatialFilter coneFilter(float ownX, float ownY, float ownAngle,
+                                                           float coneRangeMeters, float coneHalfAngleDegrees) {
+        return (x, y) -> RadarDetection.isWithinCone(ownX, ownY, ownAngle, x, y, coneRangeMeters, coneHalfAngleDegrees);
+    }
+
+    private int candidateOwnerPlayerId(Entity candidate) {
+        return playerIdMapper.get(candidate).getPlayerId();
+    }
+
+    private float candidateX(Entity candidate) {
+        return bodyMapper.get(candidate).getBody().getPosition().x;
+    }
+
+    private float candidateY(Entity candidate) {
+        return bodyMapper.get(candidate).getBody().getPosition().y;
     }
 }

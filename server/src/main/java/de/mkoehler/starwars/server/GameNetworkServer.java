@@ -5,6 +5,7 @@ import com.badlogic.ashley.core.Entity;
 import com.badlogic.ashley.core.Family;
 import com.badlogic.ashley.utils.ImmutableArray;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.ai.btree.BehaviorTree;
 import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
@@ -66,12 +67,14 @@ import de.mkoehler.starwars.sim.ShipTree;
 import de.mkoehler.starwars.sim.ShipType;
 import de.mkoehler.starwars.sim.ShipUnlocks;
 import de.mkoehler.starwars.sim.SpawnPointFinder;
+import de.mkoehler.starwars.sim.npc.NpcBrain;
 import de.mkoehler.starwars.sim.components.AsteroidComponent;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.MineComponent;
 import de.mkoehler.starwars.sim.components.MissileLockComponent;
 import de.mkoehler.starwars.sim.components.NetworkInputComponent;
+import de.mkoehler.starwars.sim.components.NpcControlledComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
 import de.mkoehler.starwars.sim.components.PlayerIdComponent;
 import de.mkoehler.starwars.sim.components.PowerBoostComponent;
@@ -85,6 +88,7 @@ import de.mkoehler.starwars.sim.components.TurretComponent;
 import de.mkoehler.starwars.sim.systems.CombatTimerSystem;
 import de.mkoehler.starwars.sim.systems.MissileGuidanceSystem;
 import de.mkoehler.starwars.sim.systems.MissileLockSystem;
+import de.mkoehler.starwars.sim.systems.NpcBrainSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
 import de.mkoehler.starwars.sim.systems.PowerBoostSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
@@ -183,6 +187,11 @@ public class GameNetworkServer extends NetworkServer {
      */
     private static final int MINE_ACTIVE_LIMIT = 10;
 
+    /** How many AI-controlled NPC ships stay active in the arena (design.md — NPC ships) - reduced to 1 for initial live testing. */
+    private static final int NPC_ACTIVE_COUNT = 1;
+    /** The ship type every NPC spawns as - no turret/missile lock to drive, so the brain only needs to fly and fire the main gun (design.md — NPC ships). */
+    private static final ShipType NPC_SHIP_TYPE = ShipType.TIEFIGHTER;
+
     private final World world = new World(new Vector2(0, 0), true);
     // Kept for identity comparison in the ContactListener below - a ship-vs-boundary contact is
     // recognized by "the other body is this exact reference", not by re-checking filter bits.
@@ -205,6 +214,7 @@ public class GameNetworkServer extends NetworkServer {
     private final MissileLockSystem missileLockSystem = new MissileLockSystem(engine);
     private final MissileGuidanceSystem missileGuidanceSystem = new MissileGuidanceSystem(engine);
     private final PowerBoostSystem powerBoostSystem = new PowerBoostSystem();
+    private final NpcBrainSystem npcBrainSystem = new NpcBrainSystem(engine);
 
     private final Map<Integer, Entity> shipsByPlayerId = new HashMap<>();
     private final Map<Integer, Connection> connectionsByPlayerId = new HashMap<>();
@@ -214,6 +224,16 @@ public class GameNetworkServer extends NetworkServer {
     // than a playerId.
     private final Map<Integer, String> loginByPlayerId = new HashMap<>();
     private final Map<Integer, Float> respawnTimers = new HashMap<>();
+    // Synthetic ids for NPC ships (design.md - NPC ships), counting down from a value nothing
+    // else uses as a sentinel - KryoNet connection ids are always positive, but -1 specifically is
+    // already ProjectileComponent#NO_TRACKED_TARGET/ShipState#NO_MISSILE_LOCK_TARGET, so an NPC
+    // id of exactly -1 would be misread as "no lock-on target" by every client. Never registered
+    // in connectionsByPlayerId/loginByPlayerId - that omission alone is what keeps an NPC from
+    // ever gaining XP, appearing on the scoreboard, or receiving its own personalized snapshot.
+    private final AtomicInteger nextNpcId = new AtomicInteger(-1000);
+    // Every id ever assigned to an NPC, for the one spot (respawnShip) that needs to know "is this
+    // playerId an NPC" without an Entity/NpcControlledComponent in hand yet.
+    private final Set<Integer> npcPlayerIds = new HashSet<>();
     private final List<HitEvent> pendingHits = new ArrayList<>();
     private final List<EnvironmentalHitEvent> pendingEnvironmentalHits = new ArrayList<>();
     // A projectile can register more than one contact event in a single tick (e.g. it also hit a
@@ -295,6 +315,7 @@ public class GameNetworkServer extends NetworkServer {
         engine.addSystem(missileLockSystem);
         engine.addSystem(missileGuidanceSystem);
         engine.addSystem(powerBoostSystem);
+        engine.addSystem(npcBrainSystem);
 
         // Without the isOwnShip exclusion below, a freshly-fired projectile would generate a real
         // Box2D collision against its own shooter's ship the instant it spawns (previously spawned
@@ -363,6 +384,15 @@ public class GameNetworkServer extends NetworkServer {
             public void postSolve(Contact contact, ContactImpulse impulse) {
             }
         });
+
+        // A fixed, self-sustaining population, filled once here rather than topped up per-tick
+        // like tickAsteroids()/tickPowerUps() - unlike those, an NPC keeps the same synthetic
+        // playerId for its whole server lifetime, and the existing generic death/respawn
+        // machinery (tickRespawns/respawnShip) already keeps that id populated forever once it
+        // first spawns (design.md - NPC ships).
+        for (int i = 0; i < NPC_ACTIVE_COUNT; i++) {
+            spawnNpc(NPC_SHIP_TYPE);
+        }
     }
 
     /**
@@ -403,6 +433,14 @@ public class GameNetworkServer extends NetworkServer {
         while ((action = pendingActions.poll()) != null) {
             action.run();
         }
+
+        // Decides every NPC ship's thrust/turn/fire input for this tick (design.md - NPC ships) -
+        // before this tick's physics stepping, not after, so a freshly-decided input actually
+        // takes effect for it, same reasoning as reapplying real players' held input below. Most
+        // ticks this is a no-op for most NPCs (each one only re-decides every
+        // NpcBrainSystem#BRAIN_TICK_INTERVAL_TICKS ticks) - its NetworkInputComponent otherwise
+        // just keeps holding whatever it last decided, exactly like a human holding a key.
+        npcBrainSystem.update(deltaTime);
 
         // Reapply every ship's current input before each individual physics step, not once
         // per tick - the server ticks at 30Hz but physics steps at a fixed 60Hz, so most
@@ -1224,6 +1262,12 @@ public class GameNetworkServer extends NetworkServer {
         // recorded once at spawn-request time (see handleSpawnRequest), just read back here.
         ShipType shipType = shipTypeByPlayerId.get(playerId);
         spawnShip(playerId, spawnPoint.x, spawnPoint.y, shipType);
+        // spawnShip() always builds a brand-new entity, so an NPC's NpcControlledComponent (and
+        // the behavior tree/blackboard it holds, bound to the old, now-destroyed entity) doesn't
+        // carry over on its own - re-tag with a fresh one (design.md - NPC ships).
+        if (npcPlayerIds.contains(playerId)) {
+            tagAsNpc(playerId);
+        }
         Connection connection = connectionsByPlayerId.get(playerId);
         if (connection != null) {
             connection.sendTCP(new ShipSpawnedMessage(playerId, spawnPoint.x, spawnPoint.y, shipType));
@@ -1555,6 +1599,45 @@ public class GameNetworkServer extends NetworkServer {
         shipsByPlayerId.put(playerId, ship);
     }
 
+    /**
+     * Spawns one new AI-controlled NPC ship (design.md — NPC ships):
+     * assigns it a fresh synthetic (negative) player id, picks a spawn
+     * point the same way a real player's does, and tags the resulting
+     * entity with a fresh behavior tree. Deliberately bypasses
+     * {@link #handleHandshake}/{@link #handleSpawnRequest} entirely - an
+     * NPC is never registered in {@link #connectionsByPlayerId}/
+     * {@link #loginByPlayerId}, which is what structurally keeps it from
+     * ever gaining XP, appearing on the scoreboard, or receiving its own
+     * personalized snapshot, and there's no account/unlock gate to check
+     * for something with no account.
+     *
+     * @param shipType the ship type to spawn this NPC as
+     */
+    private void spawnNpc(ShipType shipType) {
+        int npcId = nextNpcId.getAndDecrement();
+        npcPlayerIds.add(npcId);
+        Vector2 spawnPoint = findSpawnPoint();
+        shipTypeByPlayerId.put(npcId, shipType);
+        spawnShip(npcId, spawnPoint.x, spawnPoint.y, shipType);
+        tagAsNpc(npcId);
+    }
+
+    /**
+     * Attaches a fresh {@link NpcControlledComponent} (behavior tree +
+     * blackboard) to the given NPC's currently-alive ship entity — called
+     * once at {@link #spawnNpc} time and again every respawn (see
+     * {@link #respawnShip}), since a respawn's new entity needs its own
+     * tree bound to it.
+     *
+     * @param npcId the NPC's synthetic player id, already present in {@link #shipsByPlayerId}
+     */
+    private void tagAsNpc(int npcId) {
+        Entity ship = shipsByPlayerId.get(npcId);
+        BehaviorTree<NpcBrain> tree = npcBrainSystem.createBehaviorTree(ship);
+        int tickPhaseOffset = Math.floorMod(npcId, NpcBrainSystem.BRAIN_TICK_INTERVAL_TICKS);
+        ship.add(new NpcControlledComponent(tree, tickPhaseOffset));
+    }
+
     private void applyInput(int playerId, PlayerInputMessage input) {
         Entity ship = shipsByPlayerId.get(playerId);
         if (ship == null) {
@@ -1747,13 +1830,14 @@ public class GameNetworkServer extends NetworkServer {
             boolean targetedByMissileLockAcquired = targetedByAcquiredMissileLock.getOrDefault(ship, false);
             boolean thrusting = ship.getComponent(NetworkInputComponent.class).isThrustForward();
             float powerGenerationMultiplier = ship.getComponent(PowerBoostComponent.class).getMultiplier();
+            boolean isNpc = ship.getComponent(NpcControlledComponent.class) != null;
             shipStatesByPlayerId.put(entry.getKey(), new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
                 hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType,
                 turretAimAngles(ship), radar.getPulseCooldownRemaining(),
                 missileLockTargetPlayerId, missileLockAcquired,
-                targetedByMissileLock, targetedByMissileLockAcquired, thrusting, powerGenerationMultiplier));
+                targetedByMissileLock, targetedByMissileLockAcquired, thrusting, powerGenerationMultiplier, isNpc));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(

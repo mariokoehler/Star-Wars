@@ -26,6 +26,8 @@
     <maven.compiler.release>25</maven.compiler.release>
     <appName>StarWars</appName>
     <gdxVersion>1.14.2</gdxVersion>
+    <!-- gdx-ai versions independently of core libGDX - not tied to gdxVersion. -->
+    <gdxAiVersion>1.8.2</gdxAiVersion>
     <ashleyVersion>1.7.4</ashleyVersion>
     <!-- Forces LWJGL3 to this version, to avoid warnings on Java 25 and up. -->
     <lwjgl3Version>3.4.3</lwjgl3Version>

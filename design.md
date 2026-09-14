@@ -489,6 +489,74 @@ no dead reckoning or local-prediction mirror at all — it never moves.
 `MineDetonatedMessage` (x/y only) triggers a dedicated explosion pool
 reusing `GameAssets.EXPLOSION_PARTICLE`/`EXPLOSION_SOUND`.
 
+### 2.20 NPC ships
+
+AI-controlled enemy ships, driven by a [gdx-ai](https://github.com/libgdx/gdx-ai)
+behavior tree (`btree` module only — `steer`/`pfa`/`fma`/`msg`/`sched`/`fsm`
+and the `.tree` text DSL are all out of scope for v1). A fixed pool
+(`GameNetworkServer.NPC_ACTIVE_COUNT`, currently 1 for initial live
+testing — 3 was the original proposed default), all spawned as
+`ShipType.TIEFIGHTER` (unconfirmed default — no turret, no missile lock, so
+the brain only ever needs to fly and fire the main gun), filled once at
+server startup, never scaling with connected player count.
+
+**Identity:** a synthetic negative `playerId`, counting down from -1000 (not
+-1 — that's already `ProjectileComponent.NO_TRACKED_TARGET`/
+`ShipState.NO_MISSILE_LOCK_TARGET`). An NPC is **never** registered in
+`connectionsByPlayerId`/`loginByPlayerId` — that omission alone is what
+structurally keeps it from ever gaining XP, appearing on the scoreboard, or
+receiving its own personalized snapshot; killing one still awards the killer
+normal kill XP (2.10), since that only depends on both ships' `ShipType`
+being known, not on the victim having an account. Death/respawn reuses the
+existing generic machinery unchanged (`handleShipDestroyed`/`tickRespawns`/
+`respawnShip`) — the one addition is that a respawn re-tags the freshly
+created entity with a new `NpcControlledComponent`, since a respawn always
+builds a brand-new entity and the old one's behavior tree/blackboard would
+otherwise point at a destroyed ship.
+
+**Behavior tree** (built directly in Java per NPC, not via the `.tree` DSL):
+
+```
+Selector (root)
+├── Sequence "engage"
+│   ├── HasValidTargetCondition       (closest live enemy within DETECTION_RANGE_METERS)
+│   ├── Selector "act-on-target"
+│   │   ├── Sequence "fire"
+│   │   │   ├── IsAlignedForShotCondition  (heading vs. lead angle, ≤5°)
+│   │   │   └── FireTask                    (sets firing=true)
+│   │   └── PursueTargetTask                 (turns toward + thrusts at the lead angle)
+└── IdleOrWanderTask                          (fallback: gentle turning circle, no target found)
+```
+
+Every leaf task always returns `SUCCEEDED`/`FAILED`, never `RUNNING`, so
+each brain tick (`NpcBrainSystem`, every 6 server ticks / ~200ms,
+staggered per-NPC via `NpcControlledComponent.getTickPhaseOffset()`) is a
+complete, fresh top-to-bottom decision, not an incremental one. Between an
+NPC's own brain ticks its `NetworkInputComponent` is simply left alone,
+exactly like a human player holding a key between input packets.
+`HasValidTargetCondition` re-scans for the closest enemy every tick rather
+than validating a sticky target — simpler, and at this tick cadence
+effectively equivalent. Detection range is deliberately larger than the
+arena's diagonal (`NpcBrainSystem.DETECTION_RANGE_METERS`, unrestricted in
+practice) — an NPC isn't limited by a human's own radar-cone-gated
+self-detection, though it stays exactly as radar-gated as anything else
+*from a real player's point of view*. No artificial aim inaccuracy for v1 —
+same lead-angle solve turrets use (`TurretAiming.computeLeadAngle`, reused
+as-is against the ship's own body angle instead of a turret mount's aim
+angle). `TargetFinder` (new pure-logic class, unit-tested) was extracted
+from what had been separately duplicated "closest live enemy" scans in
+`TurretSystem`/`MissileLockSystem`, now a third consumer.
+
+**Client:** every NPC renders through the exact same `RemoteShip`/
+`WorldSnapshotMessage` path as a real player's ship — no new rendering
+path. `ShipState.isNpc()` (a real wire-shape change — rebuild/restart
+client and server together) is the only signal a client has to tell an NPC
+apart from a real player whose name just hasn't synced yet. An NPC gets a
+distinct hostile tint (`Client.NPC_SHIP_TINT`) instead of the usual
+`OTHER_SHIP_TINT`, and a fixed display-name fallback built from
+`ShipType.getDisplayName()` (e.g. "TIE Fighter") in place of the normal
+scoreboard-driven name lookup, which an NPC's synthetic id never appears in.
+
 ## 3. Architecture
 
 ### 3.1 High-level shape
@@ -1171,3 +1239,18 @@ Filled — 23 complete user-authored quote+image cards
 - **Bank-angle ship rendering** (the full 41-frame sequence per ship,
   4.3) — deliberately deferred post-v1 until attachment-point tracking
   across bank frames can be solved properly.
+- **NPC ships (2.20) count as "enemies" for asteroid/power-up/mine spawn
+  placement**, since all three reuse the same `allShipPositions()` that ship
+  respawn placement does (correct there — you don't want to respawn on top
+  of a patrolling NPC either). With the default 3-NPC pool, that's 3
+  permanent 100m `MIN_ENEMY_DISTANCE_METERS` no-spawn radii carved out of the
+  460×460m usable arena, on top of however many real players are also
+  connected — not evaluated for how much it affects power-up/mine spawn
+  retry frequency in practice. If it turns out to be a problem, the fix is a
+  separate "real players only" position list for those three call sites,
+  not a change to ship respawn's own use of `allShipPositions()`.
+- **`PursueTargetTask` (2.20) steers by lead angle, not bearing** — at long
+  range against a fast-moving target the two diverge substantially, so a
+  distant NPC can visibly fly toward empty space rather than toward its
+  actual target. A range-gated switch (bearing outside effective weapon
+  range, lead once closer) would fix this; not built for v1.

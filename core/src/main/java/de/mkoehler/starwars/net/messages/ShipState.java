@@ -76,6 +76,13 @@ import de.mkoehler.starwars.sim.ShipType;
  * server's authoritative multiplier for the boost's whole duration, the same
  * "predicted and authoritative physics must apply identical rules" reasoning
  * every other locally-mirrored multiplier in this project already follows.
+ * <p>
+ * {@link #isNpc()} (design.md — NPC ships) is the only signal a client has
+ * to tell an AI-controlled ship apart from a real player's — an NPC's
+ * synthetic player id is never present in the scoreboard/name lookup a real
+ * player's is, so without this flag a client can't distinguish "this
+ * player's name just hasn't synced yet" from "this ship has no name because
+ * it isn't a player at all."
  */
 public class ShipState {
 
@@ -105,6 +112,7 @@ public class ShipState {
     private boolean targetedByMissileLockAcquired;
     private boolean thrusting;
     private float powerGenerationMultiplier;
+    private boolean isNpc;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -140,6 +148,7 @@ public class ShipState {
      * @param thrusting                   whether this ship is currently holding its forward-thrust input
      * @param powerGenerationMultiplier   this ship's current power-generation multiplier ({@code 1f}
      *                                    normally, {@code 2f} while a BOOST power-up is active)
+     * @param isNpc                        whether this ship is AI-controlled rather than a real player's
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
@@ -147,7 +156,7 @@ public class ShipState {
                       ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining,
                       int missileLockTargetPlayerId, boolean missileLockAcquired,
                       boolean targetedByMissileLock, boolean targetedByMissileLockAcquired,
-                      boolean thrusting, float powerGenerationMultiplier) {
+                      boolean thrusting, float powerGenerationMultiplier, boolean isNpc) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -168,6 +177,7 @@ public class ShipState {
         this.targetedByMissileLockAcquired = targetedByMissileLockAcquired;
         this.thrusting = thrusting;
         this.powerGenerationMultiplier = powerGenerationMultiplier;
+        this.isNpc = isNpc;
     }
 
     /**
@@ -355,5 +365,15 @@ public class ShipState {
      */
     public float getPowerGenerationMultiplier() {
         return powerGenerationMultiplier;
+    }
+
+    /**
+     * Returns whether this ship is AI-controlled (design.md — NPC ships)
+     * rather than belonging to a real, connected player.
+     *
+     * @return {@code true} if this ship is an NPC
+     */
+    public boolean isNpc() {
+        return isNpc;
     }
 }

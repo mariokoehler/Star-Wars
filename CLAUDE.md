@@ -34,7 +34,8 @@ visible enemy) with a player-chosen, persisted zoom level on top of the
 existing speed-linked zoom, a
 bounded 500×500m arena with wall-impact damage and real spawn points,
 asteroids, power-ups, mines (spawned only via a BOMB power-up pickup),
-impact/pickup sounds, and a hangar-ambience music loop. Tagged releases use
+impact/pickup sounds, a hangar-ambience music loop, and AI-controlled NPC
+ships (gdx-ai behavior trees, design.md 2.20). Tagged releases use
 jgitver-computed versions from git tags (currently `v0.0.8`).
 
 **Known standing issue, unresolved:** an intermittent, large (0–25s),
@@ -91,6 +92,12 @@ editor).
   time a module starts using a new native-backed libGDX piece (e.g. the
   headless `server` needed `gdx-platform` for basics *and*
   `gdx-box2d-platform` once it started using Box2D directly).
+- **Not every libGDX extension needs a `*-platform natives-desktop`
+  dependency** — `gdx-ai` (behavior trees, design.md 2.20) is pure Java with
+  no native components, unlike `gdx-box2d`/`gdx-freetype`. It also versions
+  independently of core libGDX (own `gdxAiVersion` property, not reusing
+  `gdxVersion`) — check a new extension's own release notes/Maven Central
+  page rather than assuming it tracks the same version scheme.
 - Force a `dependencyManagement` LWJGL version bump per-classifier — Maven's
   match key includes the classifier, one unclassified entry doesn't
   override the classified variants too.
@@ -127,6 +134,25 @@ editor).
 
 ## Networking / Box2D patterns
 
+- **`engine.addSystem(...)` only wires up a system's `Family`-based entity
+  tracking — it does not make anything call that system's `update()`.**
+  `GameNetworkServer.tick()` never calls `engine.update(...)`; every system
+  is `addSystem`'d once in the constructor (so `IteratingSystem`'s internal
+  entity list stays current) and then has its own `update(deltaTime)`
+  invoked explicitly, in a specific hand-chosen order, directly from
+  `tick()`. A new system needs both steps — `addSystem` alone leaves it
+  permanently idle, and calling `update()` without ever having called
+  `addSystem` leaves an `IteratingSystem` iterating an empty/stale entity
+  list.
+- **A synthetic id scheme must check for collisions against every existing
+  sentinel value already meaningful on the wire, not just against real ids.**
+  KryoNet connection ids are always positive, but a naive "count down from
+  -1" NPC id scheme (design.md 2.20) would collide with `-1` specifically,
+  already `ProjectileComponent.NO_TRACKED_TARGET`/
+  `ShipState.NO_MISSILE_LOCK_TARGET` — an NPC with id -1 would make every
+  client misread "a missile locked onto/tracking this NPC" as "an ordinary,
+  non-tracking blaster bolt." Start any new synthetic id counter well clear
+  of small values near zero.
 - **Cross-thread rule, both ends:** KryoNet invokes connection/message
   callbacks on its own network thread, never the render/tick thread. A
   network callback only ever enqueues a `Runnable` onto a

@@ -10,6 +10,7 @@ import com.badlogic.gdx.math.Vector2;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.World;
 import de.mkoehler.starwars.sim.ProjectileFactory;
+import de.mkoehler.starwars.sim.TargetFinder;
 import de.mkoehler.starwars.sim.TurretAiming;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
@@ -150,31 +151,24 @@ public class TurretSystem extends IteratingSystem {
     }
 
     private boolean isValidTarget(Entity target, float turretX, float turretY, float scanRangeMeters) {
-        if (!liveShips.contains(target, true)) {
-            return false;
-        }
-        Body targetBody = bodyMapper.get(target).getBody();
-        float dx = targetBody.getPosition().x - turretX;
-        float dy = targetBody.getPosition().y - turretY;
-        return dx * dx + dy * dy <= scanRangeMeters * scanRangeMeters;
+        return TargetFinder.isStillValid(target, liveShips, this::candidateX, this::candidateY,
+            TargetFinder.withinRange(turretX, turretY, scanRangeMeters));
     }
 
     private Entity findClosestTarget(int ownerPlayerId, float turretX, float turretY, float scanRangeMeters) {
-        Entity closest = null;
-        float closestDistanceSq = scanRangeMeters * scanRangeMeters;
-        for (Entity candidate : liveShips) {
-            if (playerIdMapper.get(candidate).getPlayerId() == ownerPlayerId) {
-                continue; // never target your own ship
-            }
-            Body candidateBody = bodyMapper.get(candidate).getBody();
-            float dx = candidateBody.getPosition().x - turretX;
-            float dy = candidateBody.getPosition().y - turretY;
-            float distanceSq = dx * dx + dy * dy;
-            if (distanceSq <= closestDistanceSq) {
-                closest = candidate;
-                closestDistanceSq = distanceSq;
-            }
-        }
-        return closest;
+        return TargetFinder.findClosest(liveShips, this::candidateOwnerPlayerId, this::candidateX, this::candidateY,
+            ownerPlayerId, turretX, turretY, TargetFinder.withinRange(turretX, turretY, scanRangeMeters));
+    }
+
+    private int candidateOwnerPlayerId(Entity candidate) {
+        return playerIdMapper.get(candidate).getPlayerId();
+    }
+
+    private float candidateX(Entity candidate) {
+        return bodyMapper.get(candidate).getBody().getPosition().x;
+    }
+
+    private float candidateY(Entity candidate) {
+        return bodyMapper.get(candidate).getBody().getPosition().y;
     }
 }

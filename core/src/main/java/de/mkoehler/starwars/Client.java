@@ -260,6 +260,8 @@ public class Client implements Screen {
     private static final float RECONCILE_SOFT_BLEND = 0.2f;
 
     private static final Color OTHER_SHIP_TINT = new Color(0.6f, 0.85f, 1f, 1f);
+    /** Tint for an AI-controlled NPC ship (design.md — NPC ships) - a hostile red-orange, distinct from another real player's {@link #OTHER_SHIP_TINT}, untuned. */
+    private static final Color NPC_SHIP_TINT = new Color(1f, 0.5f, 0.4f, 1f);
 
     /** Display-name label color (design.md — display names) - a plain, readable light gray/white, untuned. */
     private static final Color DISPLAY_NAME_COLOR = new Color(0.9f, 0.92f, 0.95f, 1f);
@@ -1307,7 +1309,7 @@ public class Client implements Screen {
                 // or the instant it pulses, doesn't spuriously fire the wave effect the moment it's
                 // first detected - see the edge-detection comment below for why that would otherwise
                 // look identical to a real trigger.
-                return new RemoteShip(x, y, state.getAngle(), state.getShipType(),
+                return new RemoteShip(x, y, state.getAngle(), state.getShipType(), state.isNpc(),
                     buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats),
                     createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE), state.getRadarPulseCooldownRemaining(),
                     engineSound, engineSoundId);
@@ -2186,9 +2188,11 @@ public class Client implements Screen {
     }
 
     private void drawRemoteShips(float deltaTime) {
-        batch.setColor(OTHER_SHIP_TINT);
         for (Map.Entry<Integer, RemoteShip> entry : ships.entrySet()) {
             RemoteShip ship = entry.getValue();
+            // Per-ship, not once before the loop (design.md — NPC ships) - an NPC gets a distinct
+            // hostile tint so it reads as a threat, not just another player's ship.
+            batch.setColor(ship.isNpc ? NPC_SHIP_TINT : OTHER_SHIP_TINT);
             ShipStats stats = ShipStats.forType(ship.shipType);
             TextureRegion region = shipRegionsByType.get(ship.shipType);
             float screenScale = PhysicsConstants.PIXELS_PER_METER / stats.getPixelsPerMeter();
@@ -2221,7 +2225,8 @@ public class Client implements Screen {
             ship.radarPulseEffect.update(ship.renderX, ship.renderY, deltaTime);
             ship.radarPulseEffect.draw(batch);
             if (showDisplayNames) {
-                drawDisplayName(entry.getKey(), ship.renderX, ship.renderY + heightPixels / 2f + DISPLAY_NAME_VERTICAL_MARGIN_PIXELS);
+                drawDisplayName(entry.getKey(), ship.shipType, ship.isNpc,
+                    ship.renderX, ship.renderY + heightPixels / 2f + DISPLAY_NAME_VERTICAL_MARGIN_PIXELS);
             }
         }
         batch.setColor(Color.WHITE);
@@ -2232,18 +2237,26 @@ public class Client implements Screen {
      * {@code labelBottomY} (design.md — display names) - a no-op if that
      * player's name isn't known yet ({@link #scoreboardEntries} hasn't
      * included them in a broadcast yet, e.g. the first second after they
-     * connect). Never drawn for the local player - {@link #drawRemoteShips}
+     * connect) <em>and</em> this isn't an NPC (design.md — NPC ships): an
+     * NPC's synthetic id is never present in {@link #scoreboardEntries} at
+     * all, so it always falls back to a fixed label built from its ship
+     * type instead. Never drawn for the local player - {@link #drawRemoteShips}
      * is this method's only caller, and the local player is never present
      * in {@link #ships} to begin with (design.md 2.14/3.5).
      *
      * @param playerId    the ship's owning player id, looked up in {@link #scoreboardEntries}
+     * @param shipType    that ship's type, for the NPC fallback label
+     * @param isNpc       whether this ship is AI-controlled
      * @param centerX     screen X to center the label on
      * @param labelBottomY the label text's own bottom edge, in screen coordinates
      */
-    private void drawDisplayName(int playerId, float centerX, float labelBottomY) {
+    private void drawDisplayName(int playerId, ShipType shipType, boolean isNpc, float centerX, float labelBottomY) {
         String displayName = findDisplayName(playerId);
         if (displayName == null) {
-            return;
+            if (!isNpc) {
+                return;
+            }
+            displayName = shipType.getDisplayName();
         }
         displayNameLayout.setText(displayNameFont, displayName);
         displayNameFont.setColor(DISPLAY_NAME_COLOR);
@@ -2256,6 +2269,9 @@ public class Client implements Screen {
      * {@link #scoreboardEntries} broadcast (design.md 2.11) - the only
      * place any client learns another player's display name at all, since
      * neither {@code ShipState} nor any other per-tick message carries it.
+     * Always {@code null} for an NPC (design.md — NPC ships), whose
+     * synthetic id never appears in a scoreboard broadcast at all - see
+     * {@link #drawDisplayName}'s fallback for that case.
      *
      * @param playerId the player id to look up
      * @return that player's display name, or {@code null} if not yet known
@@ -3208,6 +3224,8 @@ public class Client implements Screen {
      */
     private static final class RemoteShip {
         final ShipType shipType;
+        /** Whether this ship is AI-controlled rather than a real, connected player's (design.md — NPC ships). */
+        final boolean isNpc;
         float baseX;
         float baseY;
         float baseAngle;
@@ -3249,11 +3267,12 @@ public class Client implements Screen {
         /** This ship's own engine-loop volume fraction, eased toward 0/1 by {@link #updateRemoteEngineSounds} - see {@link EngineAudioMath#approachFraction}. */
         float engineVolumeFraction;
 
-        RemoteShip(float x, float y, float angle, ShipType shipType, List<EngineThruster> thrusters,
+        RemoteShip(float x, float y, float angle, ShipType shipType, boolean isNpc, List<EngineThruster> thrusters,
                    List<ShipLight> lights, List<DamageSmokePoint> damageSmoke,
                    OneShotParticleEffect radarPulseEffect, float radarPulseCooldownRemaining,
                    Sound engineSound, long engineSoundId) {
             this.shipType = shipType;
+            this.isNpc = isNpc;
             this.thrusters = thrusters;
             this.lights = lights;
             this.damageSmoke = damageSmoke;

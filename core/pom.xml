@@ -40,6 +40,14 @@
       <version>${ashleyVersion}</version>
     </dependency>
     <dependency>
+      <!-- Behavior trees for NPC ship AI (design.md - NPC ships). Pure Java, no native
+           components, so unlike gdx-box2d/gdx-freetype it needs no *-platform natives-desktop
+           dependency anywhere. Only the btree module is used - see NpcBrainSystem. -->
+      <groupId>com.badlogicgames.gdx</groupId>
+      <artifactId>gdx-ai</artifactId>
+      <version>${gdxAiVersion}</version>
+    </dependency>
+    <dependency>
       <groupId>com.github.crykn</groupId>
       <artifactId>kryonet</artifactId>
     </dependency>
