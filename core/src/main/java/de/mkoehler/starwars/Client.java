@@ -1801,13 +1801,20 @@ public class Client implements Screen {
             asteroidPositionsMeters.add(new Vector2(
                 asteroid.renderX / PhysicsConstants.PIXELS_PER_METER, asteroid.renderY / PhysicsConstants.PIXELS_PER_METER));
         }
+        // Power-ups (design.md — power-ups' radar addendum): same "broadcast unfiltered, no
+        // server-side radar filtering to mirror" reasoning as asteroids above.
+        List<Vector2> powerUpPositionsMeters = new ArrayList<>(powerUps.size());
+        for (RemotePowerUp powerUp : powerUps.values()) {
+            powerUpPositionsMeters.add(new Vector2(
+                powerUp.renderX / PhysicsConstants.PIXELS_PER_METER, powerUp.renderY / PhysicsConstants.PIXELS_PER_METER));
+        }
         // Top-right corner, not part of the bottom-left status/power row (design.md 2.14) - the
         // first play-test found it too small/cramped down there to actually read at a glance.
         float radarX = Gdx.graphics.getWidth() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
         float radarY = Gdx.graphics.getHeight() - HUD_RADAR_SIZE - HUD_RADAR_MARGIN;
         radarHud.render(batch, ShipStats.forType(myShipType), radarX, radarY, HUD_RADAR_SIZE,
             myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters,
-            asteroidPositionsMeters, myRadarPulseCooldownRemaining);
+            asteroidPositionsMeters, powerUpPositionsMeters, myRadarPulseCooldownRemaining);
     }
 
     /**

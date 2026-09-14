@@ -23,7 +23,9 @@ import java.util.Optional;
  * three range rings, a forward-facing cone overlay that <em>does</em> rotate
  * with the observer, one marker per currently-known contact (a plain
  * dot in range, a chevron pinned to the scope's edge for a pulse-revealed
- * contact beyond the observer's own equipment), and a pulse-cooldown
+ * contact beyond the observer's own equipment) — asteroids and power-ups
+ * draw the same way, unfiltered and tinted (blue/green respectively) to
+ * read as "environmental," not "enemy" — and a pulse-cooldown
  * indicator LED ({@link #drawIndicator}, added 2026-09-09) that's
  * independent of the scope geometry entirely.
  * <p>
@@ -120,6 +122,15 @@ public class RadarHud implements Disposable {
      * green/red) — reads as "environmental object," not "enemy."
      */
     private static final Color ASTEROID_BLIP_COLOR = new Color(0.3f, 0.55f, 1f, 1f);
+    /**
+     * Power-up blip tint (design.md — power-ups' radar addendum) — a clear
+     * green, distinct from {@link #ASTEROID_BLIP_COLOR} and every other
+     * color already meaningful on this widget. Deliberately visible (not
+     * radar-filtered, same as asteroids) — letting players see power-ups
+     * draws everyone toward the same handful of spots, which in practice
+     * makes it easier to find a fight, not just loot.
+     */
+    private static final Color POWERUP_BLIP_COLOR = new Color(0.35f, 1f, 0.45f, 1f);
 
     private static final int COORDS_FONT_SIZE_PX = 14;
     /** Same live-text color convention as {@link ScoreboardHud}'s rows. */
@@ -208,6 +219,10 @@ public class RadarHud implements Disposable {
      *                                shown" treatment the boundary lines already get; drawn as a
      *                                blue-tinted blip ({@link #ASTEROID_BLIP_COLOR}) rather than a
      *                                ship contact's own native color
+     * @param powerUpPositionsMeters every currently-active power-up's world position, in meters
+     *                               (design.md — power-ups' radar addendum) — same unfiltered
+     *                               broadcast/range-clip treatment as {@code asteroidPositionsMeters},
+     *                               drawn as a green-tinted blip ({@link #POWERUP_BLIP_COLOR})
      * @param pulseCooldownRemainingSeconds the observer's own active-pulse
      *                                       cooldown ({@code ShipState#getRadarPulseCooldownRemaining()}),
      *                                       {@code <= 0} meaning ready — drives the indicator LED
@@ -217,7 +232,7 @@ public class RadarHud implements Disposable {
     public void render(SpriteBatch batch, ShipStats stats, float x, float y, float size,
                         float observerXMeters, float observerYMeters, float observerAngleRadians,
                         List<Vector2> contactPositionsMeters, List<Vector2> asteroidPositionsMeters,
-                        float pulseCooldownRemainingSeconds) {
+                        List<Vector2> powerUpPositionsMeters, float pulseCooldownRemainingSeconds) {
         batch.draw(background, x, y, size, size);
         boolean pulseAvailable = stats.isRadarPulseEnabled() && pulseCooldownRemainingSeconds <= 0f;
         drawIndicator(batch, pulseAvailable, x, y, size);
@@ -254,6 +269,10 @@ public class RadarHud implements Disposable {
         for (Vector2 asteroid : asteroidPositionsMeters) {
             drawContact(batch, observerXMeters, observerYMeters, asteroid.x, asteroid.y, maxRangeMeters,
                 scopeCenterX, scopeCenterY, scopeRadius, size, ASTEROID_BLIP_COLOR);
+        }
+        for (Vector2 powerUp : powerUpPositionsMeters) {
+            drawContact(batch, observerXMeters, observerYMeters, powerUp.x, powerUp.y, maxRangeMeters,
+                scopeCenterX, scopeCenterY, scopeRadius, size, POWERUP_BLIP_COLOR);
         }
     }
 

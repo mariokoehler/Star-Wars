@@ -312,8 +312,11 @@ own largest enabled range (`ShipStats#getRadarMaxRangeMeters()`), so the
 scale never visibly jumps when the pulse fires. A pulse-revealed contact
 beyond the observer's own equipment clamps to the scope's edge at its true
 bearing, drawn as a distinct chevron (not a dot) — direction only, no false
-precision. Asteroids draw as blue blips (unfiltered, same treatment as
-ship contacts). Arena boundary edges draw as amber lines
+precision. Asteroids draw as blue blips, power-ups as green blips (both
+unfiltered, same dot/chevron treatment as ship contacts) — deliberately
+visible for power-ups (2.18): letting everyone see them draws players
+toward the same handful of spots, which in practice makes it easier to
+find a fight, not just loot. Arena boundary edges draw as amber lines
 (`RadarScopeMath.computeBoundaryLine`, clipped to both range and the edge's
 own extent — reduces to a plain scaled identity since the scope never
 rotates, so an axis-aligned world line stays axis-aligned on the scope). A
