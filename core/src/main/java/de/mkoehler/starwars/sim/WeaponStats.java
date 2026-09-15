@@ -67,6 +67,33 @@ public final class WeaponStats {
             BLASTER.capacitorMaxCharge, BLASTER.baseRechargePerSecond);
     }
 
+    /**
+     * Builds a turret's own {@code WeaponStats}, independent of the ship's
+     * main weapon (design.md 2.9's addendum) — a turret is meant to be a
+     * high-rate-of-fire, low-damage, low-energy-cost point-defense weapon,
+     * which doesn't follow from the ship's own (possibly very different,
+     * e.g. tier-4 "sniper") main gun profile. Projectile speed/size/lifetime
+     * and the capacitor's own size/recharge rate still come from the shared
+     * {@link #BLASTER} baseline, same as {@link #forShip}, since a turret
+     * shares its ship's one capacitor rather than having its own.
+     * <p>
+     * {@code cooldownSeconds} is carried along for consistency with
+     * {@link #forShip} but isn't actually read on the turret firing path —
+     * {@code TurretComponent.TurretMount} tracks its own cooldown, seeded
+     * from {@link de.mkoehler.starwars.sim.metadata.TurretConfig#getCooldownSeconds()}
+     * directly, not from this object.
+     *
+     * @param cooldownSeconds this turret's own minimum time between shots
+     * @param shotEnergyCost  this turret's own capacitor energy cost per shot
+     * @param damage          this turret's own damage per hit
+     * @return a new {@code WeaponStats} with those three fields overridden
+     */
+    public static WeaponStats forTurret(float cooldownSeconds, float shotEnergyCost, float damage) {
+        return new WeaponStats(cooldownSeconds, BLASTER.projectileSpeed, damage,
+            BLASTER.projectileRadiusMeters, BLASTER.projectileLifetimeSeconds, shotEnergyCost,
+            BLASTER.capacitorMaxCharge, BLASTER.baseRechargePerSecond);
+    }
+
     private final float cooldownSeconds;
     private final float projectileSpeed;
     private final float damage;

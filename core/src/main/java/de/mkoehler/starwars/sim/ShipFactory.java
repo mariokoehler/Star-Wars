@@ -109,7 +109,9 @@ public final class ShipFactory {
                 Vector2 localOffsetMeters = new Vector2(point.getX() / pixelsPerMeter, point.getY() / pixelsPerMeter);
                 mounts.add(new TurretComponent.TurretMount(localOffsetMeters));
             }
-            return Optional.of(new TurretComponent(mounts, config));
+            WeaponStats turretWeaponStats = WeaponStats.forTurret(
+                config.getCooldownSeconds(), config.getShotEnergyCost(), config.getDamage());
+            return Optional.of(new TurretComponent(mounts, config, turretWeaponStats));
         });
     }
 

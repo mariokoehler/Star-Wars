@@ -55,6 +55,8 @@
   "turretConfig" : {
     "scanRangeMeters" : 30.0,
     "cooldownSeconds" : 0.6,
-    "turnRateDegreesPerSecond" : 90.0
+    "turnRateDegreesPerSecond" : 90.0,
+    "shotEnergyCost" : 10.0,
+    "damage" : 8.0
   }
 }

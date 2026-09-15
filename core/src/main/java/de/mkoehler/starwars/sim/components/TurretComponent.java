@@ -3,6 +3,7 @@ package de.mkoehler.starwars.sim.components;
 import com.badlogic.ashley.core.Component;
 import com.badlogic.ashley.core.Entity;
 import com.badlogic.gdx.math.Vector2;
+import de.mkoehler.starwars.sim.WeaponStats;
 import de.mkoehler.starwars.sim.metadata.TurretConfig;
 
 import java.util.List;
@@ -16,22 +17,33 @@ import java.util.List;
  * — one "T" keypress toggles every turret on the ship at once), but each
  * {@link TurretMount} tracks and aims at its own target independently — see
  * {@code TurretSystem} for the actual scan/track/fire behavior.
+ * <p>
+ * {@link #getWeaponStats()} (design.md 2.9's addendum) is this ship type's
+ * turrets' own damage/energy-cost profile — built once, here, from
+ * {@link TurretConfig#getDamage()}/{@link TurretConfig#getShotEnergyCost()},
+ * deliberately independent of the ship's main gun's own {@code WeaponStats}
+ * (a ship's main weapon and its turrets can have very different roles, e.g.
+ * a slow high-damage "sniper" main gun paired with fast low-damage
+ * point-defense turrets) — not read from {@code WeaponComponent.getStats()}.
  */
 public class TurretComponent implements Component {
 
     private final List<TurretMount> mounts;
     private final TurretConfig config;
+    private final WeaponStats weaponStats;
     private boolean enabled;
 
     /**
      * Creates a turret component.
      *
-     * @param mounts this ship's turret mounts, one per {@code "TURRET"} attachment point
-     * @param config the tuning values shared by every mount
+     * @param mounts      this ship's turret mounts, one per {@code "TURRET"} attachment point
+     * @param config      the tuning values shared by every mount
+     * @param weaponStats this ship's turrets' own damage/energy-cost profile, built from {@code config}
      */
-    public TurretComponent(List<TurretMount> mounts, TurretConfig config) {
+    public TurretComponent(List<TurretMount> mounts, TurretConfig config, WeaponStats weaponStats) {
         this.mounts = mounts;
         this.config = config;
+        this.weaponStats = weaponStats;
     }
 
     /**
@@ -50,6 +62,16 @@ public class TurretComponent implements Component {
      */
     public TurretConfig getConfig() {
         return config;
+    }
+
+    /**
+     * Returns this ship type's turrets' own damage/energy-cost profile
+     * (design.md 2.9's addendum), independent of the ship's main gun.
+     *
+     * @return the turret weapon stats
+     */
+    public WeaponStats getWeaponStats() {
+        return weaponStats;
     }
 
     /**

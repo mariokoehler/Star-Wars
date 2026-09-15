@@ -98,4 +98,37 @@ public class WeaponComponent implements Component {
         currentCharge -= stats.getShotEnergyCost();
         cooldownRemaining = stats.getCooldownSeconds();
     }
+
+    /**
+     * Returns whether the capacitor currently holds at least {@code energyCost}
+     * charge — the turret-firing path's equivalent of {@link #canFire()},
+     * deliberately ignoring {@link #getCooldownRemaining()} entirely: a
+     * turret mount tracks its own cadence independently
+     * ({@code TurretComponent.TurretMount}), and this ship's own main-gun
+     * cooldown (this component's {@link #cooldownRemaining}) must never be
+     * gated by, or gate, turret fire.
+     *
+     * @param energyCost the energy a shot would cost, e.g. a turret's own
+     *                   {@link WeaponStats#getShotEnergyCost()}, independent
+     *                   of this component's own {@link #getStats()}
+     * @return {@code true} if the capacitor can afford a shot at that cost
+     */
+    public boolean hasCharge(float energyCost) {
+        return currentCharge >= energyCost;
+    }
+
+    /**
+     * Draws {@code energyCost} from the shared capacitor — the turret-firing
+     * path's equivalent of {@link #consumeShot()}. Unlike {@link #consumeShot()},
+     * this deliberately does <em>not</em> touch {@link #cooldownRemaining}:
+     * that field is this ship's own main-gun cooldown, and a turret shot
+     * must never reset it — a turret mount's own cadence is tracked entirely
+     * separately. Call only when {@link #hasCharge(float)} is true.
+     *
+     * @param energyCost the energy to draw, e.g. a turret's own
+     *                   {@link WeaponStats#getShotEnergyCost()}
+     */
+    public void drainCharge(float energyCost) {
+        currentCharge -= energyCost;
+    }
 }

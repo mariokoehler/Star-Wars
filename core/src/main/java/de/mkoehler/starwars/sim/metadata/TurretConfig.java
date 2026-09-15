@@ -25,6 +25,8 @@ public class TurretConfig {
     private float scanRangeMeters;
     private float cooldownSeconds;
     private float turnRateDegreesPerSecond;
+    private float shotEnergyCost;
+    private float damage;
 
     /**
      * Returns how far a turret can detect and engage targets.
@@ -65,5 +67,36 @@ public class TurretConfig {
 
     public void setTurnRateDegreesPerSecond(float turnRateDegreesPerSecond) {
         this.turnRateDegreesPerSecond = turnRateDegreesPerSecond;
+    }
+
+    /**
+     * Returns this turret's own capacitor energy cost per shot — independent
+     * of the ship's main weapon (design.md 2.9's addendum), since a turret is
+     * meant to be a high-rate-of-fire, low-cost point-defense weapon
+     * regardless of the ship's own main gun profile. Still drawn from the
+     * same shared capacitor as the main gun.
+     *
+     * @return the energy cost per shot
+     */
+    public float getShotEnergyCost() {
+        return shotEnergyCost;
+    }
+
+    public void setShotEnergyCost(float shotEnergyCost) {
+        this.shotEnergyCost = shotEnergyCost;
+    }
+
+    /**
+     * Returns this turret's own damage per hit — independent of the ship's
+     * main weapon, same reasoning as {@link #getShotEnergyCost()}.
+     *
+     * @return the damage per hit
+     */
+    public float getDamage() {
+        return damage;
+    }
+
+    public void setDamage(float damage) {
+        this.damage = damage;
     }
 }

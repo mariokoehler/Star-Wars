@@ -12,6 +12,7 @@ import com.badlogic.gdx.physics.box2d.World;
 import de.mkoehler.starwars.sim.ProjectileFactory;
 import de.mkoehler.starwars.sim.TargetFinder;
 import de.mkoehler.starwars.sim.TurretAiming;
+import de.mkoehler.starwars.sim.WeaponStats;
 import de.mkoehler.starwars.sim.components.CombatTimerComponent;
 import de.mkoehler.starwars.sim.components.HullComponent;
 import de.mkoehler.starwars.sim.components.PhysicsBodyComponent;
@@ -39,12 +40,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * different targets), but they all draw from that <em>one</em> shared
  * capacitor — firing the turret competes with the main gun for the same
  * energy pool, both scaled by the same
- * {@link de.mkoehler.starwars.sim.PowerSystem#WEAPONS} allocation. That
- * capacitor is recharged once per tick by {@link WeaponSystem} already (for
- * every ship, turreted or not) — this system only ever reads
- * {@link WeaponComponent#canFire()} and drains it via
- * {@link WeaponComponent#consumeShot()}, never recharges it itself, or a
- * ship with both a main gun and a turret would recharge twice as fast.
+ * {@link de.mkoehler.starwars.sim.PowerSystem#WEAPONS} allocation, though
+ * each at its <em>own</em> per-shot cost ({@link TurretComponent#getWeaponStats()}
+ * vs. the main gun's own {@link WeaponComponent#getStats()} — design.md
+ * 2.9's addendum, turrets are deliberately tuned independently of the
+ * ship's main weapon). That capacitor is recharged once per tick by
+ * {@link WeaponSystem} already (for every ship, turreted or not) — this
+ * system only ever reads {@link WeaponComponent#hasCharge(float)} and
+ * drains it via {@link WeaponComponent#drainCharge(float)}, never recharges
+ * it itself, or a ship with both a main gun and a turret would recharge
+ * twice as fast.
  */
 public class TurretSystem extends IteratingSystem {
 
@@ -105,14 +110,15 @@ public class TurretSystem extends IteratingSystem {
         int ownerPlayerId = playerIdMapper.get(entity).getPlayerId();
         WeaponComponent weapon = weaponMapper.get(entity);
         TurretConfig config = turrets.getConfig();
+        WeaponStats turretStats = turrets.getWeaponStats();
 
         for (TurretComponent.TurretMount mount : turrets.getMounts()) {
-            processMount(mount, config, ownBody, ownerPlayerId, weapon, entity, deltaTime);
+            processMount(mount, config, turretStats, ownBody, ownerPlayerId, weapon, entity, deltaTime);
         }
     }
 
-    private void processMount(TurretComponent.TurretMount mount, TurretConfig config, Body ownBody,
-                               int ownerPlayerId, WeaponComponent weapon, Entity ownEntity, float deltaTime) {
+    private void processMount(TurretComponent.TurretMount mount, TurretConfig config, WeaponStats turretStats,
+                               Body ownBody, int ownerPlayerId, WeaponComponent weapon, Entity ownEntity, float deltaTime) {
         mount.tickCooldown(deltaTime);
 
         SCRATCH_OFFSET.set(mount.getLocalOffsetMeters()).rotateRad(ownBody.getAngle());
@@ -133,18 +139,22 @@ public class TurretSystem extends IteratingSystem {
         float desiredAngle = TurretAiming.computeLeadAngle(turretX, turretY,
             targetBody.getPosition().x, targetBody.getPosition().y,
             targetBody.getLinearVelocity().x, targetBody.getLinearVelocity().y,
-            weapon.getStats().getProjectileSpeed());
+            turretStats.getProjectileSpeed());
 
         float maxStep = (float) Math.toRadians(config.getTurnRateDegreesPerSecond()) * deltaTime;
         mount.setAimAngleRadians(TurretAiming.rotateToward(mount.getAimAngleRadians(), desiredAngle, maxStep));
 
         boolean aligned = Math.abs(TurretAiming.angularDifference(mount.getAimAngleRadians(), desiredAngle))
             <= FIRING_ALIGNMENT_TOLERANCE_RADIANS;
-        if (aligned && mount.getCooldownRemaining() <= 0f && weapon.canFire()) {
+        // hasCharge/drainCharge, not canFire/consumeShot (design.md 2.9's addendum) - a turret
+        // shot draws from the ship's shared capacitor at the turret's OWN energy cost, but must
+        // never touch WeaponComponent's own cooldownRemaining, which belongs to the main gun
+        // alone; TurretMount already tracks this mount's own cadence independently below.
+        if (aligned && mount.getCooldownRemaining() <= 0f && weapon.hasCharge(turretStats.getShotEnergyCost())) {
             ProjectileFactory.createProjectile(engine, world, nextProjectileId.getAndIncrement(), ownerPlayerId,
                 turretX, turretY, mount.getAimAngleRadians(),
-                ownBody.getLinearVelocity().x, ownBody.getLinearVelocity().y, weapon.getStats(), true);
-            weapon.consumeShot();
+                ownBody.getLinearVelocity().x, ownBody.getLinearVelocity().y, turretStats, true);
+            weapon.drainCharge(turretStats.getShotEnergyCost());
             mount.resetCooldown(config.getCooldownSeconds());
             combatTimerMapper.get(ownEntity).markFired();
         }

@@ -278,6 +278,36 @@ recharges it, so a ship with both doesn't double-recharge). `ShipState`
 broadcasts `turretAimAngles` (one per mount); the client draws each mount's
 sprite at the *absolute* broadcast angle, independent of hull rotation.
 
+**Turret damage/energy cost are configured independently of the main
+gun.** A turret's own `WeaponStats` (`WeaponStats.forTurret`, built once in
+`ShipFactory.createTurretComponent` from `TurretConfig.getShotEnergyCost()`/
+`getDamage()`, cached on `TurretComponent.getWeaponStats()`) is what
+`TurretSystem` actually fires with — never the main gun's own
+`WeaponComponent.getStats()`. Intentional: a turret is meant to be a
+high-rate-of-fire, low-damage, low-energy-cost point-defense weapon
+regardless of the ship's own main gun profile (e.g. a tier-4 "sniper" main
+gun paired with fast-cycling turrets). The turret firing path uses
+`WeaponComponent.hasCharge(float)`/`drainCharge(float)`, not
+`canFire()`/`consumeShot()` — those check/drain the shared capacitor at an
+explicit cost, deliberately without touching `WeaponComponent`'s own
+`cooldownRemaining` (the main gun's cooldown), which a turret shot must
+never reset; `TurretComponent.TurretMount` tracks each mount's own cadence entirely
+separately, seeded from `TurretConfig.getCooldownSeconds()` — the
+high-rate-of-fire knob is that field (currently 0.6s, both ships), not
+anything this split changed. Current per-shot values (Falcon: 1 mount, 10
+energy/8 damage; Star Destroyer: 4 mounts, 5 energy/5 damage each,
+deliberately lower per mount since 4 firing at once draws from the same
+capacitor) are a starting point, flagged as unconfirmed pending
+play-testing — same as every other hand-tuned combat number. Worth
+watching: the Star Destroyer's main gun alone costs 95 of the shared
+110-charge capacitor, so sustained multi-turret fire (4 mounts × 5
+energy/0.6s ≈ 33.3/s drain vs. 40/s recharge) can keep the pool skimmed
+well below that threshold for many seconds at a time, making the main gun
+effectively unavailable while the turrets are engaged — a much larger
+version of the "compete for the same energy pool" behavior described
+above, worth deciding on deliberately (lower turret cost further, raise
+the capacitor, or accept the tradeoff) rather than as a byproduct.
+
 **Turret indicator light**: `ShipState.isTurretEnabled()` broadcasts
 `TurretComponent.isEnabled()` for every ship (2.5's addendum) — the only
 way any client, including the toggling player themselves, learns the

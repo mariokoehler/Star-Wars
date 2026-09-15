@@ -34,4 +34,18 @@ class WeaponStatsTest {
         assertEquals(WeaponStats.BLASTER.getShotEnergyCost(), stats.getShotEnergyCost());
         assertEquals(WeaponStats.BLASTER.getDamage(), stats.getDamage());
     }
+
+    @Test
+    void forTurretOverridesOnlyCooldownShotEnergyCostAndDamage() {
+        WeaponStats stats = WeaponStats.forTurret(0.6f, 5f, 5f);
+
+        assertEquals(0.6f, stats.getCooldownSeconds());
+        assertEquals(5f, stats.getShotEnergyCost());
+        assertEquals(5f, stats.getDamage());
+        assertEquals(WeaponStats.BLASTER.getProjectileSpeed(), stats.getProjectileSpeed());
+        assertEquals(WeaponStats.BLASTER.getProjectileRadiusMeters(), stats.getProjectileRadiusMeters());
+        assertEquals(WeaponStats.BLASTER.getProjectileLifetimeSeconds(), stats.getProjectileLifetimeSeconds());
+        assertEquals(WeaponStats.BLASTER.getCapacitorMaxCharge(), stats.getCapacitorMaxCharge());
+        assertEquals(WeaponStats.BLASTER.getBaseRechargePerSecond(), stats.getBaseRechargePerSecond());
+    }
 }
