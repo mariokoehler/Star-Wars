@@ -64,6 +64,10 @@ public class SpriteMetadataEditor extends JFrame {
         openItem.addActionListener(e -> openImage());
         fileMenu.add(openItem);
 
+        JMenuItem openMetadataItem = new JMenuItem("Open Metadata...");
+        openMetadataItem.addActionListener(e -> canvas.loadMetadata(this));
+        fileMenu.add(openMetadataItem);
+
         JMenuItem saveItem = new JMenuItem("Save Metadata");
         saveItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK));
         saveItem.addActionListener(e -> canvas.saveMetadata(this));

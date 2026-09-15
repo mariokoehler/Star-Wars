@@ -83,6 +83,15 @@ import de.mkoehler.starwars.sim.ShipType;
  * player's is, so without this flag a client can't distinguish "this
  * player's name just hasn't synced yet" from "this ship has no name because
  * it isn't a player at all."
+ * <p>
+ * {@link #isTurretEnabled()} (design.md 2.9/2.5 — turret indicator lights)
+ * carries a turret-capable ship's current
+ * {@link de.mkoehler.starwars.sim.components.TurretComponent#isEnabled()}
+ * state, same broadcast-for-every-ship convention as the other per-ship
+ * flags above — this is the only way any client, including the toggling
+ * player themselves, learns the current state, since {@code TurretToggleMessage}
+ * is a one-way client-to-server request, not an acknowledgement. Meaningless
+ * ({@code false}) for a ship type with no turrets.
  */
 public class ShipState {
 
@@ -113,6 +122,7 @@ public class ShipState {
     private boolean thrusting;
     private float powerGenerationMultiplier;
     private boolean isNpc;
+    private boolean turretEnabled;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -149,6 +159,8 @@ public class ShipState {
      * @param powerGenerationMultiplier   this ship's current power-generation multiplier ({@code 1f}
      *                                    normally, {@code 2f} while a BOOST power-up is active)
      * @param isNpc                        whether this ship is AI-controlled rather than a real player's
+     * @param turretEnabled                whether this ship's turrets are currently enabled; meaningless
+     *                                      for a ship type with no turrets
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
@@ -156,7 +168,8 @@ public class ShipState {
                       ShipType shipType, float[] turretAimAngles, float radarPulseCooldownRemaining,
                       int missileLockTargetPlayerId, boolean missileLockAcquired,
                       boolean targetedByMissileLock, boolean targetedByMissileLockAcquired,
-                      boolean thrusting, float powerGenerationMultiplier, boolean isNpc) {
+                      boolean thrusting, float powerGenerationMultiplier, boolean isNpc,
+                      boolean turretEnabled) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -178,6 +191,7 @@ public class ShipState {
         this.thrusting = thrusting;
         this.powerGenerationMultiplier = powerGenerationMultiplier;
         this.isNpc = isNpc;
+        this.turretEnabled = turretEnabled;
     }
 
     /**
@@ -375,5 +389,15 @@ public class ShipState {
      */
     public boolean isNpc() {
         return isNpc;
+    }
+
+    /**
+     * Returns whether this ship's turrets are currently enabled
+     * (design.md 2.9/2.5 — turret indicator lights).
+     *
+     * @return {@code true} if turrets are enabled; meaningless for a ship type with no turrets
+     */
+    public boolean isTurretEnabled() {
+        return turretEnabled;
     }
 }

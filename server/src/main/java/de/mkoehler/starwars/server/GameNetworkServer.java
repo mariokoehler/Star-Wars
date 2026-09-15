@@ -1831,13 +1831,16 @@ public class GameNetworkServer extends NetworkServer {
             boolean thrusting = ship.getComponent(NetworkInputComponent.class).isThrustForward();
             float powerGenerationMultiplier = ship.getComponent(PowerBoostComponent.class).getMultiplier();
             boolean isNpc = ship.getComponent(NpcControlledComponent.class) != null;
+            TurretComponent turret = ship.getComponent(TurretComponent.class);
+            boolean turretEnabled = turret != null && turret.isEnabled();
             shipStatesByPlayerId.put(entry.getKey(), new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
                 hull.getCurrent(), hull.getMax(), shield.getCurrent(), shield.getMax(), shipType,
                 turretAimAngles(ship), radar.getPulseCooldownRemaining(),
                 missileLockTargetPlayerId, missileLockAcquired,
-                targetedByMissileLock, targetedByMissileLockAcquired, thrusting, powerGenerationMultiplier, isNpc));
+                targetedByMissileLock, targetedByMissileLockAcquired, thrusting, powerGenerationMultiplier, isNpc,
+                turretEnabled));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(

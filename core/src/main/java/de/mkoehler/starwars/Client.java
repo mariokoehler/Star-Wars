@@ -69,6 +69,7 @@ import de.mkoehler.starwars.render.ScoreboardHud;
 import de.mkoehler.starwars.render.ShipLightEffect;
 import de.mkoehler.starwars.render.ShipStatusHud;
 import de.mkoehler.starwars.render.ThrusterEffect;
+import de.mkoehler.starwars.render.TurretIndicatorEffect;
 import de.mkoehler.starwars.sim.ArenaBounds;
 import de.mkoehler.starwars.sim.AsteroidFactory;
 import de.mkoehler.starwars.sim.AsteroidType;
@@ -279,7 +280,7 @@ public class Client implements Screen {
 
     /** Scratch vector for {@link #drawTurrets} - avoids an allocation per turret per frame. */
     private static final Vector2 TURRET_OFFSET = new Vector2();
-    /** Scratch vector for {@link #updateAndDrawThrusters}/{@link #updateAndDrawLights}'s attachment-point-position math - avoids an allocation per thruster/light per frame. */
+    /** Scratch vector for {@link #updateAndDrawThrusters}/{@link #updateAndDrawLights}/{@link #updateAndDrawTurretIndicators}'s attachment-point-position math - avoids an allocation per thruster/light/indicator per frame. */
     private static final Vector2 ATTACHMENT_OFFSET = new Vector2();
     /** Scratch vector for {@link #predictLocalWeapon}'s spawn-offset math - avoids an allocation per shot. */
     private static final Vector2 PREDICTED_SPAWN_OFFSET = new Vector2();
@@ -526,6 +527,25 @@ public class Client implements Screen {
      * needed for {@code RemoteShip.lights} to work the same way.
      */
     private final List<ShipLight> myLights = new ArrayList<>();
+    /**
+     * The local player's own turret-indicator light(s) (design.md 2.5/2.9
+     * — turret indicator lights), one per {@code "TURRET_INDICATOR"}
+     * attachment point on the current {@link #myShipType} - rebuilt
+     * alongside {@link #myThrusters}/{@link #myLights} on every
+     * {@link #onShipSpawned}. Empty for every ship type but the Falcon/Star
+     * Destroyer (design.md 2.9, the only turreted ships).
+     */
+    private final List<TurretIndicator> myTurretIndicators = new ArrayList<>();
+    /**
+     * Whether the local player's own turrets are currently enabled -
+     * mirrors {@link de.mkoehler.starwars.net.messages.ShipState#isTurretEnabled()}
+     * from the latest snapshot ({@link #onWorldSnapshot}), like
+     * {@link #myTurretAimAngles}; meaningless for a ship type with no
+     * turrets. This means the indicator lags the "T" keypress by one
+     * snapshot round-trip, same as every other server-authoritative turret
+     * state - never locally predicted.
+     */
+    private boolean myTurretEnabled;
     /**
      * The local player's own damage smoke plume(s) (design.md — damage
      * smoke), one per {@code "DAMAGE_SMOKE"} attachment point on the
@@ -1012,6 +1032,9 @@ public class Client implements Screen {
         myThrusters.addAll(buildEngineThrusters(myStats));
         myLights.clear();
         myLights.addAll(buildShipLights(myStats));
+        myTurretIndicators.clear();
+        myTurretIndicators.addAll(buildTurretIndicators(myStats));
+        myTurretEnabled = false;
         myDamageSmoke.clear();
         myDamageSmoke.addAll(buildDamageSmokePoints(myStats));
         myMuzzleFlashes.clear();
@@ -1269,6 +1292,7 @@ public class Client implements Screen {
                 myShieldCurrent = state.getShieldCurrent();
                 myShieldMax = state.getShieldMax();
                 myTurretAimAngles = state.getTurretAimAngles();
+                myTurretEnabled = state.isTurretEnabled();
                 // A cooldown can only ever tick down on its own - the only way it goes UP
                 // frame-to-frame is the pulse actually firing again server-side just now, so this
                 // rising edge is the trigger for the one-shot wave effect (design.md 2.14's
@@ -1310,7 +1334,8 @@ public class Client implements Screen {
                 // first detected - see the edge-detection comment below for why that would otherwise
                 // look identical to a real trigger.
                 return new RemoteShip(x, y, state.getAngle(), state.getShipType(), state.isNpc(),
-                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildDamageSmokePoints(remoteStats),
+                    buildEngineThrusters(remoteStats), buildShipLights(remoteStats), buildTurretIndicators(remoteStats),
+                    buildDamageSmokePoints(remoteStats),
                     createOneShotEffect(GameAssets.RADAR_PULSE_PARTICLE), state.getRadarPulseCooldownRemaining(),
                     engineSound, engineSoundId);
             });
@@ -1319,6 +1344,7 @@ public class Client implements Screen {
                 state.getVelocityY() * PhysicsConstants.PIXELS_PER_METER,
                 state.getAngularVelocity());
             ship.turretAimAngles = state.getTurretAimAngles();
+            ship.turretEnabled = state.isTurretEnabled();
             ship.thrusting = state.isThrusting();
             ship.hullCurrent = state.getHullCurrent();
             ship.hullMax = state.getHullMax();
@@ -2226,6 +2252,8 @@ public class Client implements Screen {
             drawTurrets(ship.shipType, stats, ship.renderX, ship.renderY, ship.renderAngle, ship.turretAimAngles);
             updateAndDrawLights(ship.lights, stats.getPixelsPerMeter(),
                 ship.renderX, ship.renderY, ship.renderAngle, deltaTime);
+            updateAndDrawTurretIndicators(ship.turretIndicators, stats.getPixelsPerMeter(),
+                ship.renderX, ship.renderY, ship.renderAngle, ship.turretEnabled, deltaTime);
             float shipDamageFraction = ship.hullMax > 0f ? 1f - (ship.hullCurrent / ship.hullMax) : 0f;
             updateAndDrawDamageSmoke(ship.damageSmoke, stats.getPixelsPerMeter(),
                 ship.renderX, ship.renderY, ship.renderAngle, shipDamageFraction, deltaTime);
@@ -2503,6 +2531,7 @@ public class Client implements Screen {
             angle * MathUtils.radiansToDegrees);
         drawTurrets(myShipType, myStats, x, y, angle, myTurretAimAngles);
         updateAndDrawLights(myLights, myStats.getPixelsPerMeter(), x, y, angle, deltaTime);
+        updateAndDrawTurretIndicators(myTurretIndicators, myStats.getPixelsPerMeter(), x, y, angle, myTurretEnabled, deltaTime);
         float myDamageFraction = myHullMax > 0f ? 1f - (myHullCurrent / myHullMax) : 0f;
         updateAndDrawDamageSmoke(myDamageSmoke, myStats.getPixelsPerMeter(), x, y, angle, myDamageFraction, deltaTime);
         myRadarPulseEffect.update(x, y, deltaTime);
@@ -2762,6 +2791,70 @@ public class Client implements Screen {
         for (PixelPoint point : points) {
             lights.add(new ShipLight(point, new ShipLightEffect(template)));
         }
+    }
+
+    /**
+     * Updates and draws one ship's turret-indicator light(s), if any
+     * (design.md 2.5/2.9 — turret indicator lights). Unlike
+     * {@link #updateAndDrawLights}, this one has live state: which of each
+     * indicator's red/green copies is advanced and drawn depends on
+     * {@code turretsEnabled}, the ship's current
+     * {@link de.mkoehler.starwars.net.messages.ShipState#isTurretEnabled()}.
+     * Shared by both the local player's own ship ({@link #drawLocalShip})
+     * and every other visible ship ({@link #drawRemoteShips}). A ship with
+     * no {@code "TURRET_INDICATOR"} attachment points authored gets an
+     * empty list, so this is a no-op call for every non-turreted ship.
+     *
+     * @param indicators       this ship's turret indicators, empty for a ship type with none configured
+     * @param pixelsPerMeter   this ship type's own pixels-per-meter, for converting attachment offsets
+     * @param shipScreenX      the ship's current on-screen position
+     * @param shipScreenY      the ship's current on-screen position
+     * @param shipAngleRadians the ship's current facing
+     * @param turretsEnabled   the ship's current turret-enabled state
+     * @param deltaTime        time since the last frame, in seconds
+     */
+    private void updateAndDrawTurretIndicators(List<TurretIndicator> indicators, float pixelsPerMeter,
+                                                float shipScreenX, float shipScreenY, float shipAngleRadians,
+                                                boolean turretsEnabled, float deltaTime) {
+        for (TurretIndicator indicator : indicators) {
+            PixelPoint point = indicator.attachmentPoint;
+            ATTACHMENT_OFFSET.set(point.getX() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER,
+                point.getY() / pixelsPerMeter * PhysicsConstants.PIXELS_PER_METER).rotateRad(shipAngleRadians);
+            indicator.effect.update(shipScreenX + ATTACHMENT_OFFSET.x, shipScreenY + ATTACHMENT_OFFSET.y,
+                turretsEnabled, deltaTime);
+            indicator.effect.draw(batch, turretsEnabled);
+        }
+    }
+
+    /**
+     * Builds one ship type's turret-indicator lights (design.md 2.5/2.9) —
+     * one {@link TurretIndicatorEffect} per {@code "TURRET_INDICATOR"}
+     * attachment point, all sharing the same two global templates
+     * ({@link GameAssets#LIGHT_RED_PARTICLE}/{@link GameAssets#LIGHT_GREEN_PARTICLE})
+     * regardless of ship type — currently only the Falcon and Star
+     * Destroyer have any authored (design.md 2.9, turret weapons are
+     * Falcon/Star Destroyer only); the Star Destroyer's two points (port
+     * and starboard) both reflect the same single per-ship turret-enabled
+     * state, since all of one ship's turrets switch on/off together. Empty
+     * (never {@code null}) if the type has no such attachment points.
+     *
+     * @param stats the ship type's stats
+     * @return that type's turret indicators, or an empty list if it has none
+     */
+    private List<TurretIndicator> buildTurretIndicators(ShipStats stats) {
+        List<TurretIndicator> indicators = new ArrayList<>();
+        stats.getSpriteMetadata().ifPresent(metadata -> {
+            List<PixelPoint> points = metadata.getAttachmentPoints().get(TurretIndicatorEffect.TURRET_INDICATOR_ATTACHMENT_NAME);
+            if (points == null || points.isEmpty()) {
+                return;
+            }
+            ParticleEffect redTemplate = game.getAssets().get(GameAssets.LIGHT_RED_PARTICLE, ParticleEffect.class);
+            ParticleEffect greenTemplate = game.getAssets().get(GameAssets.LIGHT_GREEN_PARTICLE, ParticleEffect.class);
+            for (PixelPoint point : points) {
+                indicators.add(new TurretIndicator(point, new TurretIndicatorEffect(redTemplate, greenTemplate)));
+            }
+        });
+        return indicators;
     }
 
     /**
@@ -3246,10 +3339,14 @@ public class Client implements Screen {
         // Turret aim is entirely server-simulated and never predicted/extrapolated (same
         // reasoning as projectiles) - just held at whatever the latest snapshot reported.
         float[] turretAimAngles = new float[0];
+        /** Whether this ship's turrets are currently enabled, straight from the latest {@code ShipState} (design.md 2.5/2.9) - not extrapolated, just held, same as {@link #turretAimAngles}/{@link #thrusting}. */
+        boolean turretEnabled;
         /** This ship's own engine thrusters (design.md — engine particle effects), built once at creation - empty for a ship type with none configured. */
         final List<EngineThruster> thrusters;
         /** This ship's own positioning lights (design.md — positioning lights), built once at creation - empty for a ship type with none configured. */
         final List<ShipLight> lights;
+        /** This ship's own turret-indicator lights (design.md 2.5/2.9), built once at creation - empty for every ship type but the Falcon/Star Destroyer. */
+        final List<TurretIndicator> turretIndicators;
         /** This ship's own damage smoke points (design.md — damage smoke), built once at creation - empty for a ship type with none configured. */
         final List<DamageSmokePoint> damageSmoke;
         /** This ship's own radar pulse "energy wave" (design.md 2.14's rendering addendum), built once at creation - every ship type gets one, unlike thrusters/lights/damage smoke. */
@@ -3275,13 +3372,14 @@ public class Client implements Screen {
         float engineVolumeFraction;
 
         RemoteShip(float x, float y, float angle, ShipType shipType, boolean isNpc, List<EngineThruster> thrusters,
-                   List<ShipLight> lights, List<DamageSmokePoint> damageSmoke,
+                   List<ShipLight> lights, List<TurretIndicator> turretIndicators, List<DamageSmokePoint> damageSmoke,
                    OneShotParticleEffect radarPulseEffect, float radarPulseCooldownRemaining,
                    Sound engineSound, long engineSoundId) {
             this.shipType = shipType;
             this.isNpc = isNpc;
             this.thrusters = thrusters;
             this.lights = lights;
+            this.turretIndicators = turretIndicators;
             this.damageSmoke = damageSmoke;
             this.radarPulseEffect = radarPulseEffect;
             this.radarPulseCooldownRemaining = radarPulseCooldownRemaining;
@@ -3463,6 +3561,22 @@ public class Client implements Screen {
         final ShipLightEffect effect;
 
         ShipLight(PixelPoint attachmentPoint, ShipLightEffect effect) {
+            this.attachmentPoint = attachmentPoint;
+            this.effect = effect;
+        }
+    }
+
+    /**
+     * Pairs one {@link TurretIndicatorEffect} with the local-frame pixel
+     * offset (from the ship's own {@code "TURRET_INDICATOR"} attachment
+     * point metadata) it should be positioned at each frame — see
+     * {@link #myTurretIndicators}.
+     */
+    private static final class TurretIndicator {
+        final PixelPoint attachmentPoint;
+        final TurretIndicatorEffect effect;
+
+        TurretIndicator(PixelPoint attachmentPoint, TurretIndicatorEffect effect) {
             this.attachmentPoint = attachmentPoint;
             this.effect = effect;
         }

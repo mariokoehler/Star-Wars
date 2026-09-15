@@ -57,7 +57,8 @@ class SpriteCanvas extends JPanel {
     private static final Color HITBOX_COLOR = new Color(255, 90, 90);
     private static final Color ATTACHMENT_COLOR = new Color(90, 220, 255);
 
-    private static final String[] SUGGESTED_ATTACHMENT_NAMES = {"PROJECTILE", "ENGINE", "LIGHT_RED", "LIGHT_GREEN", "DAMAGE_SMOKE", "TURRET"};
+    private static final String[] SUGGESTED_ATTACHMENT_NAMES =
+        {"PROJECTILE", "ENGINE", "LIGHT_RED", "LIGHT_GREEN", "DAMAGE_SMOKE", "TURRET", "TURRET_INDICATOR"};
 
     private final Consumer<String> statusListener;
 
@@ -208,6 +209,40 @@ class SpriteCanvas extends JPanel {
             reportStatus();
         } catch (IOException e) {
             JOptionPane.showMessageDialog(parent, "Failed to reload: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    /**
+     * Prompts for an existing {@code .meta.json} file (anywhere — not
+     * necessarily sitting next to the current image, e.g. the real
+     * {@code assets/shipdata/<name>.meta.json} for a sprite opened from
+     * {@code assets-raw/ships/<name>/}, which {@link #loadImage}'s
+     * same-directory/same-base-name auto-detection never finds) and loads
+     * it in place of whatever metadata is currently being edited — for
+     * editing an already-authored ship's hitbox/attachment points, rather
+     * than authoring fresh ones. Subsequent {@link #saveMetadata}/
+     * {@link #reloadMetadata} calls target this newly-picked file.
+     *
+     * @param parent the parent component for dialogs
+     */
+    void loadMetadata(Component parent) {
+        if (image == null) {
+            JOptionPane.showMessageDialog(parent, "Open an image first.", "Nothing to attach metadata to", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        JFileChooser chooser = new JFileChooser(metadataFile == null ? null : metadataFile.getParentFile());
+        chooser.setFileFilter(new FileNameExtensionFilter("Sprite metadata (*.json)", "json"));
+        if (chooser.showOpenDialog(parent) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        File selected = chooser.getSelectedFile();
+        try {
+            metadata = ShipSpriteMetadataLoader.loadFromFile(selected);
+            metadataFile = selected;
+            repaint();
+            reportStatus();
+        } catch (IOException e) {
+            JOptionPane.showMessageDialog(parent, "Failed to load: " + e.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
         }
     }
 

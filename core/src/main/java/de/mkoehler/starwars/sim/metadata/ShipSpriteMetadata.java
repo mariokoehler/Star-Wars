@@ -11,8 +11,9 @@ import java.util.Map;
  * points (e.g. {@code "PROJECTILE"} for where a weapon's shots originate,
  * {@code "ENGINE"} for engine glow, {@code "LIGHT_RED"}/{@code "LIGHT_GREEN"}
  * for positioning lights (like a real plane/ship's red-left/green-right
- * navigation lights), {@code "DAMAGE_SMOKE"} for a future particle effect
- * — design.md 2.4/4.3).
+ * navigation lights), {@code "DAMAGE_SMOKE"} for a future particle effect,
+ * {@code "TURRET_INDICATOR"} for a red/green light showing whether a ship's
+ * turrets are enabled — design.md 2.4/4.3/2.5/2.9.
  * <p>
  * Authored with the sprite metadata editor (the {@code dev-tools} module,
  * not shipped in the game), stored as one JSON file per ship under

@@ -179,8 +179,12 @@ AWT/Swing) — divides directly by `PhysicsConstants.PIXELS_PER_METER`
 
 Standard attachment names: `PROJECTILE` (weapon spawn points, `WeaponSystem`
 fires one shot per point), `ENGINE`, `LIGHT_RED`/`LIGHT_GREEN`,
-`DAMAGE_SMOKE`, `TURRET` (2.9) — all consumed generically by iterating the
-map, no per-name special-casing except where noted. `core.sim.metadata`
+`DAMAGE_SMOKE`, `TURRET` (2.9), `TURRET_INDICATOR` — a red/green light
+showing whether a ship's turrets are enabled, sharing the same
+`light_red.p`/`light_green.p` particle art as `LIGHT_RED`/`LIGHT_GREEN`
+(currently only authored on the Falcon and Star Destroyer, the only
+turreted ships — 2.9's addendum below) — all consumed generically by
+iterating the map, no per-name special-casing except where noted. `core.sim.metadata`
 (`PixelPoint`, `ShipSpriteMetadata`, `ShipSpriteMetadataLoader`) is shared
 by the editor and the game; loading is classpath-based, works identically
 for the editor (no libGDX), the client, and the headless server.
@@ -273,6 +277,25 @@ the **same shared capacitor** as the main gun (only `WeaponSystem`
 recharges it, so a ship with both doesn't double-recharge). `ShipState`
 broadcasts `turretAimAngles` (one per mount); the client draws each mount's
 sprite at the *absolute* broadcast angle, independent of hull rotation.
+
+**Turret indicator light**: `ShipState.isTurretEnabled()` broadcasts
+`TurretComponent.isEnabled()` for every ship (2.5's addendum) — the only
+way any client, including the toggling player themselves, learns the
+current state, since the **T** keypress (`TurretToggleMessage`) is a
+one-way client→server request with no acknowledgement, so the indicator
+lags a keypress by one snapshot round-trip. Rendered at each ship's
+`TURRET_INDICATOR` attachment point(s) via `TurretIndicatorEffect`
+(`core.render`), which holds one running copy each of the
+`LIGHT_RED_PARTICLE`/`LIGHT_GREEN_PARTICLE` templates and draws whichever
+one matches the current state — red while disabled, green while enabled.
+One ship's `TURRET_INDICATOR` points all reflect the same single
+per-ship boolean, never tracked individually — the Star Destroyer's two
+(port/starboard, one per broadside) always show the same state in
+unison, since one keypress toggles every mount on the ship at once. New
+turret-capable ship types get this for free simply by authoring
+`TURRET_INDICATOR` point(s) in the sprite metadata editor, no code
+changes needed. Defaults to disabled (red) on spawn, until the player
+presses **T**.
 
 ### 2.10 Kill XP
 
