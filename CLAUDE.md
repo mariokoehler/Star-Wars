@@ -34,9 +34,11 @@ visible enemy) with a player-chosen, persisted zoom level on top of the
 existing speed-linked zoom, a
 bounded 500×500m arena with wall-impact damage and real spawn points,
 asteroids, power-ups, mines (spawned only via a BOMB power-up pickup),
-impact/pickup sounds, a hangar-ambience music loop, and AI-controlled NPC
-ships (gdx-ai behavior trees, design.md 2.20). Tagged releases use
-jgitver-computed versions from git tags (currently `v0.0.8`).
+impact/pickup sounds, a hangar-ambience music loop, AI-controlled NPC
+ships (gdx-ai behavior trees, design.md 2.20), and a turret-enabled
+indicator light (Falcon/Star Destroyer, design.md 2.9's addendum).
+Tagged releases use jgitver-computed versions from git tags (currently
+`v0.0.11`).
 
 **Known standing issue, unresolved:** an intermittent, large (0–25s),
 environment-level delay in raw Windows `SocketChannel`/`DatagramChannel`
