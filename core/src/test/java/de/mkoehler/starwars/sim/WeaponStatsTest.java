@@ -5,20 +5,20 @@ import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Verifies {@link WeaponStats#forShip} overrides exactly the two per-ship
- * fields (cooldown, shot energy cost) while leaving every other field at
- * {@link WeaponStats#BLASTER}'s shared baseline.
+ * Verifies {@link WeaponStats#forShip} overrides exactly the three per-ship
+ * fields (cooldown, shot energy cost, damage) while leaving every other
+ * field at {@link WeaponStats#BLASTER}'s shared baseline.
  */
 class WeaponStatsTest {
 
     @Test
-    void forShipOverridesOnlyCooldownAndShotEnergyCost() {
-        WeaponStats stats = WeaponStats.forShip(0.5f, 35f);
+    void forShipOverridesOnlyCooldownShotEnergyCostAndDamage() {
+        WeaponStats stats = WeaponStats.forShip(0.5f, 35f, 15f);
 
         assertEquals(0.5f, stats.getCooldownSeconds());
         assertEquals(35f, stats.getShotEnergyCost());
+        assertEquals(15f, stats.getDamage());
         assertEquals(WeaponStats.BLASTER.getProjectileSpeed(), stats.getProjectileSpeed());
-        assertEquals(WeaponStats.BLASTER.getDamage(), stats.getDamage());
         assertEquals(WeaponStats.BLASTER.getProjectileRadiusMeters(), stats.getProjectileRadiusMeters());
         assertEquals(WeaponStats.BLASTER.getProjectileLifetimeSeconds(), stats.getProjectileLifetimeSeconds());
         assertEquals(WeaponStats.BLASTER.getCapacitorMaxCharge(), stats.getCapacitorMaxCharge());
@@ -28,9 +28,10 @@ class WeaponStatsTest {
     @Test
     void forShipWithBlastersOwnValuesEqualsBlasterFieldByField() {
         WeaponStats stats = WeaponStats.forShip(WeaponStats.BLASTER.getCooldownSeconds(),
-            WeaponStats.BLASTER.getShotEnergyCost());
+            WeaponStats.BLASTER.getShotEnergyCost(), WeaponStats.BLASTER.getDamage());
 
         assertEquals(WeaponStats.BLASTER.getCooldownSeconds(), stats.getCooldownSeconds());
         assertEquals(WeaponStats.BLASTER.getShotEnergyCost(), stats.getShotEnergyCost());
+        assertEquals(WeaponStats.BLASTER.getDamage(), stats.getDamage());
     }
 }

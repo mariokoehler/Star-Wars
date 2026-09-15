@@ -31,6 +31,7 @@ public class ShipTypeConfig {
     private float shieldRechargePerSecond;
     private float weaponCooldownSeconds;
     private float weaponShotEnergyCost;
+    private float weaponDamage;
     private float hudShieldClipTopPixel;
     private float hudShieldClipBottomPixel;
     private float hudHullClipTopPixel;
@@ -197,6 +198,21 @@ public class ShipTypeConfig {
 
     public void setWeaponShotEnergyCost(float weaponShotEnergyCost) {
         this.weaponShotEnergyCost = weaponShotEnergyCost;
+    }
+
+    /**
+     * Returns this ship type's own damage per hit (design.md 2.4's
+     * addendum) — {@link WeaponStats#getDamage()} is built from, via
+     * {@link WeaponStats#forShip}.
+     *
+     * @return the damage per hit
+     */
+    public float getWeaponDamage() {
+        return weaponDamage;
+    }
+
+    public void setWeaponDamage(float weaponDamage) {
+        this.weaponDamage = weaponDamage;
     }
 
     public float getHudShieldClipTopPixel() {

@@ -44,22 +44,25 @@ public final class WeaponStats {
 
     /**
      * Builds a per-ship-type variant of {@link #BLASTER}: every field stays
-     * the same shared baseline <em>except</em> {@link #getCooldownSeconds()}
-     * and {@link #getShotEnergyCost()} (design.md 2.4's addendum — rate of
-     * fire and power use per shot are the two numbers exposed per ship type,
-     * via {@link ShipTypeConfig#getWeaponCooldownSeconds()}/
-     * {@link ShipTypeConfig#getWeaponShotEnergyCost()}), which come from
-     * that ship type's own {@code shipdata/<name>.stats.json} instead.
-     * Projectile speed/damage/size/lifetime and the capacitor's own size/
-     * recharge rate stay shared across every ship type for now — only these
-     * two are configurable per ship.
+     * the same shared baseline <em>except</em> {@link #getCooldownSeconds()},
+     * {@link #getShotEnergyCost()}, and {@link #getDamage()} (design.md
+     * 2.4's addendum — rate of fire, power use per shot, and damage per hit
+     * are the three numbers exposed per ship type, via
+     * {@link ShipTypeConfig#getWeaponCooldownSeconds()}/
+     * {@link ShipTypeConfig#getWeaponShotEnergyCost()}/
+     * {@link ShipTypeConfig#getWeaponDamage()}), which come from that ship
+     * type's own {@code shipdata/<name>.stats.json} instead. Projectile
+     * speed/size/lifetime and the capacitor's own size/recharge rate stay
+     * shared across every ship type for now — only these three are
+     * configurable per ship.
      *
      * @param cooldownSeconds this ship type's own minimum time between shots
      * @param shotEnergyCost  this ship type's own capacitor energy cost per shot
-     * @return a new {@code WeaponStats} with those two fields overridden
+     * @param damage          this ship type's own damage per hit
+     * @return a new {@code WeaponStats} with those three fields overridden
      */
-    public static WeaponStats forShip(float cooldownSeconds, float shotEnergyCost) {
-        return new WeaponStats(cooldownSeconds, BLASTER.projectileSpeed, BLASTER.damage,
+    public static WeaponStats forShip(float cooldownSeconds, float shotEnergyCost, float damage) {
+        return new WeaponStats(cooldownSeconds, BLASTER.projectileSpeed, damage,
             BLASTER.projectileRadiusMeters, BLASTER.projectileLifetimeSeconds, shotEnergyCost,
             BLASTER.capacitorMaxCharge, BLASTER.baseRechargePerSecond);
     }

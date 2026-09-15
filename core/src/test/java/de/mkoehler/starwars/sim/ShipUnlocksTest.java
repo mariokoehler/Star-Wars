@@ -13,7 +13,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Verifies {@link ShipUnlocks}: the always-unlocked Snowspeeder special
  * case, and the available-XP subtraction, against the real per-ship
  * {@code unlockCostXp} values loaded from {@code shipdata/*.stats.json}
- * (1000/1500/2000 for tiers 2/3/4, design.md).
+ * (design.md — ship unlocks: TIE Fighter 75 / A-wing 100 at tier 2, TIE
+ * Interceptor 100 / X-wing 125 at tier 3, Star Destroyer 200 / Falcon 150
+ * at tier 4).
  */
 class ShipUnlocksTest {
 
@@ -35,21 +37,21 @@ class ShipUnlocksTest {
 
     @Test
     void availableXpSubtractsTheCostOfEveryUnlockedShip() {
-        // TIE Fighter (tier 2) costs 1000.
-        assertEquals(500, ShipUnlocks.availableXp(1500, Set.of(ShipType.TIEFIGHTER)));
+        // TIE Fighter (tier 2) costs 75.
+        assertEquals(500, ShipUnlocks.availableXp(575, Set.of(ShipType.TIEFIGHTER)));
     }
 
     @Test
     void availableXpSumsMultipleUnlockedShips() {
-        // TIE Fighter (1000) + X-wing (1500) = 2500 spent.
+        // TIE Fighter (75) + X-wing (125) = 200 spent.
         Set<ShipType> unlocked = EnumSet.of(ShipType.TIEFIGHTER, ShipType.XWING);
-        assertEquals(500, ShipUnlocks.availableXp(3000, unlocked));
+        assertEquals(500, ShipUnlocks.availableXp(700, unlocked));
     }
 
     @Test
     void availableXpCanGoNegativeIfSomehowOverspent() {
         // Not expected in practice (the server only ever unlocks when affordable), but the
-        // subtraction itself shouldn't clamp or throw - Falcon (tier 4) costs 2000.
-        assertEquals(-500, ShipUnlocks.availableXp(1500, Set.of(ShipType.FALCON)));
+        // subtraction itself shouldn't clamp or throw - Falcon (tier 4) costs 150.
+        assertEquals(-50, ShipUnlocks.availableXp(100, Set.of(ShipType.FALCON)));
     }
 }

@@ -103,14 +103,15 @@ respawn timer and awards no kill credit/XP to anyone. Server-authoritative
 
 **Weapon:** one type, a blaster cannon — fires along the ship's current
 facing while SPACE is held, gated by a mechanical cooldown **and** the
-weapon capacitor (2.2/2.8). Projectile speed/damage/size/lifetime and the
+weapon capacitor (2.2/2.8). Projectile speed/size/lifetime and the
 capacitor's own size/recharge rate are shared across every ship type
-(`WeaponStats.BLASTER`, 0.25s/4 shots-per-sec baseline). **Rate of fire and
-power use per shot are configurable per ship type**, though
-(`WeaponStats#forShip`, addendum below), via each ship's own
-`shipdata/<name>.stats.json` — `weaponCooldownSeconds`/
-`weaponShotEnergyCost` — currently all set to the shared baseline (0.25s /
-20 energy) for every ship, untuned.
+(`WeaponStats.BLASTER`, 0.25s/4 shots-per-sec/10-damage baseline).
+**Rate of fire, power use per shot, and damage per hit are configurable
+per ship type**, though (`WeaponStats#forShip`, addendum below), via each
+ship's own `shipdata/<name>.stats.json` — `weaponCooldownSeconds`/
+`weaponShotEnergyCost`/`weaponDamage` — still at the shared baseline
+(0.25s / 20 energy / 10 damage) for every ship except where hand-tuned
+since (Snowspeeder: 0.15s/5 energy).
 
 **Projectiles** are small, fast (bullet/CCD) Box2D bodies, server-simulated
 and broadcast every tick, inheriting the firing ship's own current velocity
@@ -132,8 +133,9 @@ infers it's gone by absence from the next snapshot.
 **Hit detection:** server-authoritative Box2D `ContactListener`
 (projectile↔ship only, filtered via `CollisionCategories`); a shot never
 damages its own owner (also excluded from physical collision entirely via
-`ContactFilter`, not just a damage skip). Fixed 10 damage/hit
-(`WeaponStats.BLASTER`), split via `ShipDamage.apply` (2.6). At zero
+`ContactFilter`, not just a damage skip). Damage is baked into each
+projectile at fire time from its shooter's own `WeaponStats.getDamage()`
+(per-ship-type, see above), split via `ShipDamage.apply` (2.6). At zero
 health: `ShipDestroyedMessage` broadcasts, a 3s server timer respawns the
 ship at a real spawn point (2.16) with a fresh `ShipSpawnedMessage`.
 
@@ -264,8 +266,10 @@ row via a one-shot snapshot handed to it at death time.
 ### 2.12 Ship unlocks
 
 Snowspeeder is free/unlocked for every account from creation. Every other
-ship costs tiered XP to unlock: 1000 (tier 2), 1500 (tier 3), 2000 (tier
-4) — `unlockCostXp` on `ShipTypeConfig`. **XP is never decremented** —
+ship costs tiered XP to unlock, per faction branch (2.13): TIE Fighter 75 /
+A-wing 100 (tier 2), TIE Interceptor 100 / X-wing 125 (tier 3), Star
+Destroyer 200 / Falcon 150 (tier 4) — `unlockCostXp` on `ShipTypeConfig`.
+**XP is never decremented** —
 affordability is computed on the fly as `availableXp = totalXp − sum of
 already-unlocked ships' costs` (`core.sim.ShipUnlocks`, pure/tested, used
 identically by client padlock UI and server validation). Unlocked ships
