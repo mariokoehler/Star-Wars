@@ -34,8 +34,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * one projectile per point per shot instead of a single one from a fixed
  * offset, but still draws only one shot's energy cost for the whole volley.
  * Also recharges every ship's capacitor each tick, scaled by its current
- * {@link PowerSystem#WEAPONS} power allocation (design.md 2.2), regardless
- * of whether it's currently firing. Firing also marks
+ * effective {@link PowerSystem#WEAPONS} multiplier (design.md 2.2 — this
+ * tick's demand-redistributed value, not the raw priority setting),
+ * regardless of whether it's currently firing. Firing also marks
  * {@link CombatTimerComponent#markFired()}, feeding design.md 2.3's
  * combat-lock rule for leaving a match via ESC.
  * <p>
@@ -92,9 +93,12 @@ public class WeaponSystem extends IteratingSystem {
     protected void processEntity(Entity entity, float deltaTime) {
         WeaponComponent weapon = weaponMapper.get(entity);
         weapon.tickCooldown(deltaTime);
-        // Design.md - power-ups' BOOST effect, same "multiply on top of the distribution's own
-        // multiplier" treatment as ShipControlSystem's engines multiplier.
-        float weaponsMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.WEAPONS)
+        // Design.md 2.2's priority-based rework: the *effective* multiplier (after
+        // PowerAllocationSystem's demand-based redistribution this tick), not the raw priority
+        // one - same reasoning as ShipControlSystem's engines multiplier.
+        // Design.md - power-ups' BOOST effect, same "multiply on top of the (effective) split"
+        // treatment as ShipControlSystem's engines multiplier.
+        float weaponsMultiplier = powerMapper.get(entity).getEffectiveMultiplier(PowerSystem.WEAPONS)
             * boostMapper.get(entity).getMultiplier();
         weapon.rechargeCapacitor(deltaTime, weaponsMultiplier);
 

@@ -236,6 +236,39 @@ editor).
   server-authoritative and moving (e.g. asteroids) — not a full dynamic
   mirror, since the client always learns the true state from the next
   snapshot and never needs to simulate *how* it moves.
+- **A client-mirrored value is only safe to recompute locally (no
+  networking, no reconciliation) if it's a pure function of that client's
+  own in-order input stream** — the instant it also depends on continuous
+  server-authoritative sim state the client only sees as a lagged snapshot
+  (shield/capacitor charge, an enemy's position, etc.), the two copies *can*
+  diverge, and if that value feeds physics prediction (thrust/torque, not
+  just cosmetic display), the divergence shows up as a visible reconciliation
+  correction — in a system the player isn't even touching. Fix: compute it
+  authoritatively server-side and broadcast it (`ShipState`) for the client
+  to read, same as `powerGenerationMultiplier` (BOOST) and the power
+  distribution's own effective-vs-priority split (2.2) both do. A pure-
+  keypress-stream value (the priority split itself) stays safe to mirror
+  independently; a demand-derived value layered on top of it isn't.
+- **A once-per-tick "demand" snapshot that gates a broadcast multiplier at a
+  genuine `0` while idle has an onset bug for anything player-input-driven**
+  (found via advisor review before it ever shipped, 2.2's priority-based
+  power rework): the snapshot is taken once per tick, one tick *before* the
+  input that would actually set it. Coasting with idle engines broadcasts
+  `0`; the instant thrust is pressed, prediction still reads last tick's
+  `0` for a full round trip before the next snapshot catches up — the exact
+  "flying in slow motion" shape CLAUDE.md's Box2D force-reapplication note
+  above describes, just relocated to power-multiplier staleness instead of
+  force reapplication. Fix: for anything with a player-input-driven onset,
+  cache "what would this be *if* demanding right now" (force that one
+  system into the demand set unconditionally) rather than the genuine
+  demand-gated value — safe because the real gate already lives at the
+  actual consumer (`ShipControlSystem#applyInput` no-ops without held
+  input; `WeaponComponent#rechargeCapacitor`'s clamp no-ops on an
+  already-full capacitor), so the ungated multiplier costs nothing while
+  truly idle and exactly matches the gated one the moment it's needed
+  (`PowerDistribution.effectiveMultiplierIfDemanding`). A demand source with
+  no player-input onset (Shields — nothing pressed starts its regen) has no
+  such bug and should keep reading a genuine `0`.
 
 ## Verification / debugging gotchas
 

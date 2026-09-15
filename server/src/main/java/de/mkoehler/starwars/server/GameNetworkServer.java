@@ -90,6 +90,7 @@ import de.mkoehler.starwars.sim.systems.MissileGuidanceSystem;
 import de.mkoehler.starwars.sim.systems.MissileLockSystem;
 import de.mkoehler.starwars.sim.systems.NpcBrainSystem;
 import de.mkoehler.starwars.sim.systems.PhysicsSystem;
+import de.mkoehler.starwars.sim.systems.PowerAllocationSystem;
 import de.mkoehler.starwars.sim.systems.PowerBoostSystem;
 import de.mkoehler.starwars.sim.systems.ProjectileLifetimeSystem;
 import de.mkoehler.starwars.sim.systems.RadarSystem;
@@ -203,6 +204,7 @@ public class GameNetworkServer extends NetworkServer {
     // Shared between WeaponSystem and TurretSystem - both fire real projectiles into the same
     // world, so they must draw ids from the same counter or two live projectiles could collide.
     private final AtomicInteger nextProjectileId = new AtomicInteger();
+    private final PowerAllocationSystem powerAllocationSystem = new PowerAllocationSystem();
     private final ShipControlSystem shipControlSystem = new ShipControlSystem();
     private final PhysicsSystem physicsSystem = new PhysicsSystem(world);
     private final WeaponSystem weaponSystem = new WeaponSystem(engine, world, nextProjectileId);
@@ -304,6 +306,7 @@ public class GameNetworkServer extends NetworkServer {
      * projectile-vs-ship hit detection.
      */
     public GameNetworkServer() {
+        engine.addSystem(powerAllocationSystem);
         engine.addSystem(shipControlSystem);
         engine.addSystem(physicsSystem);
         engine.addSystem(weaponSystem);
@@ -441,6 +444,16 @@ public class GameNetworkServer extends NetworkServer {
         // NpcBrainSystem#BRAIN_TICK_INTERVAL_TICKS ticks) - its NetworkInputComponent otherwise
         // just keeps holding whatever it last decided, exactly like a human holding a key.
         npcBrainSystem.update(deltaTime);
+
+        // Design.md 2.2's priority-based rework: decides which of Engines/Shields/Weapons
+        // currently have real demand and caches each ship's resulting effective power split
+        // (PowerAllocationSystem) - must run after input (both real players' and NPCs', just
+        // applied above) is this tick's freshest, and before physicsSystem.update() below first
+        // consumes the Engines share and weaponSystem/shieldRegenSystem consume Weapons/Shields
+        // later this same tick. Shields/Weapons demand is read as of the start of this tick (before
+        // this tick's own hit resolution/capacitor draw), a deliberate one-tick lag - see
+        // PowerAllocationSystem's own Javadoc.
+        powerAllocationSystem.update(deltaTime);
 
         // Reapply every ship's current input before each individual physics step, not once
         // per tick - the server ticks at 30Hz but physics steps at a fixed 60Hz, so most
@@ -1833,6 +1846,15 @@ public class GameNetworkServer extends NetworkServer {
             boolean isNpc = ship.getComponent(NpcControlledComponent.class) != null;
             TurretComponent turret = ship.getComponent(TurretComponent.class);
             boolean turretEnabled = turret != null && turret.isEnabled();
+            // Design.md 2.2's priority-based rework: the authoritative *effective* Engines/Weapons
+            // multipliers this tick (post PowerAllocationSystem redistribution), broadcast for the
+            // same reason as powerGenerationMultiplier above - the owning client's local thrust/
+            // capacitor prediction must scale by the exact same value the server just used, not
+            // its own recomputation of demand (see PowerDistributionComponent's Javadoc). Shields
+            // isn't broadcast - nothing client-side predicts shield regen.
+            PowerDistributionComponent power = ship.getComponent(PowerDistributionComponent.class);
+            float effectiveEnginesMultiplier = power.getEffectiveMultiplier(PowerSystem.ENGINES);
+            float effectiveWeaponsMultiplier = power.getEffectiveMultiplier(PowerSystem.WEAPONS);
             shipStatesByPlayerId.put(entry.getKey(), new ShipState(entry.getKey(),
                 body.getPosition().x, body.getPosition().y, body.getAngle(),
                 body.getLinearVelocity().x, body.getLinearVelocity().y, body.getAngularVelocity(),
@@ -1840,7 +1862,7 @@ public class GameNetworkServer extends NetworkServer {
                 turretAimAngles(ship), radar.getPulseCooldownRemaining(),
                 missileLockTargetPlayerId, missileLockAcquired,
                 targetedByMissileLock, targetedByMissileLockAcquired, thrusting, powerGenerationMultiplier, isNpc,
-                turretEnabled));
+                turretEnabled, effectiveEnginesMultiplier, effectiveWeaponsMultiplier));
         }
 
         ImmutableArray<Entity> projectileEntities = engine.getEntitiesFor(

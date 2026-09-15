@@ -11,11 +11,12 @@ import de.mkoehler.starwars.sim.components.ShieldComponent;
 
 /**
  * Recharges every ship's shield at its per-second rate, scaled by that
- * ship's current {@link PowerSystem#SHIELDS} power allocation (design.md
- * 2.2/2.5). Runs server-side only, once per tick, after that tick's hits are
- * resolved — a ship's shield starts regenerating again immediately, with no
- * regen-delay-after-hit mechanic yet (deliberately not built until it's
- * asked for).
+ * ship's current effective {@link PowerSystem#SHIELDS} multiplier (design.md
+ * 2.2/2.5 — after {@code PowerAllocationSystem}'s demand-based redistribution
+ * for this tick). Runs server-side only, once per tick, after that tick's
+ * hits are resolved — a ship's shield starts regenerating again immediately,
+ * with no regen-delay-after-hit mechanic yet (deliberately not built until
+ * it's asked for).
  */
 public class ShieldRegenSystem extends IteratingSystem {
 
@@ -32,9 +33,12 @@ public class ShieldRegenSystem extends IteratingSystem {
 
     @Override
     protected void processEntity(Entity entity, float deltaTime) {
-        // Design.md - power-ups' BOOST effect, same "multiply on top of the distribution's own
-        // multiplier" treatment as ShipControlSystem's engines multiplier.
-        float multiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.SHIELDS)
+        // Design.md 2.2's priority-based rework: the *effective* multiplier (after
+        // PowerAllocationSystem's demand-based redistribution this tick), not the raw priority
+        // one - same reasoning as ShipControlSystem's engines multiplier.
+        // Design.md - power-ups' BOOST effect, same "multiply on top of the (effective) split"
+        // treatment as ShipControlSystem's engines multiplier.
+        float multiplier = powerMapper.get(entity).getEffectiveMultiplier(PowerSystem.SHIELDS)
             * boostMapper.get(entity).getMultiplier();
         shieldMapper.get(entity).regenerate(deltaTime, multiplier);
     }

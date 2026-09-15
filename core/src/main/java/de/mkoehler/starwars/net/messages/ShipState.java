@@ -92,6 +92,22 @@ import de.mkoehler.starwars.sim.ShipType;
  * player themselves, learns the current state, since {@code TurretToggleMessage}
  * is a one-way client-to-server request, not an acknowledgement. Meaningless
  * ({@code false}) for a ship type with no turrets.
+ * <p>
+ * {@link #getEffectiveEnginesMultiplier()}/{@link #getEffectiveWeaponsMultiplier()}
+ * (design.md 2.2's priority-based power distribution rework) carry a ship's
+ * current effective Engines/Weapons power multiplier — after
+ * {@code PowerAllocationSystem}'s demand-based redistribution this tick, not
+ * the raw priority split. Broadcast for the same reason as
+ * {@link #getPowerGenerationMultiplier()}: the owning client's local thrust/
+ * weapon-capacitor prediction must scale by the exact value the server just
+ * used, and unlike the priority split itself (a pure function of the
+ * player's own keypresses, safe to mirror independently), the effective
+ * split depends on continuous, server-authoritative sim state (shield/
+ * capacitor charge) the client only ever sees as a lagged snapshot —
+ * recomputing it independently would risk visible thrust-prediction
+ * corrections from a system the player isn't even touching. Shields' own
+ * effective multiplier isn't broadcast — nothing client-side predicts shield
+ * regen, so there's nothing for it to keep in sync with.
  */
 public class ShipState {
 
@@ -123,6 +139,8 @@ public class ShipState {
     private float powerGenerationMultiplier;
     private boolean isNpc;
     private boolean turretEnabled;
+    private float effectiveEnginesMultiplier;
+    private float effectiveWeaponsMultiplier;
 
     /**
      * No-arg constructor required by Kryo for deserialization.
@@ -161,6 +179,10 @@ public class ShipState {
      * @param isNpc                        whether this ship is AI-controlled rather than a real player's
      * @param turretEnabled                whether this ship's turrets are currently enabled; meaningless
      *                                      for a ship type with no turrets
+     * @param effectiveEnginesMultiplier   this ship's current effective Engines power multiplier,
+     *                                     after this tick's demand-based redistribution (design.md 2.2)
+     * @param effectiveWeaponsMultiplier   this ship's current effective Weapons power multiplier,
+     *                                     after this tick's demand-based redistribution (design.md 2.2)
      */
     public ShipState(int playerId, float x, float y, float angle,
                       float velocityX, float velocityY, float angularVelocity,
@@ -169,7 +191,7 @@ public class ShipState {
                       int missileLockTargetPlayerId, boolean missileLockAcquired,
                       boolean targetedByMissileLock, boolean targetedByMissileLockAcquired,
                       boolean thrusting, float powerGenerationMultiplier, boolean isNpc,
-                      boolean turretEnabled) {
+                      boolean turretEnabled, float effectiveEnginesMultiplier, float effectiveWeaponsMultiplier) {
         this.playerId = playerId;
         this.x = x;
         this.y = y;
@@ -192,6 +214,8 @@ public class ShipState {
         this.powerGenerationMultiplier = powerGenerationMultiplier;
         this.isNpc = isNpc;
         this.turretEnabled = turretEnabled;
+        this.effectiveEnginesMultiplier = effectiveEnginesMultiplier;
+        this.effectiveWeaponsMultiplier = effectiveWeaponsMultiplier;
     }
 
     /**
@@ -399,5 +423,27 @@ public class ShipState {
      */
     public boolean isTurretEnabled() {
         return turretEnabled;
+    }
+
+    /**
+     * Returns this ship's current effective Engines power multiplier
+     * (design.md 2.2's priority-based rework) — after this tick's demand-
+     * based redistribution, not the raw priority split.
+     *
+     * @return the effective Engines multiplier
+     */
+    public float getEffectiveEnginesMultiplier() {
+        return effectiveEnginesMultiplier;
+    }
+
+    /**
+     * Returns this ship's current effective Weapons power multiplier
+     * (design.md 2.2's priority-based rework) — after this tick's demand-
+     * based redistribution, not the raw priority split.
+     *
+     * @return the effective Weapons multiplier
+     */
+    public float getEffectiveWeaponsMultiplier() {
+        return effectiveWeaponsMultiplier;
     }
 }

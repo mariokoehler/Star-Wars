@@ -18,8 +18,9 @@ import de.mkoehler.starwars.sim.components.PowerDistributionComponent;
  * Applies thrust/turn forces to every entity with a {@link PhysicsBodyComponent},
  * a {@link PlayerControlledComponent}, a {@link NetworkInputComponent} and a
  * {@link PowerDistributionComponent}, based on that entity's currently held
- * input state and its current {@link PowerSystem#ENGINES} power allocation
- * (design.md 2.2 — more Engines power means more thrust/torque).
+ * input state and its current effective {@link PowerSystem#ENGINES} multiplier
+ * (design.md 2.2 — more Engines power means more thrust/torque; "current" is
+ * this tick's demand-redistributed value, not the raw priority setting).
  * <p>
  * Runs server-side, driven by input received over the network
  * ({@code PlayerInputMessage}) rather than local {@code Gdx.input} — this
@@ -56,9 +57,12 @@ public class ShipControlSystem extends IteratingSystem {
         Body body = bodyMapper.get(entity).getBody();
         PlayerControlledComponent control = controlMapper.get(entity);
         NetworkInputComponent input = inputMapper.get(entity);
+        // Design.md 2.2's priority-based rework: the *effective* multiplier (after
+        // PowerAllocationSystem's demand-based redistribution this tick), not the raw priority
+        // one - PowerDistributionComponent's own Javadoc explains why.
         // Design.md - power-ups' BOOST effect: doubles total power generation on top of however
-        // the distribution is currently split, rather than changing the split itself.
-        float enginesMultiplier = powerMapper.get(entity).getDistribution().multiplierFor(PowerSystem.ENGINES)
+        // the (effective) split currently works out, rather than changing the split itself.
+        float enginesMultiplier = powerMapper.get(entity).getEffectiveMultiplier(PowerSystem.ENGINES)
             * boostMapper.get(entity).getMultiplier();
         // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
         // response curve (design.md 2.2's addendum) - see TurnResponseCurve's own Javadoc for why.

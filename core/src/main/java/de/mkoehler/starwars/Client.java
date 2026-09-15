@@ -96,6 +96,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -747,6 +748,32 @@ public class Client implements Screen {
      */
     private float myPowerBoostMultiplier = 1f;
     /**
+     * Local mirror of this ship's server-broadcast, authoritative <em>effective</em>
+     * Engines power multiplier (design.md 2.2's priority-based rework) — after
+     * that tick's demand-based redistribution, not {@link #myPowerDistribution}'s
+     * raw priority split. Read directly from every snapshot's own
+     * {@code ShipState} entry (see {@link #onWorldSnapshot}), same
+     * "authoritative multiplier, not locally recomputed" treatment as
+     * {@link #myPowerBoostMultiplier} and for the same reason:
+     * {@link PowerDistribution#effectiveFractions} depends on continuous
+     * server-authoritative sim state (shield/capacitor charge) this client
+     * only ever sees as a lagged snapshot, so recomputing it independently
+     * here would risk visible thrust-prediction corrections. Used by
+     * {@link #predictLocalShip}; see {@link #myEffectiveWeaponsMultiplier}
+     * for the Weapons counterpart.
+     */
+    private float myEffectiveEnginesMultiplier = 1f;
+    /** Weapons counterpart of {@link #myEffectiveEnginesMultiplier}, used by {@link #predictLocalWeapon}. */
+    private float myEffectiveWeaponsMultiplier = 1f;
+    /**
+     * Whether the local player is currently holding thrust/turn input, updated every frame
+     * alongside sending {@code PlayerInputMessage} (design.md 2.2's priority-based rework) — used
+     * only to build the Engines half of {@link #drawHud}'s own cosmetic, locally-recomputed demand
+     * set for the power-distribution HUD (see {@link #localEffectiveFractionsForHud}), never for
+     * prediction (which reads the authoritative {@link #myEffectiveEnginesMultiplier} instead).
+     */
+    private boolean myEnginesDemanding;
+    /**
      * A local mirror of the server's own {@code WeaponComponent} for this
      * ship (design.md 2.4's addendum) - reset alongside every spawn/respawn
      * ({@link #onShipSpawned}, same as {@link #myPowerDistribution}), ticked
@@ -1016,6 +1043,12 @@ public class Client implements Screen {
         // server-side (design.md - power-ups), so a stale multiplier from a previous life
         // doesn't leak across a respawn until the first snapshot corrects it.
         myPowerBoostMultiplier = 1f;
+        // Same reasoning again - a fresh ship's PowerAllocationSystem recompute starts from
+        // scratch server-side too (design.md 2.2's priority-based rework), so a stale effective
+        // multiplier from a previous life shouldn't leak into this one's first frame or two either.
+        myEffectiveEnginesMultiplier = 1f;
+        myEffectiveWeaponsMultiplier = 1f;
+        myEnginesDemanding = false;
         shieldsHold.reset();
         weaponsHold.reset();
         enginesHold.reset();
@@ -1312,6 +1345,11 @@ public class Client implements Screen {
                 // mirror) purely so local thrust/torque/weapon-capacitor prediction stays in sync
                 // with the server's authoritative multiplier for the whole boost duration.
                 myPowerBoostMultiplier = state.getPowerGenerationMultiplier();
+                // Design.md 2.2's priority-based rework: same "read directly from the snapshot,
+                // not independently timed" treatment as myPowerBoostMultiplier just above, and for
+                // the same reason - see myEffectiveEnginesMultiplier's own Javadoc.
+                myEffectiveEnginesMultiplier = state.getEffectiveEnginesMultiplier();
+                myEffectiveWeaponsMultiplier = state.getEffectiveWeaponsMultiplier();
                 continue;
             }
             presentShipIds.add(state.getPlayerId());
@@ -1677,6 +1715,11 @@ public class Client implements Screen {
             boolean turnRight = keyBindings.isPressed(GameAction.TURN_RIGHT);
             boolean firing = keyBindings.isPressed(GameAction.FIRE_WEAPON);
 
+            // Design.md 2.2's priority-based rework: cached purely for drawHud's own cosmetic
+            // local demand recompute (see myEnginesDemanding's Javadoc) - not used for prediction,
+            // which reads the authoritative myEffectiveEnginesMultiplier instead.
+            myEnginesDemanding = thrustForward || turnLeft || turnRight;
+
             networkClient.sendUDP(new PlayerInputMessage(thrustForward, turnLeft, turnRight, firing));
             predictLocalShip(thrustForward, turnLeft, turnRight, deltaTime);
             predictLocalWeapon(firing, deltaTime);
@@ -1809,7 +1852,7 @@ public class Client implements Screen {
         statusHud.render(batch, ShipStats.forType(myShipType), HUD_STATUS_MARGIN, HUD_STATUS_MARGIN, HUD_STATUS_SIZE,
             hullFraction, shieldFraction);
         powerHud.render(batch, HUD_STATUS_MARGIN + HUD_STATUS_SIZE + HUD_POWER_GAP, HUD_STATUS_MARGIN, HUD_POWER_SIZE,
-            myPowerDistribution);
+            myPowerDistribution, localEffectiveFractionsForHud());
 
         // Every ship currently in `ships` is already exactly what this player's radar detects
         // (design.md 2.14 - the server only ever sends detected contacts), so no client-side
@@ -1841,6 +1884,36 @@ public class Client implements Screen {
         radarHud.render(batch, ShipStats.forType(myShipType), radarX, radarY, HUD_RADAR_SIZE,
             myBody.getPosition().x, myBody.getPosition().y, myBody.getAngle(), contactPositionsMeters,
             asteroidPositionsMeters, powerUpPositionsMeters, myRadarPulseCooldownRemaining);
+    }
+
+    /**
+     * Builds this frame's power-distribution demand set purely for
+     * {@link #powerHud}'s cosmetic display (design.md 2.2's priority-based
+     * rework) — <em>not</em> the authoritative value the server actually
+     * used, which only ever reaches this client as {@link #myEffectiveEnginesMultiplier}/
+     * {@link #myEffectiveWeaponsMultiplier} for the two systems whose demand
+     * feeds physics prediction. Safe to approximate locally here purely
+     * because a HUD bar is cosmetic: Engines from this frame's own held
+     * input ({@link #myEnginesDemanding}), Weapons from the locally-predicted
+     * {@link #myWeapon}'s capacitor charge, Shields from the last snapshot's
+     * {@link #myShieldCurrent}/{@link #myShieldMax} — nothing client-side
+     * predicts shield regen, so this is the freshest information available
+     * for it regardless.
+     *
+     * @return each system's locally-approximated effective fraction, for {@link PowerDistributionHud#render}
+     */
+    private Map<PowerSystem, Float> localEffectiveFractionsForHud() {
+        EnumSet<PowerSystem> demanding = EnumSet.noneOf(PowerSystem.class);
+        if (myEnginesDemanding) {
+            demanding.add(PowerSystem.ENGINES);
+        }
+        if (myShieldCurrent < myShieldMax) {
+            demanding.add(PowerSystem.SHIELDS);
+        }
+        if (myWeapon != null && myWeapon.getCurrentCharge() < myWeapon.getStats().getCapacitorMaxCharge()) {
+            demanding.add(PowerSystem.WEAPONS);
+        }
+        return myPowerDistribution.effectiveFractions(demanding);
     }
 
     /**
@@ -1902,10 +1975,12 @@ public class Client implements Screen {
 
     private void predictLocalShip(boolean thrustForward, boolean turnLeft, boolean turnRight, float deltaTime) {
         ShipStats myStats = ShipStats.forType(myShipType);
-        // Design.md - power-ups' BOOST effect: multiplies on top of the distribution's own
-        // multiplier, same as ShipControlSystem's server-side math - must match exactly, or this
-        // prediction would constantly need correcting for reasons other than differing input.
-        float enginesMultiplier = myPowerDistribution.multiplierFor(PowerSystem.ENGINES) * myPowerBoostMultiplier;
+        // Design.md 2.2's priority-based rework: the server-authoritative effective multiplier
+        // (see myEffectiveEnginesMultiplier's Javadoc), not myPowerDistribution's raw priority one.
+        // Design.md - power-ups' BOOST effect: multiplies on top of that, same as
+        // ShipControlSystem's server-side math - must match exactly, or this prediction would
+        // constantly need correcting for reasons other than differing input.
+        float enginesMultiplier = myEffectiveEnginesMultiplier * myPowerBoostMultiplier;
         // Thrust stays on the plain linear multiplier; only torque goes through the per-ship-type
         // response curve (design.md 2.2's addendum) - must match ShipControlSystem's own server-side
         // math exactly, or local prediction would constantly need correcting for reasons other than
@@ -1957,9 +2032,9 @@ public class Client implements Screen {
             return;
         }
         myWeapon.tickCooldown(deltaTime);
-        // Design.md - power-ups' BOOST effect, same "multiply on top of the distribution's own
-        // multiplier" treatment as predictLocalShip's engines multiplier.
-        float weaponsMultiplier = myPowerDistribution.multiplierFor(PowerSystem.WEAPONS) * myPowerBoostMultiplier;
+        // Design.md 2.2's priority-based rework + power-ups' BOOST effect, same treatment as
+        // predictLocalShip's engines multiplier.
+        float weaponsMultiplier = myEffectiveWeaponsMultiplier * myPowerBoostMultiplier;
         myWeapon.rechargeCapacitor(deltaTime, weaponsMultiplier);
 
         if (!firing || !myWeapon.canFire()) {

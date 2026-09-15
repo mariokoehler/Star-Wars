@@ -36,9 +36,13 @@ velocity/angular velocity and handle collisions. Default controls in 5.4.
 ### 2.2 Power distribution
 
 Each ship has a power core split between three systems — **Shields**,
-**Weapons**, **Engines** — as a continuous throughput split (percentages of
-current output, not a stored battery), reallocated in real time by the
-player:
+**Weapons**, **Engines**. The split the player sets (I/J/L, see 5.4) is a
+**priority**, not a guaranteed throughput: a system with nothing to spend
+power on right now frees its share for the other two to draw on instead,
+so idle priority is never simply wasted (2026-09-15 rework — the original
+version applied every system's raw percentage continuously regardless of
+whether it currently needed power at all, e.g. an idle-but-Engines-heavy
+ship wasting most of its output while coasting).
 
 - **Shields** — faster shield regen. **Weapons** — faster capacitor
   recharge (higher sustainable fire rate). **Engines** — more thrust and
@@ -55,33 +59,96 @@ player:
   Repeated presses from baseline converge the dominant system to ~78.3%
   (comfortably under an implicit "never above 80%" ballpark).
 - **Reset keybind** (default K) returns to the even baseline.
-- **Multiplier formula:** `multiplier = fraction / (1/3)` — linear relative
-  to the even baseline, identical for all three systems. 1.0× at baseline,
-  ~0.3× at the 10% floor, ~2.35× at the ~78.3% ceiling.
+- **Priority multiplier formula:** `multiplier = fraction / (1/3)` — linear
+  relative to the even baseline, identical for all three systems. 1.0× at
+  baseline, ~0.3× at the 10% floor, ~2.35× at the ~78.3% ceiling. This is
+  what the priority split alone would give a system — see below for what it
+  actually receives.
 - **Hold-to-maximize:** holding a key ≥0.4s jumps that system straight to
   80%/others to 10% (`PowerDistribution.maximize`), instead of only
   incrementing per tap.
+- **Demand-based redistribution (the actual mechanic):** each tick, every
+  system is either *demanding* power or not — **Engines** while thrusting
+  or turning, **Shields** while current charge is below max, **Weapons**
+  while the capacitor is below max charge. A non-demanding system's
+  priority fraction is entirely free; the demanding systems' priority
+  fractions renormalize against just each other (`effective(s) =
+  priority(s) / Σ priority(demanding systems)`), so a system parked at the
+  10% floor can receive far more than its 0.3× priority multiplier the
+  moment it's the only one asking for power. **Capped:** no single system's
+  effective fraction can exceed `1 − 2×10% = 80%` (the same ceiling
+  `maximize` gives it) — redistribution can never out-earn committing to a
+  system outright. Power trimmed by that cap "water-fills" to whichever
+  other demanding system(s) can still use it (not simply discarded) and is
+  only actually wasted when no demanding system is left to absorb it (e.g.
+  a lone demander whose own priority share alone already exceeds the cap).
+  A system with no current demand shows/uses an effective multiplier of
+  `0×`, regardless of its priority share — **except Engines/Weapons**, see
+  the addendum below. `PowerDistribution.effectiveFractions`
+  (pure, unit-tested) implements the formula; `PowerAllocationSystem`
+  computes each ship's demand set once per tick, server-side, before the
+  three consumer systems (`ShipControlSystem`/`WeaponSystem`/
+  `ShieldRegenSystem`) read it — Shields/Weapons demand reflects state as of
+  the *start* of that tick (a deliberate one-tick lag, same shape as
+  `WeaponSystem`'s own recharge-then-drain ordering within one tick).
+- **Engines/Weapons addendum — never actually gated at `0`:** genuinely
+  zeroing their multiplier while idle would desync from the *onset* of
+  player input, since demand is a snapshot taken once per tick, one tick
+  before the input that would set it. Concretely: coasting (Engines idle,
+  broadcast multiplier `0`), player presses thrust — the client would
+  predict zero thrust for a full round trip until the *next* snapshot
+  catches up, then reconciliation would snap the ship forward; same for
+  turning (held constantly) and for capacitor recharge after a predicted
+  shot. So `PowerAllocationSystem` instead caches
+  `PowerDistribution.effectiveMultiplierIfDemanding` for just these two —
+  "what would this multiplier be *if* I needed power this instant,"
+  computed by forcing that one system into the demand set regardless of
+  whether it's genuinely demanding. This is exactly what a demanding system
+  would read anyway (forcing an already-true member into a set is a no-op),
+  and costs nothing while genuinely idle: `ShipControlSystem#applyInput`
+  only applies force while input is actually held, and
+  `WeaponComponent#rechargeCapacitor`'s own clamp makes a non-zero rate
+  applied to an already-full capacitor a no-op. Shields has no such
+  input-driven onset (nothing the player presses starts shield regen) and
+  keeps reading a genuine `0` once full.
 - **Non-linear engine→torque curve (Snowspeeder only):**
   `torqueMultiplier = enginesMultiplier ^ engineTurnResponseExponent`
   (per-ship-type `.stats.json` field, `1.0` = plain linear for every ship
-  except the Snowspeeder at `0.5`) — compresses both extremes symmetrically
-  while staying exactly 1.0 at baseline, so no other ship's handling
-  changed. Thrust is unaffected, still plain linear.
+  except the Snowspeeder at `0.5`), applied to the *effective* Engines
+  multiplier — compresses both extremes symmetrically while staying exactly
+  1.0 at baseline demand, so no other ship's handling changed. Thrust is
+  unaffected, still plain linear.
 - **Weapon capacitor:** a per-ship energy buffer (~5.5 shots at full
-  charge) trickle-charged from the power core (rate scaled by the Weapons
-  multiplier), drained one shot's cost per firing volley. The mechanical
-  cooldown (2.4) is a hard cap "on top of" the capacitor, not replaced by
-  it.
-- **Server-authoritative, never networked to other clients — by
-  construction, not filtering.** The owning client mirrors it locally by
-  applying the identical deterministic `adjust`/`maximize`/`reset`
-  transition to every keypress it also sends (over reliable TCP) — both
-  sides running the same pure function over the same in-order event stream
-  means the two can't diverge, no reconciliation needed. An opponent's
-  power split is never visible to anyone but themselves.
+  charge) trickle-charged from the power core (rate scaled by the effective
+  Weapons multiplier), drained one shot's cost per firing volley. The
+  mechanical cooldown (2.4) is a hard cap "on top of" the capacitor, not
+  replaced by it.
+- **Priority split: server-authoritative, never networked to other
+  clients — by construction, not filtering.** The owning client mirrors it
+  locally by applying the identical deterministic `adjust`/`maximize`/
+  `reset` transition to every keypress it also sends (over reliable TCP) —
+  both sides running the same pure function over the same in-order event
+  stream means the two priority copies can't diverge, no reconciliation
+  needed. An opponent's priority split is never visible to anyone but
+  themselves.
+- **Effective split: a different story.** Unlike the priority split, demand
+  depends on continuous server-authoritative sim state (shield/capacitor
+  charge) the client only ever sees as a lagged snapshot — recomputing it
+  independently client-side would risk visible thrust-prediction
+  corrections from a system the player isn't even touching. So `ShipState`
+  broadcasts the owning ship's authoritative effective Engines/Weapons
+  multipliers every tick (same reasoning/pattern as the BOOST power-up's
+  `powerGenerationMultiplier`, 2.18) for that client's local prediction to
+  read, instead of recomputing demand itself. Shields' effective multiplier
+  isn't broadcast — nothing client-side predicts shield regen. The HUD
+  (2.8) still wants all three for display, so it uses its own local,
+  cosmetic-only demand recompute (own held input for Engines, the locally-
+  predicted capacitor for Weapons, the last snapshot's shield current/max
+  for Shields) — approximate is fine there since it's read-only display, not
+  physics.
 
-`core.sim.PowerDistribution` (immutable) + `PowerSystem` enum implement
-this; pure, unit-tested.
+`core.sim.PowerDistribution` (immutable) + `PowerSystem` enum implement the
+priority split and the redistribution formula; pure, unit-tested.
 
 ### 2.3 Leaving a match (ESC) and the combat lock
 
@@ -257,10 +324,19 @@ See 2.2 for the algorithm/multiplier formula. HUD: `PowerDistributionHud`,
 one shared background panel + three vertical glow bars (Shields/Weapons/
 Engines, left-to-right, matching the `J`/`I`/`L` keybind layout, 5.4), same
 bottom-anchored clip technique as 2.6's hull/shield widget but one shared
-clip range for every ship type. Each bar shows the raw power fraction
-(never renormalized against the ~78.3% practical ceiling — a bar never
-reads fully "full" even at max allocation, deliberately, so it doesn't lie
-about the actual percentage).
+clip range for every ship type. A bar's height/fraction is never
+renormalized against the ~78.3% practical priority ceiling — it never reads
+fully "full" from priority alone, deliberately, so it doesn't lie about the
+actual percentage.
+
+Since 2.2's priority-based rework, each bar shows one of two things,
+existing art re-tinted rather than new art added: while that system has no
+current demand, its *priority* share, dimmed gray (`(0.55, 0.55, 0.55,
+0.6)`) — "reserved here, but not doing anything right now"; while
+demanding, its *effective* share at normal brightness, with a faint green
+tint (`(0.75, 1, 0.85, 1)`) whenever that's higher than its priority share —
+"actively boosted by another system's idle power." A demanding bar can
+therefore read taller than its own priority share.
 
 ### 2.9 Turret weapons (Falcon/Star Destroyer only)
 
