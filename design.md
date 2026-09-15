@@ -105,13 +105,40 @@ respawn timer and awards no kill credit/XP to anyone. Server-authoritative
 facing while SPACE is held, gated by a mechanical cooldown **and** the
 weapon capacitor (2.2/2.8). Projectile speed/size/lifetime and the
 capacitor's own size/recharge rate are shared across every ship type
-(`WeaponStats.BLASTER`, 0.25s/4 shots-per-sec/10-damage baseline).
-**Rate of fire, power use per shot, and damage per hit are configurable
-per ship type**, though (`WeaponStats#forShip`, addendum below), via each
-ship's own `shipdata/<name>.stats.json` — `weaponCooldownSeconds`/
-`weaponShotEnergyCost`/`weaponDamage` — still at the shared baseline
-(0.25s / 20 energy / 10 damage) for every ship except where hand-tuned
-since (Snowspeeder: 0.15s/5 energy).
+(`WeaponStats.BLASTER` baseline: capacitor 110 max charge, 40/s base
+recharge). **Rate of fire, power use per shot, and damage per hit are
+configurable per ship type** (`WeaponStats#forShip`), via each ship's own
+`shipdata/<name>.stats.json` — `weaponCooldownSeconds`/
+`weaponShotEnergyCost`/`weaponDamage`.
+
+**Tier balancing** (each ship's own numbers, hand-tuned around three derived
+metrics, at the default even power split so `PowerSystem#WEAPONS`'s
+multiplier is exactly 1.0):
+
+```
+shotsPerSecond = 1 / weaponCooldownSeconds
+dps            = shotsPerSecond * weaponDamage
+eps            = shotsPerSecond * weaponShotEnergyCost
+sustainSeconds = capacitorMaxCharge / (eps - baseRechargePerSecond)   [∞ if eps <= baseRechargePerSecond]
+```
+
+Each tier has a distinct intended character; within a tier, the Rebel and
+Imperial ship share the same DPS/EPS/sustain but differ in shot cadence
+(one fires slightly faster/lighter shots than the other) — faction flavor
+via graininess, not raw power:
+
+| Ship | Tier | Character | Cooldown (s) | Damage | Energy/shot | Shots/s | DPS | EPS | Sustain (s) |
+|---|---|---|---|---|---|---|---|---|---|
+| Snowspeeder | 1 | rapid-fire, low damage, near-infinite sustain | 0.1667 | 3.33 | 10.0 | 6.00 | 20 | 60 | 5.5 |
+| TIE Fighter | 2 (Imperial) | burst DPS, short sustain | 0.2 | 13.0 | 15.0 | 5.00 | 65 | 75 | 3.1 |
+| A-wing | 2 (Rebel) | burst DPS, short sustain | 0.1818 | 11.82 | 13.64 | 5.50 | 65 | 75 | 3.1 |
+| X-wing | 3 (Rebel) | sustained mid DPS, long sustain | 0.25 | 8.75 | 12.5 | 4.00 | 35 | 50 | 11.0 |
+| TIE Interceptor | 3 (Imperial) | sustained mid DPS, long sustain | 0.2273 | 7.95 | 11.36 | 4.40 | 35 | 50 | 11.0 |
+| Star Destroyer | 4 (Imperial) | sniper, single big hits, short sustain | 1.0 | 100.0 | 95.0 | 1.00 | 100 | 95 | 2.0 |
+| Falcon | 4 (Rebel) | sniper, faster/lighter hits, short sustain | 0.5 | 50.0 | 47.5 | 2.00 | 100 | 95 | 2.0 |
+
+Untuned beyond this DPS/EPS/sustain pass — hull/shield/thrust/turn numbers
+per ship are each their own separate, ongoing hand-tuning effort.
 
 **Projectiles** are small, fast (bullet/CCD) Box2D bodies, server-simulated
 and broadcast every tick, inheriting the firing ship's own current velocity
@@ -174,7 +201,23 @@ lump-sum 100 damage into 100/100 leaves hull untouched, the same 100 as 10
 chunks leaves ~65 hull damage through.
 
 Shield regen: flat per-second rate (`ShieldComponent`), scaled by the
-Shields power multiplier (2.2), no regen-delay-after-hit.
+Shields power multiplier (2.2), no regen-delay-after-hit. At the default
+even power split (`PowerSystem#SHIELDS`'s multiplier = 1.0), time to fully
+recharge from zero is simply `shieldMaxCapacity / shieldRechargePerSecond`:
+
+| Ship | Tier | Hull max | Shield max | Shield recharge/s | **Recharge from 0 (s)** |
+|---|---|---|---|---|---|
+| Snowspeeder | 1 | 75 | 50 | 10.0 | **5.0** |
+| TIE Fighter | 2 (Imperial) | 200 | 25 | 20.0 | **1.25** |
+| A-wing | 2 (Rebel) | 125 | 100 | 7.5 | **13.3** |
+| X-wing | 3 (Rebel) | 175 | 150 | 5.0 | **30.0** |
+| TIE Interceptor | 3 (Imperial) | 150 | 100 | 10.0 | **10.0** |
+| Star Destroyer | 4 (Imperial) | 1000 | 300 | 10.0 | **30.0** |
+| Falcon | 4 (Rebel) | 300 | 200 | 7.0 | **28.6** |
+
+Untuned beyond whatever hand-tuning is reflected above — not yet passed
+through the same deliberate per-tier-character framework the weapon
+numbers were (2.4's DPS/EPS/sustain table).
 
 Every `ShipType` has a required `shipdata/<name>.stats.json`
 (`ShipTypeConfig`) — radius, thrust, torque, hull/shield max, shield
