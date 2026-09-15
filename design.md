@@ -101,10 +101,16 @@ respawn timer and awards no kill credit/XP to anyone. Server-authoritative
 
 ### 2.4 Weapons & combat
 
-**Weapon:** one type, a blaster cannon (`WeaponStats.BLASTER`) — fires
-along the ship's current facing while SPACE is held, gated by a fixed
-0.25s mechanical cooldown (4 shots/sec hard cap) **and** the weapon
-capacitor (2.2/2.8).
+**Weapon:** one type, a blaster cannon — fires along the ship's current
+facing while SPACE is held, gated by a mechanical cooldown **and** the
+weapon capacitor (2.2/2.8). Projectile speed/damage/size/lifetime and the
+capacitor's own size/recharge rate are shared across every ship type
+(`WeaponStats.BLASTER`, 0.25s/4 shots-per-sec baseline). **Rate of fire and
+power use per shot are configurable per ship type**, though
+(`WeaponStats#forShip`, addendum below), via each ship's own
+`shipdata/<name>.stats.json` — `weaponCooldownSeconds`/
+`weaponShotEnergyCost` — currently all set to the shared baseline (0.25s /
+20 energy) for every ship, untuned.
 
 **Projectiles** are small, fast (bullet/CCD) Box2D bodies, server-simulated
 and broadcast every tick, inheriting the firing ship's own current velocity

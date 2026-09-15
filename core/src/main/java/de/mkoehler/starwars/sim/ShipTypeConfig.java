@@ -29,6 +29,8 @@ public class ShipTypeConfig {
     private float hullMaxHealth;
     private float shieldMaxCapacity;
     private float shieldRechargePerSecond;
+    private float weaponCooldownSeconds;
+    private float weaponShotEnergyCost;
     private float hudShieldClipTopPixel;
     private float hudShieldClipBottomPixel;
     private float hudHullClipTopPixel;
@@ -150,10 +152,10 @@ public class ShipTypeConfig {
     }
 
     /**
-     * Returns how fast the shield recharges. A flat rate for now, standing
-     * in for the future power-distribution-driven rate (design.md 2.2's
-     * "Shields" allocation) the same way {@link WeaponStats}' fixed
-     * cooldown stands in for the not-yet-built capacitor mechanic.
+     * Returns how fast the shield recharges — a flat base rate, scaled by
+     * {@link de.mkoehler.starwars.sim.PowerSystem#SHIELDS}'s own power
+     * allocation multiplier ({@code ShieldRegenSystem}), not a per-ship-type
+     * knob for that scaling itself.
      *
      * @return the recharge rate, in shield points/second
      */
@@ -163,6 +165,38 @@ public class ShipTypeConfig {
 
     public void setShieldRechargePerSecond(float shieldRechargePerSecond) {
         this.shieldRechargePerSecond = shieldRechargePerSecond;
+    }
+
+    /**
+     * Returns this ship type's own minimum time between shots (design.md
+     * 2.4's addendum) — the mechanical fire-rate cap {@link WeaponStats#getCooldownSeconds()}
+     * is built from, via {@link WeaponStats#forShip}. Every other weapon
+     * number (projectile speed/damage/size/lifetime, capacitor size/recharge
+     * rate) stays shared across every ship type for now.
+     *
+     * @return the cooldown, in seconds
+     */
+    public float getWeaponCooldownSeconds() {
+        return weaponCooldownSeconds;
+    }
+
+    public void setWeaponCooldownSeconds(float weaponCooldownSeconds) {
+        this.weaponCooldownSeconds = weaponCooldownSeconds;
+    }
+
+    /**
+     * Returns this ship type's own capacitor energy cost per shot
+     * (design.md 2.4's addendum) — {@link WeaponStats#getShotEnergyCost()}
+     * is built from, via {@link WeaponStats#forShip}.
+     *
+     * @return the energy cost per shot
+     */
+    public float getWeaponShotEnergyCost() {
+        return weaponShotEnergyCost;
+    }
+
+    public void setWeaponShotEnergyCost(float weaponShotEnergyCost) {
+        this.weaponShotEnergyCost = weaponShotEnergyCost;
     }
 
     public float getHudShieldClipTopPixel() {

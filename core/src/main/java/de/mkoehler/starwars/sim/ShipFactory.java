@@ -72,7 +72,7 @@ public final class ShipFactory {
         entity.add(new NetworkInputComponent());
         entity.add(new HullComponent(stats.getMaxHealth()));
         entity.add(new ShieldComponent(stats.getShieldMaxCapacity(), stats.getShieldRechargePerSecond()));
-        entity.add(new WeaponComponent(WeaponStats.BLASTER));
+        entity.add(new WeaponComponent(stats.getWeaponStats()));
         entity.add(new PowerDistributionComponent());
         entity.add(new PowerBoostComponent());
         entity.add(new CombatTimerComponent());

@@ -7,6 +7,8 @@
   "hullMaxHealth" : 100.0,
   "shieldMaxCapacity" : 100.0,
   "shieldRechargePerSecond" : 5.0,
+  "weaponCooldownSeconds" : 0.25,
+  "weaponShotEnergyCost" : 20.0,
   "hudShieldClipTopPixel" : 130.0,
   "hudShieldClipBottomPixel" : 437.0,
   "hudHullClipTopPixel" : 172.0,

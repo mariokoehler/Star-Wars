@@ -41,6 +41,7 @@ public final class ShipStats {
     private final ShipType type;
     private final ShipTypeConfig config;
     private final Optional<ShipSpriteMetadata> spriteMetadata;
+    private final WeaponStats weaponStats;
 
     private ShipStats(ShipType type) {
         this.type = type;
@@ -49,6 +50,7 @@ public final class ShipStats {
             .orElseThrow(() -> new IllegalStateException(
                 "Missing required shipdata/" + resourceName + ".stats.json for ship type " + type));
         this.spriteMetadata = ShipSpriteMetadataLoader.loadFromClasspath("shipdata/" + resourceName + ".meta.json");
+        this.weaponStats = WeaponStats.forShip(config.getWeaponCooldownSeconds(), config.getWeaponShotEnergyCost());
     }
 
     /**
@@ -142,6 +144,20 @@ public final class ShipStats {
      */
     public float getShieldRechargePerSecond() {
         return config.getShieldRechargePerSecond();
+    }
+
+    /**
+     * Returns this ship type's own weapon tuning (design.md 2.4's addendum)
+     * — {@link WeaponStats#getCooldownSeconds()}/{@link WeaponStats#getShotEnergyCost()}
+     * come from this ship type's own {@code shipdata/<name>.stats.json},
+     * every other field from the shared {@link WeaponStats#BLASTER}
+     * baseline. Built once per ship type and cached, same as this whole
+     * {@code ShipStats} instance.
+     *
+     * @return this ship type's weapon stats
+     */
+    public WeaponStats getWeaponStats() {
+        return weaponStats;
     }
 
     /**

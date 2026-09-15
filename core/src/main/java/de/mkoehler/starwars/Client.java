@@ -1005,7 +1005,7 @@ public class Client implements Screen {
         // above. Any shots predicted under the old body (already destroyed above on a respawn)
         // are meaningless now - drop them rather than let them keep extrapolating from a stale
         // position with no server projectile left to ever confirm them.
-        myWeapon = new WeaponComponent(WeaponStats.BLASTER);
+        myWeapon = new WeaponComponent(myStats.getWeaponStats());
         predictedProjectiles.clear();
 
         myThrusters.clear();

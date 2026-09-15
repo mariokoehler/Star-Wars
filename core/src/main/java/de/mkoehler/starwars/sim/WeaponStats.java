@@ -42,6 +42,28 @@ public final class WeaponStats {
      */
     public static final WeaponStats BLASTER = new WeaponStats(0.25f, 50f, 10f, 0.15f, 3f, 20f, 110f, 40f);
 
+    /**
+     * Builds a per-ship-type variant of {@link #BLASTER}: every field stays
+     * the same shared baseline <em>except</em> {@link #getCooldownSeconds()}
+     * and {@link #getShotEnergyCost()} (design.md 2.4's addendum — rate of
+     * fire and power use per shot are the two numbers exposed per ship type,
+     * via {@link ShipTypeConfig#getWeaponCooldownSeconds()}/
+     * {@link ShipTypeConfig#getWeaponShotEnergyCost()}), which come from
+     * that ship type's own {@code shipdata/<name>.stats.json} instead.
+     * Projectile speed/damage/size/lifetime and the capacitor's own size/
+     * recharge rate stay shared across every ship type for now — only these
+     * two are configurable per ship.
+     *
+     * @param cooldownSeconds this ship type's own minimum time between shots
+     * @param shotEnergyCost  this ship type's own capacitor energy cost per shot
+     * @return a new {@code WeaponStats} with those two fields overridden
+     */
+    public static WeaponStats forShip(float cooldownSeconds, float shotEnergyCost) {
+        return new WeaponStats(cooldownSeconds, BLASTER.projectileSpeed, BLASTER.damage,
+            BLASTER.projectileRadiusMeters, BLASTER.projectileLifetimeSeconds, shotEnergyCost,
+            BLASTER.capacitorMaxCharge, BLASTER.baseRechargePerSecond);
+    }
+
     private final float cooldownSeconds;
     private final float projectileSpeed;
     private final float damage;
