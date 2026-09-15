@@ -46,6 +46,11 @@ public class Lwjgl3Launcher {
         //// You may also need to configure GPU drivers to fully disable Vsync; this can cause screen tearing.
 
         configuration.setWindowedMode(1920, 1080);
+        // Starts maximized on top of that windowed-mode size (still the restore size if the
+        // player un-maximizes) - a plain 1920x1080 window looks small/lost on a high-resolution
+        // display, especially now that the packaged client is DPI-unaware (see StarWars.manifest)
+        // and therefore never gets Windows' own DPI upscaling either.
+        configuration.setMaximized(true);
         //// You can change these files; they are in lwjgl3/src/main/resources/ .
         //// They can also be loaded from the root of assets/ .
         configuration.setWindowIcon("libgdx128.png", "libgdx64.png", "libgdx32.png", "libgdx16.png");

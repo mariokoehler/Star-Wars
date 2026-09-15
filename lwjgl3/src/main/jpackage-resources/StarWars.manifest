@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!--
+  Overrides jpackage's default embedded Windows application manifest for the
+  packaged client (design.md 3.11) - picked up automatically by jpackage's
+  resource-dir override mechanism, matched by launcher name (StarWars.exe
+  -> StarWars.manifest).
+
+  Explicitly declares the app DPI-UNAWARE. Without this, jpackage's default
+  manifest declares (some level of) DPI awareness, which leaves this app
+  responsible for scaling its own UI to the monitor's actual DPI - on at
+  least one real high-DPI (4K, 17") laptop panel, that scaling silently
+  never kicked in, rendering the whole UI/HUD/text at a small fixed pixel
+  size regardless of the monitor's real pixel density (confirmed by the
+  user: manually forcing Windows' "High DPI scaling override" from
+  "Application" to "System" fixed it). Declaring the app unaware here bakes
+  in that same fix for every player: Windows takes over and bitmap-scales
+  the whole rendered window to the correct physical size instead, which is
+  a little softer/blurrier than a true per-monitor-aware render would be,
+  but correctly and reliably sized on any display.
+-->
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">false</dpiAware>
+    </windowsSettings>
+  </application>
+</assembly>

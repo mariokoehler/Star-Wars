@@ -274,6 +274,13 @@
                    convention) - jpackage only needs a build-time file path for this, it never
                    ends up on the classpath, so no copy into assets/ is needed. -->
               <icon>${project.basedir}/../assets-raw/icon.ico</icon>
+              <!-- jpackage's own resource-dir override mechanism: a file named
+                   <launcher-name>.manifest here (StarWars.manifest, matching <name> above)
+                   replaces jpackage's default embedded Windows application manifest for the
+                   generated exe - see that file's own comment for why (DPI-unaware, so Windows
+                   scales the whole rendered window to match the monitor's real DPI instead of
+                   leaving that to this app). -->
+              <resourceDir>${project.basedir}/src/main/jpackage-resources</resourceDir>
               <javaOptions>
                 <option>--enable-native-access=ALL-UNNAMED</option>
               </javaOptions>

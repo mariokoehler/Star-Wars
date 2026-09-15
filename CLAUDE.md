@@ -131,6 +131,16 @@ editor).
 - Commit signing: if `git commit` fails with a `gpg-agent` connect error,
   start Kleopatra (`C:\Program Files (x86)\Gpg4win\bin\kleopatra.exe`) and
   retry the same commit — never fall back to `--no-gpg-sign`.
+- **`jpackage-maven-plugin`'s `resourceDir` (maps to jpackage's own
+  `--resource-dir`) overrides generated resources by filename convention** —
+  a file named `<launcher-name>.manifest` (matching the app `<name>`)
+  replaces jpackage's default embedded Windows application manifest for the
+  generated exe entirely, not merges with it (design.md 3.11's high-DPI
+  addendum). An XML comment inside that manifest (or inside any pom.xml)
+  can't contain a literal `--` anywhere in its text, not just as the
+  open/close delimiter — caught by a `Non-parseable POM`/XML parse error,
+  easy to miss since the offending `--` can be deep in prose rather than at
+  the obvious comment boundary.
 
 ## Networking / Box2D patterns
 

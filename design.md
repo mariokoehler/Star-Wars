@@ -831,6 +831,21 @@ else.
 string match, so redeploy the server (3.12) from a new tag *before or
 alongside* publishing the matching client zip, never after.
 
+**High-DPI displays:** the packaged `StarWars.exe` is deliberately DPI-
+*unaware* — `lwjgl3/src/main/jpackage-resources/StarWars.manifest`
+overrides jpackage's default embedded Windows manifest (wired in via
+`jpackage-maven-plugin`'s `resourceDir`, matched to `StarWars.exe` by
+launcher name). Found via a real 4K/17" laptop panel where the whole UI/
+HUD/text rendered at a fixed small pixel size regardless of the monitor's
+actual density; confirmed by the user that manually forcing Windows'
+per-app "High DPI scaling override" from "Application" to "System" fixed
+it. Baking in DPI-unaware behavior gets every player that same fix by
+default — Windows bitmap-scales the whole rendered window to the display's
+real physical size instead of leaving that to the app, a little softer/
+blurrier than a true per-monitor-aware render but correctly and reliably
+sized everywhere. The window also always starts maximized
+(`Lwjgl3Launcher`'s `setMaximized(true)`, applies to dev launches too).
+
 ### 3.12 Dedicated server deployment: Docker via QNAP Container Station
 
 Runs on the user's QNAP NAS via Container Station (a GUI over real
